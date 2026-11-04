@@ -212,14 +212,18 @@ export class Hud {
     this.activeTool = defId;
     this.refreshBuildList();
     this.hintEl.textContent = defId
-      ? `Costruisci: ${getBuilding(defId).name} — clic per piazzare${getBuilding(defId).draggable ? ' (trascina per una fila)' : ''} · Esc o tasto destro: annulla`
+      ? `Costruisci: ${getBuilding(defId).name} — ${getBuilding(defId).draggable ? 'clic, oppure trascina per tracciare una linea (anche in diagonale)' : 'clic per piazzare'} · Esc o tasto destro: annulla`
       : 'Trascina: sposta · Tasto destro: ruota · Rotella: zoom · WASD: muovi · Spazio: pausa';
   }
 
   // ───────────── Selezione ─────────────
 
+  private selDyn: HTMLElement = el('div');
+  private selKey = '';
+
   select(b: PlacedBuilding | null) {
     this.selected = b;
+    this.selKey = '';
     this.selPanel.classList.toggle('hidden', !b);
     if (!b) return;
     const def = getBuilding(b.defId);
@@ -231,34 +235,21 @@ export class Hud {
     const close = el('button', { class: 'link', text: '✕' });
     close.onclick = () => this.cb.onDeselect();
     const lines: string[] = [def.description];
-    if (def.produces) {
-      lines.push(
-        'Produce al giorno: ' +
-          Object.entries(def.produces)
-            .map(([r, n]) => `${RESOURCES[r as ResourceId].icon} ${n}`)
-            .join(', '),
-      );
-    }
-    if (def.consumes) {
-      lines.push(
-        'Consuma al giorno: ' +
-          Object.entries(def.consumes)
-            .map(([r, n]) => `${RESOURCES[r as ResourceId].icon} ${n}`)
-            .join(', '),
-      );
-    }
+    const list = (o: Partial<Record<string, number>>) =>
+      Object.entries(o).map(([r, n]) => `${RESOURCES[r as ResourceId].icon} ${n}`).join(', ');
+    if (def.produces) lines.push('Produce al giorno: ' + list(def.produces));
+    if (def.consumes) lines.push('Consuma al giorno: ' + list(def.consumes));
     if (def.seasonal) {
       const s = def.seasonal.map((v) => `${Math.round(v * 100)}%`);
       lines.push(`Resa stagionale: 🌸${s[0]} ☀️${s[1]} 🍂${s[2]} ❄️${s[3]}`);
     }
     if (def.workers) lines.push(`Lavoratori: ${def.workers}`);
     if (def.housing) lines.push(`Alloggi: ${def.housing}`);
-    if (def.defense) lines.push(`Difesa: ${def.defense}`);
-    const herd = el('p', { class: 'herd' });
+    this.selDyn = el('div', { class: 'sel-dyn' });
     this.selPanel.replaceChildren(
       el('div', { class: 'row' }, el('h3', { text: def.name }), el('span', { class: 'spacer' }), close),
-      ...lines.map((l) => el('p', { text: l })),
-      herd,
+      ...lines.map((l) => el('p', { class: 'small', text: l })),
+      this.selDyn,
       demolish,
     );
     this.refreshSelection();
@@ -267,11 +258,87 @@ export class Hud {
   private refreshSelection() {
     const b = this.selected;
     if (!b) return;
-    const def = getBuilding(b.defId);
-    const herd = this.selPanel.querySelector('.herd');
-    if (herd && def.herd) {
-      herd.textContent = `${SPECIES_NAMES[def.herd.species]}: ${Math.round(b.herd ?? 0)} / ${def.herd.capacity} capi`;
+    if (!this.game.byUid(b.uid)) {
+      this.cb.onDeselect();
+      return;
     }
+    const g = this.game;
+    const def = getBuilding(b.defId);
+    const ups = g.upgradeOptions(b);
+    const checks = ups.map((u) => g.canUpgrade(b, u.id));
+    const repairCost = g.repairCost(b);
+    const key = JSON.stringify([
+      Math.round(b.hp ?? 0), b.upgrades, Math.round(b.herd ?? 0), checks.map((c) => c.ok),
+      canAfford(g.state.resources, repairCost), g.structureVersion,
+    ]);
+    if (key === this.selKey) return;
+    this.selKey = key;
+    const parts: Node[] = [];
+    if (def.herd) parts.push(el('p', { text: `${SPECIES_NAMES[def.herd.species]}: ${Math.round(b.herd ?? 0)} / ${def.herd.capacity} capi` }));
+    if (!def.fort && !def.road && (def.produces || def.herd)) {
+      const bonus = g.roadBonus(b);
+      parts.push(
+        el('p', {
+          class: bonus > 1 ? 'good small' : 'bad small',
+          text: bonus > 1 ? `🛣️ Collegato alla rete stradale: produzione +${Math.round((bonus - 1) * 100)}%` : '🛣️ Non collegato: costruisci una strada fino al castello o al mercato (+15%)',
+        }),
+      );
+    }
+    if (def.fort) {
+      const max = g.maxHp(b);
+      if (max) {
+        const hp = Math.max(0, Math.round(b.hp ?? max));
+        const st = g.hpState(b);
+        const pct = Math.round((hp / max) * 100);
+        parts.push(
+          el('div', { class: 'hp' }, el('div', { class: `hp-bar ${st}`, style: `width:${pct}%` })),
+          el('p', { class: 'small', text: `Punti vita ${hp} / ${max}${st === 'ruin' ? ' — IN ROVINA: la cinta ha una breccia!' : st === 'damaged' ? ' — danneggiato' : ''}` }),
+        );
+        if (Object.keys(repairCost).length) {
+          const rb = el('button', { text: `🔨 Ripara (${formatCost(repairCost)})` });
+          rb.disabled = !canAfford(g.state.resources, repairCost);
+          rb.onclick = () => g.repair(b);
+          parts.push(rb);
+        }
+      }
+      if (def.fort === 'moat') {
+        parts.push(el('p', { class: 'small', text: `Profondità ${g.moatDepth(b)}/3 · ${g.moatFlooded(b) ? '💧 Allagato (difesa ×1,6)' : 'Asciutto'}` }));
+      }
+      parts.push(el('p', { class: 'small', text: `🛡️ Difesa: ${fmt(g.defenseOf(b))}${!g.analysis().closed && def.fort !== 'keep' && def.fort !== 'moat' ? ' (dimezzata: cinta aperta)' : ''}` }));
+    }
+    if (ups.length) {
+      parts.push(el('h4', { text: 'Miglioramenti' }));
+      ups.forEach((u, i) => {
+        const done = b.upgrades?.includes(u.id);
+        const c = checks[i];
+        const row = el('div', { class: `upgrade ${done ? 'done' : ''}` });
+        row.append(
+          el('div', { class: 'row' }, el('strong', { text: `${u.icon} ${u.name}` }), el('span', { class: 'spacer' }), el('span', { class: 'small', text: done ? '✓' : formatCost(u.cost) })),
+          el('div', { class: 'small muted', text: u.description }),
+        );
+        if (!done) {
+          const btns = el('div', { class: 'row' });
+          const one = el('button', { text: 'Costruisci' });
+          one.disabled = !c.ok;
+          one.onclick = () => g.upgrade(b, u.id);
+          btns.append(one);
+          const same = g.state.buildings.filter((x) => x.defId === b.defId && !x.upgrades?.includes(u.id)).length;
+          if (same > 1) {
+            const all = el('button', { text: `Su tutti (${same})` });
+            all.disabled = !c.ok;
+            all.onclick = () => {
+              const n = g.upgradeAll(b.defId, u.id);
+              this.toast(`${u.name}: applicato a ${n} ${def.name.toLowerCase()}.`, 'good');
+            };
+            btns.append(all);
+          }
+          if (!c.ok && c.reason) btns.append(el('span', { class: 'small muted', text: c.reason }));
+          row.append(btns);
+        }
+        parts.push(row);
+      });
+    }
+    this.selDyn.replaceChildren(...parts);
   }
 
   // ───────────── Pannelli ─────────────
@@ -286,11 +353,44 @@ export class Hud {
   }
 
   private buildCastleTab() {
+    const defense = el('div');
+    const repairAll = el('button', { text: '🔨 Ripara tutte le fortificazioni' });
+    repairAll.onclick = () => {
+      const n = this.game.repairAll();
+      this.toast(n ? `Riparate ${n} fortificazioni.` : 'Niente da riparare (o risorse insufficienti).', n ? 'good' : 'info');
+    };
+    const siege = el('div');
     const body = el('div');
-    this.panelBody.append(body);
+    this.panelBody.append(defense, repairAll, siege, body);
+    let lastSiege = -1;
     this.refreshTab = () => {
-      const s = this.game.summary();
+      const g = this.game;
+      const s = g.summary();
+      const d = g.defenseBreakdown();
       const era = eraForYear(s.date.year);
+      defense.innerHTML = `
+        <h4>🏰 Difese</h4>
+        <p class="${d.closed ? 'good' : 'bad'}">${d.closed
+          ? '✓ Cinta muraria chiusa attorno al mastio'
+          : '✗ Cinta aperta: il nemico entra senza assaltare le mura (difese dimezzate). Chiudi l\'anello di mura, torri e porte attorno al mastio; fiumi e mare fanno da barriera.'}</p>
+        <table>
+          <tr><td>Mura</td><td>${fmt(d.walls)}</td></tr>
+          <tr><td>Torri</td><td>${fmt(d.towers)}</td></tr>
+          <tr><td>Porte</td><td>${fmt(d.gates)}</td></tr>
+          <tr><td>Fossati</td><td>${fmt(d.moats)}</td></tr>
+          <tr><td>Mastio</td><td>${fmt(d.keep)}</td></tr>
+          <tr><td>⚔️ Guarnigione</td><td>${fmt(d.army)} (${s.soldiers} soldati)</td></tr>
+        </table>
+        ${d.damaged || d.ruined ? `<p class="bad small">Danneggiate: ${d.damaged} · In rovina: ${d.ruined}</p>` : ''}`;
+      repairAll.classList.toggle('hidden', !d.damaged && !d.ruined && !g.state.buildings.some((b) => (b.hp ?? 0) < g.maxHp(b)));
+      const ls = g.state.lastSiege;
+      if (ls && ls.day !== lastSiege) {
+        lastSiege = ls.day;
+        const title = { repelled: '🛡️ Respinto', held: '🏰 Il mastio ha resistito', sacked: '🔥 Castello espugnato' }[ls.outcome];
+        siege.innerHTML = `<h4>Ultimo assedio — ${escapeHtml(ls.attacker)}</h4>
+          <p class="${ls.outcome === 'repelled' ? 'good' : 'bad'}">${title} · caduti nemici ${ls.attackerLosses}, nostri ${ls.defenderLosses}${ls.loot ? ` · bottino ${ls.loot} 🪙` : ''}</p>
+          <ol class="small siege-log">${ls.log.map((l) => `<li>${escapeHtml(l)}</li>`).join('')}</ol>`;
+      }
       body.innerHTML = `
         <h4>${escapeHtml(era.name)}</h4>
         <p class="muted small">${escapeHtml(era.description)}</p>
@@ -299,8 +399,6 @@ export class Hud {
           <tr><td>👷 Posti di lavoro</td><td>${s.jobs} (copertura ${Math.round(s.staffing * 100)}%)</td></tr>
           <tr><td>🍞 Cibo al giorno</td><td>${fmt(s.foodPerDay)}</td></tr>
           <tr><td>📦 Magazzini</td><td>${s.storage} per risorsa</td></tr>
-          <tr><td>🏰 Difesa mura</td><td>${fmt(s.defense)}</td></tr>
-          <tr><td>⚔️ Forza esercito</td><td>${fmt(s.armyPower)} (${s.soldiers} soldati)</td></tr>
         </table>
         <p class="small muted">Il cibo si consuma partendo da quello più deperibile. Una dieta varia fa crescere la popolazione più in fretta.</p>`;
     };

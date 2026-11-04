@@ -11,7 +11,9 @@ import type { Season } from '../game/data/calendar';
 import { getBuilding } from '../game/data/buildings';
 import type { Game } from '../game/sim/game';
 import type { PlacedBuilding } from '../game/sim/state';
-import { animate, applySeason, buildModel, LINKED_TYPES, updateHerd, WALL_FAMILY, type WallLinks } from './models';
+import { animate, applySeason, buildModel, LINKED_TYPES, ROAD_FAMILY, updateHerd, WALL_FAMILY, type Link, type ModelCtx } from './models';
+import { StaticBatches } from './batches';
+import type { Footprint } from './terrain';
 import { TerrainView, WATER_LEVEL } from './terrain';
 import { textures } from './textures';
 
@@ -35,6 +37,16 @@ export class WorldRenderer {
   private aoPass: GTAOPass;
   private bloomPass: UnrealBloomPass;
   private buildingObjs = new Map<number, THREE.Object3D>();
+  /** Chiave visiva di ogni edificio: se cambia, il modello si ricostruisce. */
+  private visualKeys = new Map<number, string>();
+  /** Edifici con parti animate (bandiere, fumo, animali, colture). */
+  private animated: Array<{ b: PlacedBuilding; obj: THREE.Object3D; herd: boolean }> = [];
+  private batches = new StaticBatches();
+  private shadowDirty = true;
+  private shadowFrame = 0;
+  private shadowCenter = new THREE.Vector3(1e9, 0, 0);
+  private shadowHalf = 0;
+  private linePreview: THREE.InstancedMesh;
   private structureVersion = -1;
   private season: Season | null = null;
   private ghost: THREE.Group | null = null;
@@ -54,9 +66,11 @@ export class WorldRenderer {
   private quality: Quality = 'high';
 
   constructor(private canvas: HTMLCanvasElement, private game: Game, quality: Quality = 'high') {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    // Le ombre si ricalcolano solo quando serve (vedi render)
+    this.renderer.shadowMap.autoUpdate = false;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.82;
@@ -130,6 +144,16 @@ export class WorldRenderer {
       new THREE.RingGeometry(0.45, 0.55, 40),
       new THREE.MeshBasicMaterial({ color: 0xffd54a, side: THREE.DoubleSide, transparent: true, opacity: 0.9, depthWrite: false }),
     );
+    this.scene.add(this.batches.group);
+    // Anteprima delle file di mura/strade durante il trascinamento
+    this.linePreview = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.92, 0.1, 0.92),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.55, depthWrite: false }),
+      256,
+    );
+    this.linePreview.count = 0;
+    this.linePreview.frustumCulled = false;
+    this.scene.add(this.linePreview);
     this.selection.rotation.x = -Math.PI / 2;
     this.selection.visible = false;
     this.scene.add(this.selection);
@@ -142,6 +166,9 @@ export class WorldRenderer {
     this.aoPass = new GTAOPass(this.scene, this.camera, 512, 512);
     this.aoPass.updateGtaoMaterial({ radius: 0.6, distanceExponent: 1.5, thickness: 1.5, scale: 1.2, samples: 12 });
     this.aoPass.blendIntensity = 0.85;
+    // L'occlusione ambientale è morbida: calcolarla a metà risoluzione non si nota e costa 4 volte meno
+    const aoSetSize = this.aoPass.setSize.bind(this.aoPass);
+    this.aoPass.setSize = (w: number, h: number) => aoSetSize(Math.max(1, Math.floor(w / 2)), Math.max(1, Math.floor(h / 2)));
     this.composer.addPass(this.aoPass);
     this.bloomPass = new UnrealBloomPass(new THREE.Vector2(512, 512), 0.18, 0.5, 0.9);
     this.composer.addPass(this.bloomPass);
@@ -168,6 +195,7 @@ export class WorldRenderer {
       this.sun.shadow.mapSize.set(map, map);
       this.sun.shadow.map?.dispose();
       this.sun.shadow.map = null;
+      this.shadowDirty = true;
     }
     this.sun.shadow.radius = q === 'low' ? 1 : 2.5;
     this.aoPass.enabled = q === 'high';
@@ -222,54 +250,108 @@ export class WorldRenderer {
     skyCopy.material.dispose();
   }
 
-  /** L'ombra copre solo la zona inquadrata, così resta nitida. */
+  /**
+   * L'ombra copre la zona inquadrata (così resta nitida). Si ricentra solo quando la
+   * telecamera si è spostata abbastanza: in mezzo, la mappa delle ombre non va ricalcolata.
+   */
   private updateSunShadow() {
     const tg = this.controls.target;
     const dist = this.camera.position.distanceTo(tg);
-    const half = THREE.MathUtils.clamp(dist * 0.95, 10, 60);
+    const half = THREE.MathUtils.clamp(Math.ceil((dist * 1.15) / 6) * 6, 12, 66);
+    const moved = Math.hypot(tg.x - this.shadowCenter.x, tg.z - this.shadowCenter.z);
+    if (half === this.shadowHalf && moved < half * 0.25) return;
     const cam = this.sun.shadow.camera;
-    if (cam.right !== half) {
-      cam.left = -half;
-      cam.right = half;
-      cam.top = half;
-      cam.bottom = -half;
-      cam.near = 1;
-      cam.far = 200;
-      cam.updateProjectionMatrix();
-    }
-    // Aggancia il centro ai texel per evitare lo sfarfallio delle ombre
+    this.shadowHalf = half;
+    cam.left = -half;
+    cam.right = half;
+    cam.top = half;
+    cam.bottom = -half;
+    cam.near = 1;
+    cam.far = 220;
+    cam.updateProjectionMatrix();
     const texel = (half * 2) / this.sun.shadow.mapSize.x;
     const cx = Math.round(tg.x / texel) * texel;
     const cz = Math.round(tg.z / texel) * texel;
+    this.shadowCenter.set(cx, 0, cz);
     this.sun.target.position.set(cx, 0, cz);
-    this.sun.position.set(cx + this.sunDir.x * 80, this.sunDir.y * 80, cz + this.sunDir.z * 80);
+    this.sun.position.set(cx + this.sunDir.x * 90, this.sunDir.y * 90, cz + this.sunDir.z * 90);
     this.sun.target.updateMatrixWorld();
+    this.shadowDirty = true;
   }
 
   // ───────────── Edifici ─────────────
 
-  private linksFor(b: PlacedBuilding): WallLinks {
-    const def = getBuilding(b.defId);
-    const [w, d] = def.size;
+  /** Collegamenti in 8 direzioni verso i vicini della stessa famiglia (diagonali solo se non c'è già un angolo). */
+  private linksFor(b: PlacedBuilding, family: Set<string>, extend: boolean): Link[] {
     const fam = (x: number, z: number) => {
       const o = this.game.buildingAt(x, z);
-      return !!o && o.uid !== b.uid && WALL_FAMILY.has(o.defId);
+      return o && o.uid !== b.uid && family.has(o.defId) ? o : null;
     };
-    return {
-      px: fam(b.x + w, b.z),
-      nx: fam(b.x - 1, b.z),
-      pz: fam(b.x, b.z + d),
-      nz: fam(b.x, b.z - 1),
+    const extFor = (o: PlacedBuilding, diag: boolean) => {
+      if (!extend) return 0;
+      const def = getBuilding(o.defId);
+      if (def.fort === 'keep') return diag ? 0.4 : 0.45;
+      if (def.size[0] > 1 || def.size[1] > 1) return diag ? 0.25 : 0.3;
+      return 0;
     };
+    const out: Link[] = [];
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const o = fam(b.x + dx, b.z + dz);
+      if (o) out.push({ dx, dz, ext: extFor(o, false) });
+    }
+    for (const [dx, dz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]] as const) {
+      if (fam(b.x + dx, b.z) || fam(b.x, b.z + dz)) continue;
+      const o = fam(b.x + dx, b.z + dz);
+      if (o) out.push({ dx, dz, ext: extFor(o, true) });
+    }
+    return out;
   }
 
-  private makeObject(b: PlacedBuilding): THREE.Object3D {
+  private ctxFor(b: PlacedBuilding): ModelCtx {
     const def = getBuilding(b.defId);
-    const links = LINKED_TYPES.has(def.id) ? this.linksFor(b) : undefined;
-    const obj = buildModel(def, links, b.uid * 7919 + b.x * 31 + b.z);
+    const ctx: ModelCtx = {
+      seed: b.uid * 7919 + b.x * 31 + b.z,
+      upgrades: b.upgrades ?? [],
+      state: this.game.hpState(b),
+    };
+    if (def.id === 'road' || def.id === 'road_paved' || def.id === 'bridge') ctx.links = this.linksFor(b, ROAD_FAMILY, false);
+    else if (LINKED_TYPES.has(def.id)) ctx.links = this.linksFor(b, WALL_FAMILY, true);
+    if (def.fort === 'gate') {
+      const [w, d] = def.size;
+      ctx.moatDir = null;
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const x = dx > 0 ? b.x + w : dx < 0 ? b.x - 1 : b.x;
+        const z = dz > 0 ? b.z + d : dz < 0 ? b.z - 1 : b.z;
+        if (this.game.isMoat(x, z)) ctx.moatDir = [dx, dz];
+      }
+    }
+    if (def.id === 'wall_stone') {
+      // Verso l'esterno della cinta: dove le caselle vicine sono raggiungibili da fuori
+      let ox = 0;
+      let oz = 0;
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const x = b.x + dx;
+        const z = b.z + dz;
+        if (x < 0 || z < 0 || x >= this.game.terrain.size || z >= this.game.terrain.size) continue;
+        if (!this.game.buildingAt(x, z) && !this.game.isInside(x, z)) {
+          ox += dx;
+          oz += dz;
+        }
+      }
+      if (ox || oz) ctx.outDir = [ox, oz];
+    }
+    if (def.id === 'moat') {
+      ctx.depth = this.game.moatDepth(b);
+      ctx.flooded = this.game.moatFlooded(b);
+    }
+    return ctx;
+  }
+
+  private makeObject(b: PlacedBuilding, ctx: ModelCtx): THREE.Object3D {
+    const def = getBuilding(b.defId);
+    const obj = buildModel(def, ctx);
     obj.position.set(b.x + def.size[0] / 2, 0, b.z + def.size[1] / 2);
     obj.userData.uid = b.uid;
-    obj.userData.links = JSON.stringify(links ?? null);
     if (this.season) applySeason(obj, def.id, this.season);
     if (def.herd) updateHerd(obj, def, Math.round(b.herd ?? 0));
     return obj;
@@ -286,33 +368,69 @@ export class WorldRenderer {
     const alive = new Set<number>();
     for (const b of this.game.state.buildings) {
       alive.add(b.uid);
-      const existing = this.buildingObjs.get(b.uid);
-      if (existing) {
-        // Mura e porte cambiano aspetto quando cambiano i vicini
-        if (LINKED_TYPES.has(b.defId) && existing.userData.links !== JSON.stringify(this.linksFor(b))) {
-          this.disposeObject(existing);
-          const obj = this.makeObject(b);
-          this.buildingObjs.set(b.uid, obj);
-          this.scene.add(obj);
-        }
-        continue;
-      }
-      const obj = this.makeObject(b);
-      this.buildingObjs.set(b.uid, obj);
+      const ctx = this.ctxFor(b);
+      const key = JSON.stringify(ctx);
+      if (this.visualKeys.get(b.uid) === key) continue;
+      const old = this.buildingObjs.get(b.uid);
+      if (old) this.disposeObject(old);
+      const obj = this.makeObject(b, ctx);
       this.scene.add(obj);
+      // Le parti statiche vanno nei blocchi fusi; l'oggetto tiene solo quelle animate
+      this.batches.set(b.uid, obj, b.x, b.z);
+      this.buildingObjs.set(b.uid, obj);
+      this.visualKeys.set(b.uid, key);
     }
     for (const [uid, obj] of this.buildingObjs) {
       if (!alive.has(uid)) {
         this.disposeObject(obj);
+        this.batches.remove(uid);
         this.buildingObjs.delete(uid);
+        this.visualKeys.delete(uid);
       }
     }
-    this.terrainView.setFootprints(
-      this.game.state.buildings.map((b) => {
-        const [w, d] = getBuilding(b.defId).size;
-        return { x: b.x, z: b.z, w, d, defId: b.defId };
-      }),
-    );
+    this.batches.flush();
+    this.animated = [];
+    for (const b of this.game.state.buildings) {
+      const obj = this.buildingObjs.get(b.uid);
+      const herd = !!getBuilding(b.defId).herd;
+      if (obj && (obj.children.length || herd)) this.animated.push({ b, obj, herd });
+    }
+    const fps: Footprint[] = [];
+    for (const b of this.game.state.buildings) {
+      if (b.defId === 'bridge') continue;
+      const [w, d] = getBuilding(b.defId).size;
+      fps.push({
+        x: b.x,
+        z: b.z,
+        w,
+        d,
+        defId: b.defId,
+        depth: b.defId === 'moat' ? this.game.moatDepth(b) : undefined,
+        dry: b.defId === 'moat' ? !this.game.moatFlooded(b) : undefined,
+      });
+    }
+    this.terrainView.setFootprints(fps);
+    this.shadowDirty = true;
+  }
+
+  /** Anteprima di una fila di caselle (verde = si può, rosso = no). */
+  setLinePreview(tiles: Array<{ x: number; z: number; ok: boolean }> | null) {
+    const m = new THREE.Matrix4();
+    const c = new THREE.Color();
+    const list = tiles ?? [];
+    this.linePreview.count = Math.min(list.length, 256);
+    for (let i = 0; i < this.linePreview.count; i++) {
+      m.makeTranslation(list[i].x + 0.5, 0.1, list[i].z + 0.5);
+      this.linePreview.setMatrixAt(i, m);
+      this.linePreview.setColorAt(i, c.setHex(list[i].ok ? 0x4caf50 : 0xe53935));
+    }
+    this.linePreview.instanceMatrix.needsUpdate = true;
+    if (this.linePreview.instanceColor) this.linePreview.instanceColor.needsUpdate = true;
+  }
+
+  /** Draw call degli edifici statici (per la diagnostica). */
+  get batchDrawCalls(): number {
+    return this.batches.drawCalls;
   }
 
   // ───────────── Interazione ─────────────
@@ -421,6 +539,7 @@ export class WorldRenderer {
     if (season !== this.season) {
       this.season = season;
       this.applySeasonLook(season);
+      this.shadowDirty = true;
       for (const [uid, obj] of this.buildingObjs) {
         const b = this.game.state.buildings.find((x) => x.uid === uid);
         if (b) applySeason(obj, b.defId, season);
@@ -434,11 +553,9 @@ export class WorldRenderer {
       new THREE.Matrix4().multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse),
     );
     const sphere = new THREE.Sphere();
-    for (const b of this.game.state.buildings) {
-      const obj = this.buildingObjs.get(b.uid);
-      if (!obj) continue;
+    for (const { b, obj, herd } of this.animated) {
       const def = getBuilding(b.defId);
-      if (def.herd) updateHerd(obj, def, Math.round(b.herd ?? 0));
+      if (herd) updateHerd(obj, def, Math.round(b.herd ?? 0));
       sphere.set(obj.position, Math.max(def.size[0], def.size[1]) + 2);
       if (frustum.intersectsSphere(sphere)) animate(obj, t, dt);
     }
@@ -452,6 +569,13 @@ export class WorldRenderer {
     tg.z = THREE.MathUtils.clamp(tg.z, 0, lim);
     this.controls.update();
     this.updateSunShadow();
+    // Mappa delle ombre: subito se è cambiato qualcosa, altrimenti a un terzo dei fotogrammi
+    // (si muovono solo animali e bandiere). Il vento non sposta le ombre.
+    if (this.shadowDirty || ++this.shadowFrame >= 3) {
+      this.renderer.shadowMap.needsUpdate = true;
+      this.shadowDirty = false;
+      this.shadowFrame = 0;
+    }
     if (this.aoPass.enabled) this.composer.render(dt);
     else {
       // Senza AO si salta il composer (più veloce); il tone mapping lo fa il renderer

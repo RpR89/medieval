@@ -116,3 +116,16 @@ td:last-child { text-align: right; }
   .selection { bottom: 200px; right: 0; left: 0; width: auto; }
   .log, .hint { display: none; }
 }
+
+/* Fortificazioni */
+.hp { height: 8px; background: rgba(0, 0, 0, 0.4); border-radius: 4px; overflow: hidden; margin: 6px 0 2px; }
+.hp-bar { height: 100%; background: var(--good); transition: width 0.3s; }
+.hp-bar.damaged { background: var(--accent); }
+.hp-bar.ruin { background: var(--bad); }
+.upgrade { border-top: 1px solid var(--line); padding: 6px 0; }
+.upgrade.done strong { color: var(--good); }
+.upgrade .row { margin-top: 3px; }
+.selection { max-height: calc(100% - 330px); overflow-y: auto; }
+.good { color: var(--good); }
+.bad { color: var(--bad); }
+.siege-log { padding-left: 18px; margin: 4px 0; max-height: 140px; overflow-y: auto; }

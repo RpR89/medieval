@@ -2,7 +2,7 @@ import './style.css';
 import { supabase } from './config/supabase';
 import { getBuilding } from './game/data/buildings';
 import { RESOURCES } from './game/data/resources';
-import { Game } from './game/sim/game';
+import { Game, lineTiles } from './game/sim/game';
 import type { GameState } from './game/sim/state';
 import { SupabaseRealm, type RealmPlayer } from './net/realm';
 import { WorldRenderer, type PointerTile, type Quality } from './render/scene';
@@ -144,32 +144,53 @@ function startGame(app: HTMLElement, session: Session, state: GameState) {
     if (!tool) return;
     const check = game.canPlace(tool, t.x, t.z);
     if (check.ok) game.place(tool, t.x, t.z);
-    else if (!dragging || check.reason === 'Risorse insufficienti') hud.toast(check.reason ?? 'Impossibile costruire qui', 'bad');
+    else hud.toast(check.reason ?? 'Impossibile costruire qui', 'bad');
   }
 
   // ───── Input ─────
   let down: { x: number; y: number; button: number } | null = null;
-  let dragging = false;
-  let lastDragTile = '';
+  /** Inizio della linea in corso (mura, fossati, strade): si costruisce al rilascio. */
+  let lineStart: PointerTile | null = null;
+  const lineFrom = (end: PointerTile) => lineTiles(lineStart!.x, lineStart!.z, end.x, end.z);
+  function updateLinePreview() {
+    if (!tool || !lineStart || !hover) {
+      view.setLinePreview(null);
+      return;
+    }
+    const tiles = lineFrom(hover);
+    // Il costo cresce lungo la linea: segna in rosso le caselle che non si possono pagare
+    const def = getBuilding(tool);
+    let budgetOk = true;
+    const res = { ...game.state.resources };
+    view.setLinePreview(
+      tiles.map(([x, z]) => {
+        const c = game.canPlace(tool!, x, z);
+        let ok = c.ok || c.reason === 'Risorse insufficienti';
+        if (ok) {
+          for (const [id, n] of Object.entries(def.cost)) {
+            res[id as keyof typeof res] -= n ?? 0;
+            if (res[id as keyof typeof res] < 0) budgetOk = false;
+          }
+          ok = budgetOk;
+        }
+        return { x, z, ok };
+      }),
+    );
+  }
 
   canvas.addEventListener('pointerdown', (e) => {
     down = { x: e.clientX, y: e.clientY, button: e.button };
     const t = view.pick(e.clientX, e.clientY);
     if (tool && e.button === 0 && t) {
-      dragging = true;
-      lastDragTile = `${t.x},${t.z}`;
-      placeAt(t);
+      if (getBuilding(tool).draggable) {
+        lineStart = t;
+        updateLinePreview();
+      } else placeAt(t);
     }
   });
   canvas.addEventListener('pointermove', (e) => {
     hover = view.pick(e.clientX, e.clientY);
-    if (dragging && tool && hover && getBuilding(tool).draggable) {
-      const k = `${hover.x},${hover.z}`;
-      if (k !== lastDragTile) {
-        lastDragTile = k;
-        placeAt(hover);
-      }
-    }
+    if (lineStart) updateLinePreview();
     updateGhost();
   });
   canvas.addEventListener('pointerleave', () => {
@@ -177,6 +198,13 @@ function startGame(app: HTMLElement, session: Session, state: GameState) {
     updateGhost();
   });
   window.addEventListener('pointerup', (e) => {
+    if (lineStart && tool) {
+      const end = view.pick(e.clientX, e.clientY) ?? hover ?? lineStart;
+      const r = game.placeLine(tool, lineFrom(end));
+      if (!r.placed || r.reason === 'Risorse insufficienti') hud.toast(r.reason ?? 'Impossibile costruire qui', 'bad');
+      lineStart = null;
+      view.setLinePreview(null);
+    }
     const moved = down ? Math.hypot(e.clientX - down.x, e.clientY - down.y) : 99;
     if (down && moved < 5 && e.target === canvas) {
       if (down.button === 2 && tool) setTool(null);
@@ -186,13 +214,14 @@ function startGame(app: HTMLElement, session: Session, state: GameState) {
       }
     }
     down = null;
-    dragging = false;
     updateGhost();
   });
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   window.addEventListener('keydown', (e) => {
     if (hud.isTyping) return;
     if (e.key === 'Escape') {
+      lineStart = null;
+      view.setLinePreview(null);
       if (tool) setTool(null);
       else select(null);
     } else if (e.key === ' ') {

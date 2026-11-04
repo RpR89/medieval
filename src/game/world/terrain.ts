@@ -72,18 +72,22 @@ export function generateTerrain(seed: number, size = MAP_SIZE): Terrain {
   for (let z = 0; z < size; z++) {
     for (let x = 0; x < size; x++) {
       const dist = Math.hypot(x - center, z - center);
-      const f = n1(x, z) * 0.7 + n2(x, z) * 0.3 - (dist < 9 ? 0.25 : 0);
+      // Radura attorno al sito del castello, con margine sfumato
+      const clear = dist < 13 ? 0.32 : dist < 16 ? 0.32 * (1 - (dist - 13) / 3) : 0;
+      const f = n1(x, z) * 0.7 + n2(x, z) * 0.3 - clear;
       if (f > 0.56) set(x, z, Tile.Forest);
     }
   }
 
   // Affioramenti rocciosi, uno con vena d'oro
   const blobs = 3 + Math.floor(rand() * 2);
+  const centers: Array<[number, number]> = [];
   for (let b = 0; b < blobs; b++) {
     const angle = rand() * Math.PI * 2;
-    const r = 13 + rand() * 12;
+    const r = 16 + rand() * 10;
     const bx = Math.round(center + Math.cos(angle) * r);
     const bz = Math.round(center + Math.sin(angle) * r);
+    centers.push([bx, bz]);
     const radius = 2 + rand() * 1.8;
     for (let z = -4; z <= 4; z++) {
       for (let x = -4; x <= 4; x++) {
@@ -104,18 +108,29 @@ export function generateTerrain(seed: number, size = MAP_SIZE): Terrain {
   }
 
   // Fiume da nord a sud che si getta nel mare
-  let rx = Math.round(center - 14 + rand() * 8);
+  let rx = Math.round(center - 18 + rand() * 6);
   for (let z = 0; z < size; z++) {
     rx += Math.round((n2(z, 7) - 0.5) * 2.2);
     if (z > size * 0.7) rx += 1; // piega verso il mare
     rx = Math.max(3, Math.min(size - 4, rx));
     // Lascia libera l'area centrale del castello
-    if (Math.abs(z - center) < 11) rx = Math.min(rx, Math.round(center - 9));
+    if (Math.abs(z - center) < 14) rx = Math.min(rx, Math.round(center - 14));
     const width = 2;
     for (let w = 0; w < width; w++) {
       if (get(rx + w, z) !== Tile.Sea) set(rx + w, z, Tile.River);
     }
     if (get(rx + width, z) === Tile.Sea) break;
+  }
+
+  // Garantisce almeno una vena d'oro sulla terraferma (il mare o il fiume possono averla coperta)
+  if (!tiles.includes(Tile.Gold)) {
+    for (const [bx, bz] of centers) {
+      if (get(bx, bz) === Tile.Rock) {
+        set(bx, bz, Tile.Gold);
+        if (get(bx + 1, bz) === Tile.Rock) set(bx + 1, bz, Tile.Gold);
+        break;
+      }
+    }
   }
 
   return { size, seed, tiles };

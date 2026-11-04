@@ -9,7 +9,8 @@ export type BuildingCategory =
   | 'gathering'
   | 'industry'
   | 'trade'
-  | 'military';
+  | 'military'
+  | 'infrastructure';
 
 export const CATEGORY_NAMES: Record<BuildingCategory, string> = {
   fortification: '🏰 Fortificazioni',
@@ -20,6 +21,7 @@ export const CATEGORY_NAMES: Record<BuildingCategory, string> = {
   industry: '⚒️ Produzione',
   trade: '⚖️ Commercio',
   military: '⚔️ Esercito',
+  infrastructure: '🛣️ Strade',
 };
 
 /** Dove si può costruire un edificio. */
@@ -28,7 +30,8 @@ export type PlacementRule =
   | 'rock' // tutta la superficie su roccia
   | 'goldVein' // almeno una casella con vena d'oro
   | 'nearForest' // terra, con bosco entro 2 caselle
-  | 'nearWater'; // terra, con fiume o mare entro 1 casella
+  | 'nearWater' // terra, con fiume o mare entro 1 casella
+  | 'river'; // sopra il fiume (ponti)
 
 export type Species = 'cattle' | 'pigs' | 'goats';
 
@@ -67,6 +70,12 @@ export interface BuildingDef {
   seasonal?: SeasonalCurve;
   /** Valore difensivo contro gli assalti. */
   defense?: number;
+  /** Punti vita (solo fortificazioni): gli assalti li riducono, si riparano. */
+  hp?: number;
+  /** Ruolo nella cinta muraria. */
+  fort?: 'wall' | 'tower' | 'gate' | 'keep' | 'moat';
+  /** Fa parte della rete stradale. */
+  road?: boolean;
   /** Capacità di magazzino aggiunta a ogni risorsa. */
   storage?: number;
   /** Recinto per animali. */
@@ -87,6 +96,8 @@ export const BUILDINGS: BuildingDef[] = [
   // ───── Fortificazioni ─────
   {
     id: 'keep_wood',
+    fort: 'keep',
+    hp: 300,
     name: 'Motta con torre lignea',
     category: 'fortification',
     description: 'Collina artificiale con torre in legno: il cuore del primo castello.',
@@ -103,6 +114,8 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'keep_stone',
+    fort: 'keep',
+    hp: 1000,
     name: 'Mastio in pietra',
     category: 'fortification',
     description: 'Grande torre quadrata in pietra, residenza del signore e ultimo rifugio.',
@@ -118,6 +131,8 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'palisade',
+    fort: 'wall',
+    hp: 60,
     name: 'Palizzata',
     category: 'fortification',
     description: 'Tronchi appuntiti piantati nel terreno. Economica ma fragile.',
@@ -131,6 +146,8 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'tower_wood',
+    fort: 'tower',
+    hp: 140,
     name: 'Torre lignea',
     category: 'fortification',
     description: 'Torre di guardia in legno. Gli arcieri vi combattono meglio.',
@@ -143,6 +160,8 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'gate_wood',
+    fort: 'gate',
+    hp: 90,
     name: 'Porta lignea',
     category: 'fortification',
     description: 'Ingresso fortificato nella palizzata.',
@@ -155,6 +174,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'moat',
+    fort: 'moat',
     name: 'Fossato',
     category: 'fortification',
     description: 'Fossato scavato attorno alle mura. Rallenta gli assalitori.',
@@ -168,6 +188,8 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'wall_stone',
+    fort: 'wall',
+    hp: 220,
     name: 'Mura in pietra',
     category: 'fortification',
     description: 'Cortina muraria merlata con cammino di ronda.',
@@ -181,6 +203,8 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'tower_square',
+    fort: 'tower',
+    hp: 450,
     name: 'Torre quadrata',
     category: 'fortification',
     description: 'Torre di fiancheggiamento in pietra.',
@@ -193,6 +217,8 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'gate_stone',
+    fort: 'gate',
+    hp: 320,
     name: 'Porta in pietra',
     category: 'fortification',
     description: 'Arco in pietra con saracinesca.',
@@ -205,6 +231,8 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'tower_round',
+    fort: 'tower',
+    hp: 560,
     name: 'Torre circolare',
     category: 'fortification',
     description: 'Senza angoli morti, resiste meglio a scavi e arieti.',
@@ -217,6 +245,8 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'gatehouse',
+    fort: 'gate',
+    hp: 650,
     name: 'Corpo di guardia',
     category: 'fortification',
     description: 'Porta monumentale tra due torri, con caditoie e doppia saracinesca.',
@@ -492,6 +522,47 @@ export const BUILDINGS: BuildingDef[] = [
     placement: 'land',
     workers: 2,
     trains: 'cavalry',
+  },
+
+  // ───── Strade ─────
+  {
+    id: 'road',
+    name: 'Strada sterrata',
+    category: 'infrastructure',
+    description: 'Collega gli edifici al castello o al mercato: chi è collegato produce il 15% in più.',
+    size: [1, 1],
+    cost: { coins: 1 },
+    minYear: 900,
+    placement: 'land',
+    workers: 0,
+    draggable: true,
+    road: true,
+  },
+  {
+    id: 'road_paved',
+    name: 'Strada lastricata',
+    category: 'infrastructure',
+    description: 'Selciato in pietra: come la strada sterrata, ma i carri corrono di più (+25%).',
+    size: [1, 1],
+    cost: { stone: 3, coins: 1 },
+    minYear: 1100,
+    placement: 'land',
+    workers: 0,
+    draggable: true,
+    road: true,
+  },
+  {
+    id: 'bridge',
+    name: 'Ponte in legno',
+    category: 'infrastructure',
+    description: 'Attraversa il fiume e prosegue la rete stradale.',
+    size: [1, 1],
+    cost: { wood: 18, coins: 4 },
+    minYear: 900,
+    placement: 'river',
+    workers: 0,
+    draggable: true,
+    road: true,
   },
 ];
 

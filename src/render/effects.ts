@@ -144,7 +144,9 @@ export function makeWater(mat: THREE.MeshStandardMaterial, p: WaterParams) {
         `#include <color_fragment>
         {
           vec2 huv = (vWPos.xz * uRes + 0.5) / uN;
-          float h = texture2D(uHeight, clamp(huv, 0.0, 1.0)).r * uHRange + uHMin;
+          vec4 hs = texture2D(uHeight, clamp(huv, 0.0, 1.0));
+          if (hs.g > 0.5 && huv.x <= 1.0) discard;
+          float h = hs.r * uHRange + uHMin;
           // Oltre il bordo est della mappa c'è mare aperto
           if (huv.x > 1.0) h = uHMin;
           float depth = max(uLevel - h, 0.0);

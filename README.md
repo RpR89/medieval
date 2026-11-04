@@ -17,6 +17,14 @@ attraverso cinque secoli: dalle motte con palizzate in legno ai castelli concent
 - **Raccolta**: taglialegna, caccia, pesca di fiume o di mare, cava di pietra, miniera d'oro, carbonaie.
 - **Economia**: popolazione, alloggi, posti di lavoro, cibo (si consuma prima quello che deperisce), magazzini, tasse, deperimento delle merci.
 - **Mercato**: prezzi che cambiano con le stagioni.
+- **Fortificazioni al centro del gioco**:
+  - mura, palizzate e fossati si tracciano trascinando, anche in diagonale; si uniscono a torri, porte e mastio, e il mastio può far parte della cinta;
+  - ogni fortificazione ha i suoi **punti vita**: gli assedi li consumano, si riparano, e in rovina aprono una breccia;
+  - **miglioramenti**: terrapieno, ballatoio e cammino di ronda, bertesche, mura ispessite, caditoie, copertura delle torri, saracinesca, **calderone della pece** (consuma carbone in battaglia), **ponte levatoio**, fossato più profondo, allagamento, pali appuntiti, cisterna e armeria nel mastio. Si possono applicare a tutti gli edifici dello stesso tipo in un colpo;
+  - **cinta chiusa**: il gioco controlla se mura, torri, porte e mastio circondano il castello (fiumi e mare fanno da barriera). Con la cinta aperta le difese valgono la metà e il nemico entra dal varco;
+  - i fossati si **allagano** da soli se toccano il fiume, altrimenti con il miglioramento "Allagamento".
+- **Assedi a fasi** (`src/game/sim/siege.ts`): bombardamento dei trabucchi, avvicinamento sotto il tiro attraverso il fossato, assalto al punto più debole (mura o porta), mischia nella breccia, ultima resistenza nel mastio. Un castello ben costruito moltiplica la forza della guarnigione, quindi difendere costa meno che attaccare. Il modulo è puro e deterministico, pronto per risolvere sul server gli attacchi tra giocatori.
+- **Strade e ponti**: collegano gli edifici al mastio o al mercato (+15% di produzione con la sterrata, +25% con la lastricata). I ponti attraversano il fiume.
 - **Esercito di base**: fanteria, arcieri (rendono di più con le torri) e cavalleria (mangia fieno), con paga giornaliera.
 - **Assalti periodici**: ungari, vichinghi, baroni rivali, compagnie di ventura. Le difese sono messe a confronto con la forza del nemico.
 - **Account e salvataggi**: login con Supabase e salvataggio nel cloud, oppure gioco da ospite con salvataggio nel browser. Salvataggio automatico ogni 30 secondi.
@@ -82,7 +90,8 @@ tests/                 test Vitest della simulazione
 
 - Tempi di costruzione e cantieri, con lavoratori che si spostano.
 - Personaggi animati (contadini, soldati) e percorsi.
-- Battaglie visibili sulla mappa, assedi e macchine d'assedio.
+- Attacchi tra giocatori: un attacco viene registrato su Supabase e una Edge Function lo risolve con `siege.ts` usando il salvataggio del difensore, così nessuno può barare.
+- Battaglie visibili sulla mappa: truppe che marciano, arieti e trabucchi.
 - Altri prodotti: mulino e pane, birra, ferro e fabbro, lana e tessitura.
 - Mappa condivisa del regno, diplomazia e guerra tra giocatori (server autoritativo).
 - Modelli GLB e audio.

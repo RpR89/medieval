@@ -9,6 +9,21 @@ export interface PlacedBuilding {
   z: number;
   /** Capi di bestiame (solo recinti). Valore continuo, si mostra arrotondato. */
   herd?: number;
+  /** Punti vita attuali (solo fortificazioni). */
+  hp?: number;
+  /** Miglioramenti costruiti (id di UPGRADES). */
+  upgrades?: string[];
+}
+
+/** Rapporto dell'ultimo assedio, per l'interfaccia. */
+export interface SiegeReport {
+  day: number;
+  attacker: string;
+  outcome: 'repelled' | 'held' | 'sacked';
+  log: string[];
+  attackerLosses: number;
+  defenderLosses: number;
+  loot: number;
 }
 
 export type EventKind = 'info' | 'good' | 'bad';
@@ -32,6 +47,7 @@ export interface GameState {
   nextUid: number;
   nextRaidDay: number;
   log: GameEvent[];
+  lastSiege?: SiegeReport;
 }
 
 export const BASE_HOUSING = 10;

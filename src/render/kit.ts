@@ -49,6 +49,9 @@ function build() {
     flag: new THREE.MeshStandardMaterial({ color: 0xb02a2a, roughness: 0.9, side: THREE.DoubleSide }),
     flagGold: new THREE.MeshStandardMaterial({ color: 0xd9a83a, roughness: 0.9, side: THREE.DoubleSide }),
     smoke: new THREE.MeshStandardMaterial({ color: 0x9a9690, transparent: true, opacity: 0.45, depthWrite: false }),
+    fire: new THREE.MeshStandardMaterial({ color: 0xff7a20, emissive: 0xff5a10, emissiveIntensity: 2.5 }),
+    road: textured(t.ground, 0x8a7052, { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }, 0.4),
+    paving: textured(t.stone, 0xb0a898, { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }, 0.8),
     target: plain(0xe6dcc0),
     targetRed: plain(0xb8322a),
     cowBrown: plain(0x7b4a2a),
@@ -65,7 +68,7 @@ function build() {
 
 /** Materiali su cui si posa la neve d'inverno. */
 const SNOWY: Array<keyof ReturnType<typeof build>> = [
-  'stone', 'stoneDark', 'stoneLight', 'planks', 'darkPlanks', 'log', 'thatch', 'roofTile', 'grassMound', 'straw', 'earth',
+  'road', 'paving', 'stone', 'stoneDark', 'stoneLight', 'planks', 'darkPlanks', 'log', 'thatch', 'roofTile', 'grassMound', 'straw', 'earth',
 ];
 
 let cache: ReturnType<typeof build> | null = null;

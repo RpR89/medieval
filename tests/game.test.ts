@@ -145,7 +145,7 @@ describe('simulazione', () => {
     const next = game.state.nextRaidDay;
     game.advance(0.5);
     expect(game.state.nextRaidDay).toBeGreaterThan(next);
-    expect(game.state.log.at(-1)!.text).toMatch(/forza/);
+    expect(game.state.lastSiege?.log.length).toBeGreaterThan(1);
   });
 });
 
@@ -174,5 +174,11 @@ describe('fiume', () => {
         for (let x = c - 4; x < c + 4; x++) expect(tileAt(t, x, z)).not.toBe(Tile.River);
       }
     }
+  });
+});
+
+describe('risorse della mappa', () => {
+  it('ogni mappa ha almeno una vena d\'oro raggiungibile', () => {
+    for (let seed = 0; seed < 200; seed++) expect(generateTerrain(seed).tiles.includes(Tile.Gold)).toBe(true);
   });
 });

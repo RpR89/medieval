@@ -42,10 +42,13 @@ export interface Footprint {
   w: number;
   d: number;
   defId: string;
+  /** Solo fossati: profondità (1-3) e se è asciutto. */
+  depth?: number;
+  dry?: boolean;
 }
 
 /** Edifici che hanno un terreno proprio (non serve colorare la terra battuta). */
-const OWN_GROUND = new Set(['field_grain', 'field_vegetables', 'hay_meadow', 'pasture_cattle', 'pasture_pigs', 'pasture_goats', 'moat']);
+const OWN_GROUND = new Set(['field_grain', 'field_vegetables', 'hay_meadow', 'pasture_cattle', 'pasture_pigs', 'pasture_goats', 'moat', 'road', 'road_paved']);
 
 interface Decor {
   mesh: THREE.InstancedMesh;
@@ -66,6 +69,7 @@ export class TerrainView {
   private season: Season = 'summer';
   private footprints: Footprint[] = [];
   private earthMask: Float32Array;
+  private dryMask: Uint8Array;
   private noise: Float32Array;
   private decorByTile = new Map<number, Decor[]>();
   private hidden = new Set<number>();
@@ -90,6 +94,7 @@ export class TerrainView {
     this.base = this.computeBase();
     this.heights = this.base.slice();
     this.earthMask = new Float32Array(this.n * this.n);
+    this.dryMask = new Uint8Array(this.n * this.n);
     this.heightTexture = new THREE.DataTexture(new Uint8Array(this.n * this.n * 4), this.n, this.n);
     this.heightTexture.magFilter = THREE.LinearFilter;
     this.heightTexture.minFilter = THREE.LinearFilter;
@@ -219,6 +224,8 @@ export class TerrainView {
     for (let k = 0; k < this.n * this.n; k++) {
       const v = (this.heights[k] - TerrainView.H_MIN) / TerrainView.H_RANGE;
       data[k * 4] = Math.max(0, Math.min(255, Math.round(v * 255)));
+      // Canale verde: fossato asciutto (l'acqua non va disegnata)
+      data[k * 4 + 1] = this.dryMask[k] ? 255 : 0;
       data[k * 4 + 3] = 255;
     }
     this.heightTexture.needsUpdate = true;
@@ -237,8 +244,10 @@ export class TerrainView {
     this.earthMask.fill(0);
     const ordered = [...fps].sort((a, b) => (a.defId === 'moat' ? -1 : 0) - (b.defId === 'moat' ? -1 : 0));
     // 1) dentro l'ingombro: quota fissa
+    this.dryMask.fill(0);
+    const level = (f: Footprint) => (f.defId === 'moat' ? -(0.35 + 0.25 * ((f.depth ?? 1) - 1)) : 0);
     for (const f of ordered) {
-      const lvl = f.defId === 'moat' ? -0.5 : 0;
+      const lvl = level(f);
       const i0 = Math.ceil(f.x * RES);
       const i1 = Math.floor((f.x + f.w) * RES);
       const j0 = Math.ceil(f.z * RES);
@@ -250,14 +259,16 @@ export class TerrainView {
           // I fossati sono processati per primi: sui vertici condivisi vince l'edificio
           H[k] = lvl;
           inside[k] = 1;
+          if (f.defId === 'moat' && f.dry) this.dryMask[k] = 1;
+          else if (f.defId !== 'moat') this.dryMask[k] = 0;
           if (!OWN_GROUND.has(f.defId)) this.earthMask[k] = 1;
         }
       }
     }
     // 2) raccordo morbido attorno agli ingombri
     for (const f of ordered) {
-      const lvl = f.defId === 'moat' ? -0.5 : 0;
-      const m = f.defId === 'moat' ? 0.3 : 0.6;
+      const lvl = level(f);
+      const m = f.defId === 'moat' ? 0.3 : f.defId.startsWith('road') ? 0.3 : 0.6;
       const i0 = Math.floor((f.x - m) * RES);
       const i1 = Math.ceil((f.x + f.w + m) * RES);
       const j0 = Math.floor((f.z - m) * RES);
@@ -332,8 +343,10 @@ export class TerrainView {
           out[c] = (c00[c] * (1 - fx) + c10[c] * fx) * (1 - fz) + (c01[c] * (1 - fx) + c11[c] * fx) * fz;
         }
         const h = this.heights[k];
-        // Rive bagnate e fondale
-        if (h < WATER_LEVEL + 0.06) {
+        // Fondo dei fossati asciutti: terra; altrimenti rive bagnate e fondale
+        if (this.dryMask[k]) {
+          for (let c = 0; c < 3; c++) out[c] = out[c] * 0.3 + p.earth[c] * 0.7;
+        } else if (h < WATER_LEVEL + 0.06) {
           const t = Math.min(1, (WATER_LEVEL + 0.06 - h) / 0.25);
           for (let c = 0; c < 3; c++) out[c] = out[c] * (1 - t) + p.bed[c] * t;
           if (h > WATER_LEVEL - 0.1) for (let c = 0; c < 3; c++) out[c] *= 0.85;
