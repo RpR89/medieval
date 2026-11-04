@@ -5,12 +5,26 @@ import { RESOURCES } from './game/data/resources';
 import { Game } from './game/sim/game';
 import type { GameState } from './game/sim/state';
 import { SupabaseRealm, type RealmPlayer } from './net/realm';
-import { WorldRenderer, type PointerTile } from './render/scene';
+import { WorldRenderer, type PointerTile, type Quality } from './render/scene';
 import { el } from './ui/dom';
 import { Hud } from './ui/hud';
 import { showStartScreen, type Session } from './ui/start';
 
 const AUTOSAVE_MS = 30_000;
+const QUALITY_KEY = 'medieval.quality';
+const QUALITY_LABELS: Record<Quality, string> = { high: 'Alta', medium: 'Media', low: 'Bassa' };
+const QUALITY_ORDER: Quality[] = ['high', 'medium', 'low'];
+
+function loadQuality(): Quality {
+  try {
+    const q = localStorage.getItem(QUALITY_KEY) as Quality | null;
+    if (q && QUALITY_ORDER.includes(q)) return q;
+  } catch {
+    /* storage non disponibile */
+  }
+  // Su telefoni e tablet si parte più leggeri
+  return matchMedia('(pointer: coarse)').matches ? 'medium' : 'high';
+}
 const PRESENCE_MS = 10_000;
 
 async function boot() {
@@ -23,7 +37,7 @@ function startGame(app: HTMLElement, session: Session, state: GameState) {
   const canvas = el('canvas', { class: 'world' });
   app.append(canvas);
   const game = new Game(state);
-  const view = new WorldRenderer(canvas, game);
+  const view = new WorldRenderer(canvas, game, loadQuality());
   let speed = 1;
   let tool: string | null = null;
 
@@ -64,6 +78,17 @@ function startGame(app: HTMLElement, session: Session, state: GameState) {
       onDeselect: () => select(null),
       onSpeed: (s) => (speed = s),
       onSave: () => save(true),
+      qualityLabel: QUALITY_LABELS[view.currentQuality],
+      onQuality: () => {
+        const next = QUALITY_ORDER[(QUALITY_ORDER.indexOf(view.currentQuality) + 1) % QUALITY_ORDER.length];
+        view.setQuality(next);
+        try {
+          localStorage.setItem(QUALITY_KEY, next);
+        } catch {
+          /* ignora */
+        }
+        return QUALITY_LABELS[next];
+      },
       onExit: async () => {
         await save();
         await realm?.leave();

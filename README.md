@@ -7,7 +7,8 @@ attraverso cinque secoli: dalle motte con palizzate in legno ai castelli concent
 
 ## Cosa c'è già
 
-- **Mappa 3D procedurale** (64×64): prati, boschi, roccia con vene d'oro, fiume e mare.
+- **Mappa 3D procedurale** (64×64): terreno continuo con rilievi, boschi misti, roccia con vene d'oro, fiume e mare.
+- **Grafica**: texture generate dal codice (conci di pietra, assi, paglia, coppi, intonaco), modelli dettagliati e fusi in poche mesh, cielo fisico con riflessi, acqua con profondità e schiuma sulle rive, vento su alberi, erba e grano, ombre delle nuvole, neve che si posa su tetti e merli, occlusione ambientale e bloom. Qualità **Alta / Media / Bassa** dal pulsante 🎨.
 - **Calendario e stagioni**: 1 secondo = 1 giorno a velocità 1×, con 4 stagioni da 90 giorni. Il paesaggio cambia colore e d'inverno nevica.
 - **Epoche storiche** che sbloccano le tecniche: motte (900), mastio in pietra (1050), cinte murarie (1150), castello concentrico (1250), tardo Medioevo (1350).
 - **Fortificazioni**: palizzate, mura in pietra (si collegano da sole ai vicini), torri lignee, quadrate e circolari, porte, corpo di guardia, fossati, motta e mastio. Mura e fossati si costruiscono trascinando.
@@ -65,7 +66,7 @@ src/
   game/data/      dati di gioco: risorse, edifici, animali, unità, epoche, calendario
   game/world/     generazione procedurale del territorio
   game/sim/       simulazione (classe Game) — logica pura, senza grafica, testata
-  render/         Three.js: scena, terreno, modelli procedurali low-poly
+  render/         Three.js: scena, terreno e vegetazione, modelli, texture procedurali, effetti shader
   ui/             HUD, menu costruzioni, pannelli, schermata di accesso
   save/           salvataggi: browser (LocalSaveStore) e cloud (CloudSaveStore)
   net/            multiplayer: interfaccia RealmTransport + implementazione Supabase Realtime

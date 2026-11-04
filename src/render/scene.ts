@@ -1,38 +1,24 @@
 import * as THREE from 'three';
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
+import { Sky } from 'three/examples/jsm/objects/Sky.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { makeWater, shared } from './effects';
 import type { Season } from '../game/data/calendar';
 import { getBuilding } from '../game/data/buildings';
 import type { Game } from '../game/sim/game';
 import type { PlacedBuilding } from '../game/sim/state';
-import { mulberry32, Tile, tileAt } from '../game/world/terrain';
-import { applySeason, buildModel, LINKED_TYPES, updateHerd, WALL_FAMILY, type WallLinks } from './models';
+import { animate, applySeason, buildModel, LINKED_TYPES, updateHerd, WALL_FAMILY, type WallLinks } from './models';
+import { TerrainView, WATER_LEVEL } from './terrain';
+import { textures } from './textures';
 
-const GRASS: Record<Season, number> = {
-  spring: 0x6fa245,
-  summer: 0x7d9e3e,
-  autumn: 0x9a8f45,
-  winter: 0xdfe6ea,
-};
-const FOLIAGE: Record<Season, number> = {
-  spring: 0x4f8a35,
-  summer: 0x3d7530,
-  autumn: 0xb5652a,
-  winter: 0x5d6f5a,
-};
-const SKY: Record<Season, number> = {
-  spring: 0xbcd8ef,
-  summer: 0xa9d0f0,
-  autumn: 0xc9c3b0,
-  winter: 0xd6dde3,
-};
+export type Quality = 'high' | 'medium' | 'low';
 
-const TILE_HEIGHT: Partial<Record<Tile, number>> = {
-  [Tile.Rock]: 0.25,
-  [Tile.Gold]: 0.25,
-  [Tile.River]: -0.4,
-  [Tile.Sea]: -0.5,
-  [Tile.Sand]: -0.03,
-};
+const SUN_ELEVATION: Record<Season, number> = { spring: 38, summer: 52, autumn: 30, winter: 20 };
+const FOG: Record<Season, number> = { spring: 0xc6d6e2, summer: 0xbcd2e4, autumn: 0xcfc8b8, winter: 0xd8dee4 };
 
 export interface PointerTile {
   x: number;
@@ -44,9 +30,10 @@ export class WorldRenderer {
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
   readonly controls: MapControls;
-  private tiles!: THREE.InstancedMesh;
-  private foliage!: THREE.InstancedMesh;
-  private foliageMat!: THREE.MeshStandardMaterial;
+  readonly terrainView: TerrainView;
+  private composer: EffectComposer;
+  private aoPass: GTAOPass;
+  private bloomPass: UnrealBloomPass;
   private buildingObjs = new Map<number, THREE.Object3D>();
   private structureVersion = -1;
   private season: Season | null = null;
@@ -57,209 +44,206 @@ export class WorldRenderer {
   private ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private keys = new Set<string>();
   private sun: THREE.DirectionalLight;
-  private clock = new THREE.Clock();
-  /** Caselle abbassate perché scavate a fossato. */
-  private dug = new Set<number>();
+  private hemi: THREE.HemisphereLight;
+  private sky: Sky;
+  private pmrem: THREE.PMREMGenerator;
+  private envRT: THREE.WebGLRenderTarget | null = null;
+  private sunDir = new THREE.Vector3();
+  private water: THREE.Mesh;
+  private timer = new THREE.Timer();
+  private quality: Quality = 'high';
 
-  constructor(private canvas: HTMLCanvasElement, private game: Game) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  constructor(private canvas: HTMLCanvasElement, private game: Game, quality: Quality = 'high') {
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 0.82;
+    this.pmrem = new THREE.PMREMGenerator(this.renderer);
 
     const size = game.terrain.size;
-    this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 400);
-    this.camera.position.set(size / 2 - 4, 26, size / 2 + 26);
+    this.camera = new THREE.PerspectiveCamera(42, 1, 0.1, 600);
+    this.camera.position.set(size / 2 - 4, 22, size / 2 + 24);
 
     this.controls = new MapControls(this.camera, canvas);
     this.controls.target.set(size / 2, 0, size / 2);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.12;
-    this.controls.minDistance = 6;
+    this.controls.minDistance = 4;
     this.controls.maxDistance = 80;
-    this.controls.maxPolarAngle = 1.25;
+    this.controls.maxPolarAngle = 1.3;
     this.controls.screenSpacePanning = false;
 
-    this.scene.fog = new THREE.Fog(0xbcd8ef, 60, 140);
-    this.scene.add(new THREE.HemisphereLight(0xdfeaff, 0x5a4a30, 1.1));
-    this.sun = new THREE.DirectionalLight(0xfff1d6, 2.2);
-    this.sun.position.set(size / 2 - 25, 40, size / 2 - 15);
-    this.sun.target.position.set(size / 2, 0, size / 2);
+    // Cielo fisico, usato anche come ambiente per i riflessi
+    this.sky = new Sky();
+    this.sky.scale.setScalar(450);
+    const u = this.sky.material.uniforms;
+    u.turbidity.value = 4;
+    u.rayleigh.value = 1.4;
+    u.mieCoefficient.value = 0.004;
+    u.mieDirectionalG.value = 0.85;
+    this.scene.add(this.sky);
+    this.scene.fog = new THREE.Fog(FOG.summer, 70, 220);
+
+    this.hemi = new THREE.HemisphereLight(0xcfe0ff, 0x4a3e2a, 0.35);
+    this.scene.add(this.hemi);
+    this.sun = new THREE.DirectionalLight(0xfff0d8, 2.6);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
-    const s = this.sun.shadow.camera;
-    s.left = -size * 0.75;
-    s.right = size * 0.75;
-    s.top = size * 0.75;
-    s.bottom = -size * 0.75;
-    s.far = 150;
-    this.sun.shadow.bias = -0.0005;
+    this.sun.shadow.bias = -0.0004;
+    this.sun.shadow.normalBias = 0.02;
     this.scene.add(this.sun, this.sun.target);
 
-    this.buildTerrain();
+    this.terrainView = new TerrainView(game.terrain, quality === 'high' ? 10 : quality === 'medium' ? 6 : 3);
+    this.scene.add(this.terrainView.group);
+
+    // Acqua animata con mappa delle normali procedurale
+    const normals = textures().waterNormals;
+    normals.repeat.set(size / 3, size / 3);
+    this.water = new THREE.Mesh(
+      new THREE.PlaneGeometry(size + 440, size + 440),
+      new THREE.MeshStandardMaterial({
+        color: 0x1f4f66,
+        roughness: 0.08,
+        metalness: 0.1,
+        transparent: true,
+        opacity: 0.88,
+        normalMap: normals,
+        normalScale: new THREE.Vector2(0.35, 0.35),
+        envMapIntensity: 0.9,
+      }),
+    );
+    makeWater(this.water.material as THREE.MeshStandardMaterial, {
+      height: this.terrainView.heightTexture,
+      min: TerrainView.H_MIN,
+      range: TerrainView.H_RANGE,
+      res: this.terrainView.grid.res,
+      n: this.terrainView.grid.n,
+      level: WATER_LEVEL,
+    });
+    this.water.rotation.x = -Math.PI / 2;
+    this.water.position.set(size / 2, WATER_LEVEL, size / 2);
+    this.water.receiveShadow = true;
+    this.scene.add(this.water);
 
     this.selection = new THREE.Mesh(
-      new THREE.RingGeometry(0.45, 0.55, 32),
-      new THREE.MeshBasicMaterial({ color: 0xffd54a, side: THREE.DoubleSide, transparent: true, opacity: 0.9 }),
+      new THREE.RingGeometry(0.45, 0.55, 40),
+      new THREE.MeshBasicMaterial({ color: 0xffd54a, side: THREE.DoubleSide, transparent: true, opacity: 0.9, depthWrite: false }),
     );
     this.selection.rotation.x = -Math.PI / 2;
     this.selection.visible = false;
     this.scene.add(this.selection);
 
+    // Post-processing: occlusione ambientale (GTAO) + uscita con tone mapping
+    // Render target multicampionato: l'antialiasing resta anche con il post-processing
+    const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+    this.composer = new EffectComposer(this.renderer, rt);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.aoPass = new GTAOPass(this.scene, this.camera, 512, 512);
+    this.aoPass.updateGtaoMaterial({ radius: 0.6, distanceExponent: 1.5, thickness: 1.5, scale: 1.2, samples: 12 });
+    this.aoPass.blendIntensity = 0.85;
+    this.composer.addPass(this.aoPass);
+    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(512, 512), 0.18, 0.5, 0.9);
+    this.composer.addPass(this.bloomPass);
+    this.composer.addPass(new OutputPass());
+
     window.addEventListener('keydown', (e) => {
-      if ((e.target as HTMLElement).closest('input, textarea')) return;
+      if ((e.target as HTMLElement).closest('input, textarea, select')) return;
       this.keys.add(e.key.toLowerCase());
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
     window.addEventListener('blur', () => this.keys.clear());
-    this.resize();
     window.addEventListener('resize', () => this.resize());
+    this.setQuality(quality);
+  }
+
+  // ───────────── Qualità ─────────────
+
+  setQuality(q: Quality) {
+    this.quality = q;
+    const dpr = window.devicePixelRatio || 1;
+    this.renderer.setPixelRatio(q === 'high' ? Math.min(dpr, 2) : q === 'medium' ? Math.min(dpr, 1.5) : 1);
+    const map = q === 'high' ? 4096 : q === 'medium' ? 2048 : 1024;
+    if (this.sun.shadow.mapSize.x !== map) {
+      this.sun.shadow.mapSize.set(map, map);
+      this.sun.shadow.map?.dispose();
+      this.sun.shadow.map = null;
+    }
+    this.sun.shadow.radius = q === 'low' ? 1 : 2.5;
+    this.aoPass.enabled = q === 'high';
+    this.bloomPass.enabled = q === 'high';
+    this.terrainView.setDetail(q !== 'low');
+    this.resize();
+  }
+
+  get currentQuality(): Quality {
+    return this.quality;
   }
 
   private resize() {
     const w = this.canvas.clientWidth || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
     this.renderer.setSize(w, h, false);
+    this.composer.setPixelRatio(this.renderer.getPixelRatio());
+    this.composer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
 
-  private setTileHeight(x: number, z: number, top: number) {
-    const m = new THREE.Matrix4().makeScale(1, 1 + top, 1);
-    m.setPosition(x + 0.5, top, z + 0.5);
-    this.tiles.setMatrixAt(z * this.game.terrain.size + x, m);
+  // ───────────── Stagioni e luce ─────────────
+
+  private applySeasonLook(season: Season) {
+    const elev = THREE.MathUtils.degToRad(SUN_ELEVATION[season]);
+    const azim = THREE.MathUtils.degToRad(215);
+    this.sunDir.setFromSphericalCoords(1, Math.PI / 2 - elev, azim);
+    this.sky.material.uniforms.sunPosition.value.copy(this.sunDir);
+    this.sun.color.setHex(season === 'winter' ? 0xf4f0ff : season === 'autumn' ? 0xffe2b8 : 0xfff0d8);
+    this.sun.intensity = season === 'winter' ? 1.9 : 2.4;
+    this.hemi.groundColor.setHex(season === 'winter' ? 0xb8c0c8 : 0x5a4a30);
+    (this.scene.fog as THREE.Fog).color.setHex(FOG[season]);
+    this.terrainView.setSeason(season);
+    shared.uSnow.value = season === 'winter' ? 1 : 0;
+
+    // Ambiente per i riflessi, ricavato dal cielo
+    const skyScene = new THREE.Scene();
+    const skyCopy = new Sky();
+    skyCopy.scale.setScalar(450);
+    for (const k of Object.keys(this.sky.material.uniforms)) {
+      const src = this.sky.material.uniforms[k].value;
+      const dst = skyCopy.material.uniforms[k];
+      dst.value = src instanceof THREE.Vector3 ? src.clone() : src;
+    }
+    skyScene.add(skyCopy);
+    this.envRT?.dispose();
+    this.envRT = this.pmrem.fromScene(skyScene, 0.02);
+    this.scene.environment = this.envRT.texture;
+    this.scene.environmentIntensity = 0.3;
+    skyCopy.geometry.dispose();
+    skyCopy.material.dispose();
   }
 
-  /** Abbassa il terreno sotto i fossati (e lo ripristina se demoliti). */
-  private syncMoats() {
-    const t = this.game.terrain;
-    const now = new Set<number>();
-    for (const b of this.game.state.buildings) if (b.defId === 'moat') now.add(b.z * t.size + b.x);
-    let changed = false;
-    for (const i of now) {
-      if (!this.dug.has(i)) {
-        this.setTileHeight(i % t.size, Math.floor(i / t.size), -0.4);
-        changed = true;
-      }
+  /** L'ombra copre solo la zona inquadrata, così resta nitida. */
+  private updateSunShadow() {
+    const tg = this.controls.target;
+    const dist = this.camera.position.distanceTo(tg);
+    const half = THREE.MathUtils.clamp(dist * 0.95, 10, 60);
+    const cam = this.sun.shadow.camera;
+    if (cam.right !== half) {
+      cam.left = -half;
+      cam.right = half;
+      cam.top = half;
+      cam.bottom = -half;
+      cam.near = 1;
+      cam.far = 200;
+      cam.updateProjectionMatrix();
     }
-    for (const i of this.dug) {
-      if (!now.has(i)) {
-        const x = i % t.size;
-        const z = Math.floor(i / t.size);
-        this.setTileHeight(x, z, TILE_HEIGHT[tileAt(t, x, z)!] ?? 0);
-        changed = true;
-      }
-    }
-    this.dug = now;
-    if (changed) this.tiles.instanceMatrix.needsUpdate = true;
-  }
-
-  private buildTerrain() {
-    const t = this.game.terrain;
-    const n = t.size * t.size;
-    const geo = new THREE.BoxGeometry(1, 1, 1);
-    geo.translate(0, -0.5, 0);
-    const material = new THREE.MeshStandardMaterial({ roughness: 1, flatShading: true });
-    this.tiles = new THREE.InstancedMesh(geo, material, n);
-    this.tiles.receiveShadow = true;
-    const m = new THREE.Matrix4();
-    for (let z = 0; z < t.size; z++) {
-      for (let x = 0; x < t.size; x++) {
-        const tile = tileAt(t, x, z)!;
-        const top = TILE_HEIGHT[tile] ?? 0;
-        const depth = 1 + top;
-        m.makeScale(1, depth, 1);
-        m.setPosition(x + 0.5, top, z + 0.5);
-        this.tiles.setMatrixAt(z * t.size + x, m);
-      }
-    }
-    this.scene.add(this.tiles);
-
-    // Acqua: un piano semitrasparente sopra il letto di fiume e mare
-    const water = new THREE.Mesh(
-      new THREE.PlaneGeometry(t.size + 60, t.size + 60),
-      new THREE.MeshStandardMaterial({ color: 0x3a7ea0, transparent: true, opacity: 0.85, roughness: 0.15, metalness: 0.1 }),
-    );
-    water.rotation.x = -Math.PI / 2;
-    water.position.set(t.size / 2, -0.18, t.size / 2);
-    water.receiveShadow = true;
-    water.userData.water = true;
-    this.scene.add(water);
-
-    // Fondale esterno (mare oltre i bordi)
-    const seabed = new THREE.Mesh(new THREE.PlaneGeometry(t.size + 60, t.size + 60), new THREE.MeshStandardMaterial({ color: 0x5b7f5a }));
-    seabed.rotation.x = -Math.PI / 2;
-    seabed.position.set(t.size / 2, -1, t.size / 2);
-    this.scene.add(seabed);
-
-    // Alberi
-    const rand = mulberry32(t.seed + 99);
-    const forest: Array<[number, number]> = [];
-    for (let z = 0; z < t.size; z++) for (let x = 0; x < t.size; x++) if (tileAt(t, x, z) === Tile.Forest) forest.push([x, z]);
-    const perTile = 2;
-    const count = forest.length * perTile;
-    this.foliageMat = new THREE.MeshStandardMaterial({ color: FOLIAGE.summer, flatShading: true, roughness: 0.9 });
-    const foliageGeo = new THREE.ConeGeometry(0.38, 1.1, 6);
-    foliageGeo.translate(0, 0.85, 0);
-    this.foliage = new THREE.InstancedMesh(foliageGeo, this.foliageMat, count);
-    this.foliage.castShadow = true;
-    const trunkGeo = new THREE.CylinderGeometry(0.06, 0.08, 0.35, 5);
-    trunkGeo.translate(0, 0.17, 0);
-    const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshStandardMaterial({ color: 0x5c3b1e }), count);
-    let i = 0;
-    const q = new THREE.Quaternion();
-    const pos = new THREE.Vector3();
-    const scale = new THREE.Vector3();
-    for (const [x, z] of forest) {
-      for (let k = 0; k < perTile; k++) {
-        const sc = 0.75 + rand() * 0.6;
-        pos.set(x + 0.2 + rand() * 0.6, 0, z + 0.2 + rand() * 0.6);
-        q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rand() * Math.PI);
-        scale.set(sc, sc * (0.9 + rand() * 0.4), sc);
-        m.compose(pos, q, scale);
-        this.foliage.setMatrixAt(i, m);
-        trunks.setMatrixAt(i, m);
-        i++;
-      }
-    }
-    this.scene.add(this.foliage, trunks);
-  }
-
-  private paintTerrain(season: Season) {
-    const t = this.game.terrain;
-    const c = new THREE.Color();
-    const rand = mulberry32(t.seed + 7);
-    for (let z = 0; z < t.size; z++) {
-      for (let x = 0; x < t.size; x++) {
-        const tile = tileAt(t, x, z)!;
-        switch (tile) {
-          case Tile.Grass:
-          case Tile.Forest:
-            c.setHex(tile === Tile.Forest && season !== 'winter' ? 0x4d6b2e : GRASS[season]);
-            break;
-          case Tile.Rock:
-            c.setHex(season === 'winter' ? 0xc9ccce : 0x8a8580);
-            break;
-          case Tile.Gold:
-            c.setHex(0xb59a4a);
-            break;
-          case Tile.Sand:
-            c.setHex(0xd8c58f);
-            break;
-          default:
-            c.setHex(0x4a5a48);
-        }
-        c.offsetHSL(0, 0, (rand() - 0.5) * 0.04);
-        this.tiles.setColorAt(z * t.size + x, c);
-      }
-    }
-    this.tiles.instanceColor!.needsUpdate = true;
-    this.foliageMat.color.setHex(FOLIAGE[season]);
-    const sky = SKY[season];
-    this.scene.background = new THREE.Color(sky);
-    (this.scene.fog as THREE.Fog).color.setHex(sky);
-    this.sun.intensity = season === 'winter' ? 1.6 : 2.2;
+    // Aggancia il centro ai texel per evitare lo sfarfallio delle ombre
+    const texel = (half * 2) / this.sun.shadow.mapSize.x;
+    const cx = Math.round(tg.x / texel) * texel;
+    const cz = Math.round(tg.z / texel) * texel;
+    this.sun.target.position.set(cx, 0, cz);
+    this.sun.position.set(cx + this.sunDir.x * 80, this.sunDir.y * 80, cz + this.sunDir.z * 80);
+    this.sun.target.updateMatrixWorld();
   }
 
   // ───────────── Edifici ─────────────
@@ -281,13 +265,21 @@ export class WorldRenderer {
 
   private makeObject(b: PlacedBuilding): THREE.Object3D {
     const def = getBuilding(b.defId);
-    const obj = buildModel(def, LINKED_TYPES.has(def.id) ? this.linksFor(b) : undefined);
+    const links = LINKED_TYPES.has(def.id) ? this.linksFor(b) : undefined;
+    const obj = buildModel(def, links, b.uid * 7919 + b.x * 31 + b.z);
     obj.position.set(b.x + def.size[0] / 2, 0, b.z + def.size[1] / 2);
     obj.userData.uid = b.uid;
-    obj.userData.links = JSON.stringify(LINKED_TYPES.has(def.id) ? this.linksFor(b) : null);
+    obj.userData.links = JSON.stringify(links ?? null);
     if (this.season) applySeason(obj, def.id, this.season);
     if (def.herd) updateHerd(obj, def, Math.round(b.herd ?? 0));
     return obj;
+  }
+
+  private disposeObject(obj: THREE.Object3D) {
+    this.scene.remove(obj);
+    obj.traverse((o) => {
+      if (o instanceof THREE.Mesh) o.geometry.dispose();
+    });
   }
 
   private syncBuildings() {
@@ -298,7 +290,7 @@ export class WorldRenderer {
       if (existing) {
         // Mura e porte cambiano aspetto quando cambiano i vicini
         if (LINKED_TYPES.has(b.defId) && existing.userData.links !== JSON.stringify(this.linksFor(b))) {
-          this.scene.remove(existing);
+          this.disposeObject(existing);
           const obj = this.makeObject(b);
           this.buildingObjs.set(b.uid, obj);
           this.scene.add(obj);
@@ -311,10 +303,16 @@ export class WorldRenderer {
     }
     for (const [uid, obj] of this.buildingObjs) {
       if (!alive.has(uid)) {
-        this.scene.remove(obj);
+        this.disposeObject(obj);
         this.buildingObjs.delete(uid);
       }
     }
+    this.terrainView.setFootprints(
+      this.game.state.buildings.map((b) => {
+        const [w, d] = getBuilding(b.defId).size;
+        return { x: b.x, z: b.z, w, d, defId: b.defId };
+      }),
+    );
   }
 
   // ───────────── Interazione ─────────────
@@ -335,24 +333,34 @@ export class WorldRenderer {
   /** Mostra l'anteprima dell'edificio da costruire (null per nasconderla). */
   setGhost(defId: string | null, tile: PointerTile | null, valid: boolean) {
     if (defId !== this.ghostDef) {
-      if (this.ghost) this.scene.remove(this.ghost);
+      if (this.ghost) this.disposeObject(this.ghost);
       this.ghost = null;
       this.ghostDef = defId;
       if (defId) {
         const def = getBuilding(defId);
         const g = buildModel(def);
-        const base = new THREE.Mesh(new THREE.BoxGeometry(def.size[0], 0.04, def.size[1]), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.45 }));
-        base.position.y = 0.04;
+        const base = new THREE.Mesh(
+          new THREE.BoxGeometry(def.size[0], 0.04, def.size[1]),
+          new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.45, depthWrite: false }),
+        );
+        base.position.y = 0.05;
         base.userData.base = true;
         g.add(base);
         g.traverse((o) => {
           if (o instanceof THREE.Mesh && !o.userData.base) {
-            o.material = (o.material as THREE.Material).clone();
-            (o.material as THREE.MeshStandardMaterial).transparent = true;
-            (o.material as THREE.MeshStandardMaterial).opacity = 0.6;
+            const m = (o.material as THREE.Material).clone() as THREE.MeshStandardMaterial;
+            m.transparent = true;
+            m.opacity = 0.6;
+            m.depthWrite = false;
+            o.material = m;
             o.castShadow = false;
           }
         });
+        if (def.id === 'moat') {
+          const water = new THREE.Mesh(new THREE.BoxGeometry(1, 0.3, 1), new THREE.MeshBasicMaterial({ color: 0x3a7ea0, transparent: true, opacity: 0.5 }));
+          water.position.y = -0.1;
+          g.add(water);
+        }
         this.ghost = g;
         this.scene.add(g);
       }
@@ -405,11 +413,14 @@ export class WorldRenderer {
   }
 
   render() {
-    const dt = Math.min(0.1, this.clock.getDelta());
+    this.timer.update();
+    const dt = Math.min(0.1, this.timer.getDelta());
+    const t = this.timer.getElapsed();
+    shared.uTime.value = t;
     const season = this.game.date.season;
     if (season !== this.season) {
       this.season = season;
-      this.paintTerrain(season);
+      this.applySeasonLook(season);
       for (const [uid, obj] of this.buildingObjs) {
         const b = this.game.state.buildings.find((x) => x.uid === uid);
         if (b) applySeason(obj, b.defId, season);
@@ -418,29 +429,33 @@ export class WorldRenderer {
     if (this.game.structureVersion !== this.structureVersion) {
       this.structureVersion = this.game.structureVersion;
       this.syncBuildings();
-      this.syncMoats();
     }
-    const t = this.clock.elapsedTime;
+    const frustum = new THREE.Frustum().setFromProjectionMatrix(
+      new THREE.Matrix4().multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse),
+    );
+    const sphere = new THREE.Sphere();
     for (const b of this.game.state.buildings) {
       const obj = this.buildingObjs.get(b.uid);
       if (!obj) continue;
       const def = getBuilding(b.defId);
       if (def.herd) updateHerd(obj, def, Math.round(b.herd ?? 0));
-      if (def.id === 'charcoal_kiln') {
-        const smoke = obj.children.find((c) => c.userData.smoke);
-        smoke?.children.forEach((p, i) => {
-          const k = (t * 0.4 + i / 3) % 1;
-          p.position.y = 0.5 + k * 1.2;
-          p.scale.setScalar(0.6 + k);
-        });
-      }
+      sphere.set(obj.position, Math.max(def.size[0], def.size[1]) + 2);
+      if (frustum.intersectsSphere(sphere)) animate(obj, t, dt);
     }
+    const n = this.water.material as THREE.MeshStandardMaterial;
+    n.normalMap!.offset.set(t * 0.012, t * 0.008);
+
     this.panWithKeys(dt);
     const tg = this.controls.target;
     const lim = this.game.terrain.size;
     tg.x = THREE.MathUtils.clamp(tg.x, 0, lim);
     tg.z = THREE.MathUtils.clamp(tg.z, 0, lim);
     this.controls.update();
-    this.renderer.render(this.scene, this.camera);
+    this.updateSunShadow();
+    if (this.aoPass.enabled) this.composer.render(dt);
+    else {
+      // Senza AO si salta il composer (più veloce); il tone mapping lo fa il renderer
+      this.renderer.render(this.scene, this.camera);
+    }
   }
 }

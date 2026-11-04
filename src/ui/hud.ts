@@ -22,6 +22,9 @@ export interface HudCallbacks {
   onSpeed(speed: number): void;
   onSave(): void;
   onExit(): void;
+  /** Passa al livello di qualità grafica successivo e ne restituisce il nome. */
+  onQuality(): string;
+  qualityLabel: string;
   /** null se il multiplayer non è disponibile (ospite o Supabase non configurato). */
   realm: null | {
     join(name: string): Promise<void>;
@@ -77,6 +80,10 @@ export class Hud {
     });
     const saveBtn = el('button', { text: '💾', title: 'Salva ora' });
     saveBtn.onclick = () => cb.onSave();
+    const qualityBtn = el('button', { text: `🎨 ${cb.qualityLabel}`, title: 'Qualità grafica (clic per cambiare)' });
+    qualityBtn.onclick = () => {
+      qualityBtn.textContent = `🎨 ${cb.onQuality()}`;
+    };
     const exitBtn = el('button', { text: '⎋', title: 'Torna al menu' });
     exitBtn.onclick = () => cb.onExit();
     const resBar = el('div', { class: 'resources' });
@@ -100,6 +107,7 @@ export class Hud {
         speeds,
         this.saveEl,
         saveBtn,
+        qualityBtn,
         el('span', { class: 'muted small', text: accountLabel }),
         exitBtn,
       ),
