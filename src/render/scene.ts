@@ -7,7 +7,7 @@ import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { makeWater, shared } from './effects';
-import type { Season } from '../game/data/calendar';
+import { mixNumber, seasonMix, type Season, type SeasonMix } from '../game/data/calendar';
 import { getBuilding } from '../game/data/buildings';
 import type { Game } from '../game/sim/game';
 import type { PlacedBuilding } from '../game/sim/state';
@@ -22,6 +22,9 @@ import { textures } from './textures';
 export type Quality = 'high' | 'medium' | 'low';
 
 const SUN_ELEVATION: Record<Season, number> = { spring: 38, summer: 52, autumn: 30, winter: 20 };
+const SUN_COLOR: Record<Season, number> = { spring: 0xfff0d8, summer: 0xfff0d8, autumn: 0xffe2b8, winter: 0xf4f0ff };
+const SUN_INTENSITY: Record<Season, number> = { spring: 2.4, summer: 2.4, autumn: 2.3, winter: 1.9 };
+const HEMI_GROUND: Record<Season, number> = { spring: 0x5a4a30, summer: 0x5a4a30, autumn: 0x5a4a30, winter: 0xb8c0c8 };
 const FOG: Record<Season, number> = { spring: 0xc6d6e2, summer: 0xbcd2e4, autumn: 0xcfc8b8, winter: 0xd8dee4 };
 
 export interface PointerTile {
@@ -51,7 +54,10 @@ export class WorldRenderer {
   private shadowHalf = 0;
   private linePreview: THREE.InstancedMesh;
   private structureVersion = -1;
-  private season: Season | null = null;
+  /** Chiave della sfumatura stagionale applicata (si aggiorna a piccoli passi). */
+  private mixKey = '';
+  private envKey = '';
+  private mix: SeasonMix = { from: 'spring', to: 'summer', t: 0 };
   private ghost: THREE.Group | null = null;
   private ghostDef: string | null = null;
   private selection: THREE.Mesh;
@@ -229,17 +235,19 @@ export class WorldRenderer {
 
   // ───────────── Stagioni e luce ─────────────
 
-  private applySeasonLook(season: Season) {
-    const elev = THREE.MathUtils.degToRad(SUN_ELEVATION[season]);
+  private applySeasonLook(m: SeasonMix, refreshEnv: boolean) {
+    const elev = THREE.MathUtils.degToRad(mixNumber(m, SUN_ELEVATION));
     const azim = THREE.MathUtils.degToRad(215);
     this.sunDir.setFromSphericalCoords(1, Math.PI / 2 - elev, azim);
     this.sky.material.uniforms.sunPosition.value.copy(this.sunDir);
-    this.sun.color.setHex(season === 'winter' ? 0xf4f0ff : season === 'autumn' ? 0xffe2b8 : 0xfff0d8);
-    this.sun.intensity = season === 'winter' ? 1.9 : 2.4;
-    this.hemi.groundColor.setHex(season === 'winter' ? 0xb8c0c8 : 0x5a4a30);
-    (this.scene.fog as THREE.Fog).color.setHex(FOG[season]);
-    this.terrainView.setSeason(season);
-    shared.uSnow.value = season === 'winter' ? 1 : 0;
+    const col = (t: Record<Season, number>) => new THREE.Color(t[m.from]).lerp(new THREE.Color(t[m.to]), m.t);
+    this.sun.color.copy(col(SUN_COLOR));
+    this.sun.intensity = mixNumber(m, SUN_INTENSITY);
+    this.hemi.groundColor.copy(col(HEMI_GROUND));
+    (this.scene.fog as THREE.Fog).color.copy(col(FOG));
+    this.terrainView.setSeasonMix(m);
+    shared.uSnow.value = mixNumber(m, { spring: 0, summer: 0, autumn: 0, winter: 1 });
+    if (!refreshEnv) return;
 
     // Ambiente per i riflessi, ricavato dal cielo
     const skyScene = new THREE.Scene();
@@ -362,7 +370,7 @@ export class WorldRenderer {
     const y = def.id === 'bridge' ? 0 : this.terrainView.baseLevel(b.x, b.z, def.size[0], def.size[1]);
     obj.position.set(b.x + def.size[0] / 2, y, b.z + def.size[1] / 2);
     obj.userData.uid = b.uid;
-    if (this.season) applySeason(obj, def.id, this.season);
+    applySeason(obj, def.id, this.mix);
     if (def.herd) updateHerd(obj, def, Math.round(b.herd ?? 0));
     return obj;
   }
@@ -554,6 +562,20 @@ export class WorldRenderer {
     this.selection.visible = true;
   }
 
+  /** Punto del terreno sotto il puntatore (coordinate continue). */
+  pickPoint(clientX: number, clientY: number): { x: number; z: number } | null {
+    const rect = this.canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const p = new THREE.Vector3();
+    if (!this.raycaster.ray.intersectPlane(this.ground, p)) return null;
+    return { x: p.x, z: p.z };
+  }
+
+  setSelectedCompanies(ids: string[]) {
+    this.armyView.setSelected(ids);
+  }
+
   /** Abilita/disabilita il trascinamento della mappa col tasto sinistro. */
   setLeftPan(enabled: boolean) {
     this.controls.mouseButtons.LEFT = enabled ? THREE.MOUSE.PAN : (null as unknown as THREE.MOUSE);
@@ -582,14 +604,19 @@ export class WorldRenderer {
     const dt = Math.min(0.1, this.timer.getDelta());
     const t = this.timer.getElapsed();
     shared.uTime.value = t;
-    const season = this.game.date.season;
-    if (season !== this.season) {
-      this.season = season;
-      this.applySeasonLook(season);
+    // Stagioni sfumate: si aggiorna a passi di 1/20 della transizione (ridipingere il terreno costa)
+    const m = seasonMix(this.game.state.day);
+    const key = `${m.from}:${Math.round(m.t * 20)}`;
+    if (key !== this.mixKey) {
+      this.mixKey = key;
+      this.mix = { ...m, t: Math.round(m.t * 20) / 20 };
+      const envKey = `${m.from}:${Math.round(m.t * 2)}`;
+      this.applySeasonLook(this.mix, envKey !== this.envKey);
+      this.envKey = envKey;
       this.shadowDirty = true;
       for (const [uid, obj] of this.buildingObjs) {
-        const b = this.game.state.buildings.find((x) => x.uid === uid);
-        if (b) applySeason(obj, b.defId, season);
+        const b = this.game.byUid(uid);
+        if (b) applySeason(obj, b.defId, this.mix);
       }
     }
     if (this.game.structureVersion !== this.structureVersion) {

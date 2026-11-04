@@ -15,6 +15,7 @@ import {
   pay,
   RESOURCE_IDS,
   RESOURCES,
+  TAX_LEVELS,
   type Cost,
   type ResourceId,
 } from '../data/resources';
@@ -29,6 +30,7 @@ import {
   type Terrain,
 } from '../world/terrain';
 import { resolveSiege, type AttackerArmy, type DefenderSnapshot, type SiegeSegment } from './siege';
+import { findPath } from './pathfind';
 import {
   BASE_HOUSING,
   BASE_STORAGE,
@@ -36,6 +38,7 @@ import {
   FOOD_PER_PERSON,
   TAX_PER_PERSON,
   type AttackResult,
+  type Company,
   type EventKind,
   type Expedition,
   type Force,
@@ -865,7 +868,7 @@ export class Game {
     // Produzione degli edifici (le strade aumentano la resa)
     for (const { b, def } of this.defsPlaced()) {
       if (def.produces) {
-        let factor = staffing * (def.seasonal ? def.seasonal[si] : 1) * dt * (a.connected.get(b.uid) ?? 1);
+        let factor = staffing * (def.seasonal ? def.seasonal[si] : 1) * dt * (a.connected.get(b.uid) ?? 1) * this.productivity();
         if (def.consumes) {
           for (const [id, n] of Object.entries(def.consumes)) {
             const need = (n ?? 0) * factor;
@@ -892,18 +895,34 @@ export class Game {
     }
     const fed = needed > 0 ? 1 - need / needed : 1;
 
-    // Popolazione
+    // Contento della popolazione: si avvicina gradualmente al valore che merita il governo
+    this.lastFed = fed;
+    this.lastVariety = variety;
+    const mood = this.moodTarget();
+    const h = this.happiness();
+    s.happiness = h + Math.sign(mood.total - h) * Math.min(Math.abs(mood.total - h), 2 * dt);
+
+    // Popolazione: cresce di più se la gente è contenta, se ne va se è scontenta
+    const hm = this.happiness();
     if (fed < 0.99) {
       s.population -= pop * 0.01 * (1 - fed) * dt;
-    } else if (pop < a.housing) {
-      const growth = (0.03 + pop * 0.0008) * (1 + 0.08 * Math.max(0, variety - 1));
+    } else if (pop < a.housing && hm >= 30) {
+      const growth = (0.03 + pop * 0.0008) * (1 + 0.08 * Math.max(0, variety - 1)) * Math.min(1.5, hm / 55);
       s.population = Math.min(a.housing, pop + growth * dt);
+    }
+    if (hm < 30) s.population -= pop * 0.004 * ((30 - hm) / 30) * dt;
+    // Tumulti: con la gente molto scontenta, ogni giorno c'è il rischio di una rivolta
+    if (hm < 20 && this.random() < 0.02 * dt) {
+      const lostCoins = Math.round(r.coins * 0.1);
+      r.coins -= lostCoins;
+      for (const id of FOOD_IDS) r[id] *= 0.9;
+      this.log(`Tumulti nel borgo: la folla saccheggia i magazzini (−${lostCoins} monete, −10% di cibo). Abbassa le tasse!`, 'bad');
     }
     if (s.population > a.housing) s.population -= (s.population - a.housing) * 0.02 * dt;
     s.population = Math.max(0, s.population);
 
     // Tasse
-    r.coins += s.population * TAX_PER_PERSON * a.taxMul * dt;
+    r.coins += this.taxPerDay() * dt;
 
     // Mantenimento dell'esercito (anche le truppe in spedizione e le macchine d'assedio)
     for (const id of Object.keys(ENGINES) as EngineType[]) {
@@ -937,6 +956,7 @@ export class Game {
 
     if (s.day >= s.nextRaidDay) this.resolveRaid();
     this.stepWar();
+    this.stepCompanies(dt);
   }
 
   private stepHerd(b: PlacedBuilding, def: BuildingDef, si: number, staffing: number, dt: number) {
@@ -1046,6 +1066,7 @@ export class Game {
       const t = e.status === 'returning' && e.result ? e.result.survivors : e.troops;
       for (const k of Object.keys(f) as Array<keyof Force>) f[k] += t[k];
     }
+    for (const c of this.state.companies ?? []) for (const k of Object.keys(f) as Array<keyof Force>) f[k] += c.troops[k];
     return f;
   }
 
@@ -1118,6 +1139,7 @@ export class Game {
 
   /** L'attaccante riceve l'esito: i superstiti tornano a casa con il bottino. */
   applyAttackResult(r: AttackResult) {
+    if (this.applyCompanyResult(r)) return;
     const e = (this.state.expeditions ?? []).find((x) => x.id === r.id);
     if (!e || e.status !== 'marching') return;
     e.status = 'returning';
@@ -1277,7 +1299,7 @@ export class Game {
         flooded: moatTiles ? flooded / moatTiles : 0,
         stakes: moatTiles ? stakes / moatTiles : 0,
       },
-      army: { ...this.state.army },
+      army: this.defendingTroops(),
       armory: this.state.buildings.some((b) => b.upgrades?.includes('armory')),
       cistern: this.state.buildings.some((b) => b.upgrades?.includes('cistern')),
       charcoal: this.state.resources.charcoal,
@@ -1331,9 +1353,7 @@ export class Game {
       b.hp = Math.max(0, Math.round(hp));
       if (this.hpState(b) !== before) visual = true;
     }
-    for (const k of ['infantry', 'archers', 'cavalry'] as const) {
-      s.army[k] = Math.max(0, s.army[k] - result.defenderLosses[k]);
-    }
+    this.applyDefenderLosses(result.defenderLosses);
     s.resources.charcoal = Math.max(0, s.resources.charcoal - result.charcoalUsed);
     const cistern = this.state.buildings.some((b) => b.upgrades?.includes('cistern'));
     let loot = 0;
@@ -1367,6 +1387,471 @@ export class Game {
     if (visual) this.changed();
     else this.emit();
     return result;
+  }
+
+
+  // ───────────── Reparti sul campo (comandati dal giocatore) ─────────────
+
+  /** Reparti dell'avversario, ricevuti dalla rete (solo da guardare). */
+  enemyCompanies: Company[] = [];
+  private assaultListeners = new Set<(a: IncomingAttack) => void>();
+  private fieldCooldown = new Map<string, number>();
+
+  companies(): Company[] {
+    return (this.state.companies ??= []);
+  }
+
+  onAssault(fn: (a: IncomingAttack) => void): () => void {
+    this.assaultListeners.add(fn);
+    return () => this.assaultListeners.delete(fn);
+  }
+
+  setEnemyCompanies(list: Company[]) {
+    this.enemyCompanies = list;
+  }
+
+  /** Centro del proprio mastio (o del sito, se non c'è ancora). */
+  keepCenter(): [number, number] {
+    const k = this.state.buildings.find((b) => getBuilding(b.defId).fort === 'keep');
+    if (!k) return this.homeSite();
+    const [w, d] = getBuilding(k.defId).size;
+    return [k.x + w / 2, k.z + d / 2];
+  }
+
+  /** Costo per i propri reparti di entrare in una casella (Infinity = invalicabile). */
+  moveCost(x: number, z: number): number {
+    const t = tileAt(this.terrain, x, z);
+    if (t === undefined) return Infinity;
+    const b = this.buildingAt(x, z);
+    if (b) {
+      const def = getBuilding(b.defId);
+      if (def.road) return def.id === 'road_paved' ? 0.5 : 0.65;
+      if (def.fort === 'gate') return this.isForeign(b) ? (this.hpState(b) === 'ruin' ? 1.5 : Infinity) : 0.8;
+      if (def.fort === 'moat') return 3;
+      if (def.fort) return this.hpState(b) === 'ruin' ? 1.6 : Infinity;
+      return this.isForeign(b) ? 1.4 : 1.2;
+    }
+    if (isWater(t)) return Infinity;
+    if (t === Tile.Forest) return 2.2;
+    if (t === Tile.Rock || t === Tile.Gold) return 1.4;
+    return 1;
+  }
+
+  /** Velocità del reparto (caselle al giorno), decisa dal più lento. */
+  companySpeed(c: Company): number {
+    let v = Infinity;
+    for (const k of ['infantry', 'archers', 'cavalry'] as const) if (c.troops[k] > 0) v = Math.min(v, MARCH_SPEED[k]);
+    for (const k of ['rams', 'trebuchets'] as const) if (c.troops[k] > 0) v = Math.min(v, ENGINES[k].speed);
+    return isFinite(v) ? v : 4;
+  }
+
+  private spawnPoint(): [number, number] {
+    // La prima casella libera a partire dal mastio (anche dentro la cinta: poi si esce dalla porta)
+    const [cx, cz] = this.keepCenter();
+    for (let r = 1; r < 12; r++) {
+      for (let dz = -r; dz <= r; dz++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+          const x = Math.floor(cx + dx);
+          const z = Math.floor(cz + dz + 0.5);
+          if (!this.buildingAt(x, z) && isFinite(this.moveCost(x, z))) return [x + 0.5, z + 0.5];
+        }
+      }
+    }
+    return [cx, cz + 2];
+  }
+
+  canForm(f: Force): PlaceCheck {
+    if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
+    if (f.infantry + f.archers + f.cavalry < 1) return { ok: false, reason: 'Scegli almeno un soldato' };
+    if (f.rams + f.trebuchets > 0 && f.infantry < 2 * (f.rams + f.trebuchets)) {
+      return { ok: false, reason: 'Ogni macchina d\'assedio richiede almeno 2 fanti per spingerla' };
+    }
+    if (Object.values(f).some((v) => v < 0 || !Number.isInteger(v))) return { ok: false, reason: 'Numeri non validi' };
+    for (const k of ['infantry', 'archers', 'cavalry'] as const) if (f[k] > this.state.army[k]) return { ok: false, reason: `Non hai abbastanza ${UNITS[k].name.toLowerCase()} nel castello` };
+    for (const k of ['rams', 'trebuchets'] as const) if (f[k] > this.engines()[k]) return { ok: false, reason: `Non hai abbastanza ${ENGINES[k].name.toLowerCase()}` };
+    return { ok: true };
+  }
+
+  /** Forma un reparto con truppe della guarnigione: esce dal castello e si può muovere sulla mappa. */
+  formCompany(f: Force): Company | null {
+    if (!this.canForm(f).ok) return null;
+    for (const k of ['infantry', 'archers', 'cavalry'] as const) this.state.army[k] -= f[k];
+    for (const k of ['rams', 'trebuchets'] as const) this.engines()[k] -= f[k];
+    const [x, z] = this.spawnPoint();
+    const slot = this.state.match?.slot ?? 0;
+    const c: Company = { id: `c${slot}-${this.state.nextUid++}`, troops: { ...f }, x, z, order: 'idle' };
+    this.companies().push(c);
+    this.emit();
+    return c;
+  }
+
+  private own(ids: string[]): Company[] {
+    return this.companies().filter((c) => ids.includes(c.id) && !c.engaged);
+  }
+
+  private route(c: Company, tx: number, tz: number) {
+    const size = this.terrain.size;
+    const gx = Math.max(0, Math.min(size - 1, Math.floor(tx)));
+    const gz = Math.max(0, Math.min(size - 1, Math.floor(tz)));
+    c.path = findPath(size, [Math.floor(c.x), Math.floor(c.z)], [gx, gz], (x, z) => this.moveCost(x, z));
+  }
+
+  /** Ordine di movimento verso una casella. Con più reparti si dispongono in formazione attorno al punto. */
+  orderMove(ids: string[], tx: number, tz: number) {
+    const list = this.own(ids);
+    list.forEach((c, i) => {
+      const off = i === 0 ? [0, 0] : [Math.cos(i * 2.4) * 1.2, Math.sin(i * 2.4) * 1.2];
+      this.route(c, tx + off[0], tz + off[1]);
+      c.order = 'move';
+      c.target = undefined;
+    });
+    this.emit();
+  }
+
+  /** Ordine d'attacco: marciare contro un edificio dell'avversario e assaltare il castello. */
+  orderAttack(ids: string[], tx: number, tz: number): PlaceCheck {
+    if (!this.state.match || !this.others.length) return { ok: false, reason: 'Nessun castello nemico da attaccare' };
+    for (const c of this.own(ids)) {
+      this.route(c, tx, tz);
+      c.order = 'attack';
+      c.target = [tx, tz];
+    }
+    this.emit();
+    return { ok: true };
+  }
+
+  orderHome(ids: string[]) {
+    const [kx, kz] = this.keepCenter();
+    for (const c of this.own(ids)) {
+      this.route(c, kx, kz);
+      c.order = 'home';
+      c.target = undefined;
+    }
+    this.emit();
+  }
+
+  orderStop(ids: string[]) {
+    for (const c of this.own(ids)) {
+      c.path = [];
+      c.order = 'idle';
+    }
+    this.emit();
+  }
+
+  /** Divide un reparto in due metà. */
+  splitCompany(id: string): Company | null {
+    const c = this.own([id])[0];
+    if (!c) return null;
+    const half: Force = { infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0 };
+    for (const k of Object.keys(half) as Array<keyof Force>) {
+      half[k] = Math.floor(c.troops[k] / 2);
+      c.troops[k] -= half[k];
+    }
+    if (half.infantry + half.archers + half.cavalry === 0) {
+      for (const k of Object.keys(half) as Array<keyof Force>) c.troops[k] += half[k];
+      return null;
+    }
+    const n: Company = { id: `c${this.state.match?.slot ?? 0}-${this.state.nextUid++}`, troops: half, x: c.x + 0.6, z: c.z + 0.4, order: 'idle' };
+    this.companies().push(n);
+    this.emit();
+    return n;
+  }
+
+  /** Reparto proprio più vicino a un punto (per la selezione). */
+  companyAt(x: number, z: number, r = 0.9): Company | undefined {
+    let best: Company | undefined;
+    let bd = r;
+    for (const c of this.companies()) {
+      const d = Math.hypot(c.x - x, c.z - z);
+      if (d < bd) {
+        bd = d;
+        best = c;
+      }
+    }
+    return best;
+  }
+
+  /** Soldati nemici dentro il proprio territorio (per l'allarme). */
+  enemiesInTerritory(): number {
+    const t = this.territory();
+    let n = 0;
+    for (const c of this.enemyCompanies) {
+      if (c.x >= t.x0 && c.x < t.x1 && c.z >= t.z0 && c.z < t.z1) n += c.troops.infantry + c.troops.archers + c.troops.cavalry;
+    }
+    return n;
+  }
+
+  private nearHome(c: Company, r = 6): boolean {
+    const [kx, kz] = this.keepCenter();
+    return Math.hypot(c.x - kx, c.z - kz) <= r;
+  }
+
+  /** Chi difende il castello: la guarnigione e i reparti fermi vicino al mastio. */
+  defendingTroops(): { infantry: number; archers: number; cavalry: number } {
+    const t = { ...this.state.army };
+    for (const c of this.state.companies ?? []) {
+      if (c.engaged || c.order === 'attack' || !this.nearHome(c)) continue;
+      t.infantry += c.troops.infantry;
+      t.archers += c.troops.archers;
+      t.cavalry += c.troops.cavalry;
+    }
+    return t;
+  }
+
+  private applyDefenderLosses(l: { infantry: number; archers: number; cavalry: number }) {
+    const left = { ...l };
+    for (const k of ['infantry', 'archers', 'cavalry'] as const) {
+      const take = Math.min(this.state.army[k], left[k]);
+      this.state.army[k] -= take;
+      left[k] -= take;
+    }
+    for (const c of this.state.companies ?? []) {
+      if (c.engaged || c.order === 'attack' || !this.nearHome(c)) continue;
+      for (const k of ['infantry', 'archers', 'cavalry'] as const) {
+        const take = Math.min(c.troops[k], left[k]);
+        c.troops[k] -= take;
+        left[k] -= take;
+      }
+    }
+    this.pruneCompanies();
+  }
+
+  private pruneCompanies() {
+    if (!this.state.companies) return;
+    this.state.companies = this.state.companies.filter((c) => c.troops.infantry + c.troops.archers + c.troops.cavalry > 0);
+  }
+
+  private stepCompanies(dt: number) {
+    const list = this.state.companies;
+    if (!list?.length) return;
+    for (const c of [...list]) {
+      if (c.engaged) continue;
+      // Movimento lungo il percorso
+      let budget = this.companySpeed(c) * dt;
+      while (budget > 1e-6 && c.path?.length) {
+        const [nx, nz] = c.path[0];
+        const tx = nx + 0.5;
+        const tz = nz + 0.5;
+        const dx = tx - c.x;
+        const dz = tz - c.z;
+        const d = Math.hypot(dx, dz);
+        const cost = this.moveCost(nx, nz);
+        if (!isFinite(cost)) {
+          // Il percorso è stato chiuso (nuove mura): ricalcola
+          if (c.order === 'attack' && c.target) this.route(c, c.target[0], c.target[1]);
+          else c.path = [];
+          break;
+        }
+        const step = budget / cost;
+        if (step >= d) {
+          c.x = tx;
+          c.z = tz;
+          c.path.shift();
+          budget -= d * cost;
+        } else {
+          c.x += (dx / d) * step;
+          c.z += (dz / d) * step;
+          budget = 0;
+        }
+        if (d > 1e-6) c.heading = Math.atan2(-dz, dx);
+      }
+      const arrived = !c.path?.length;
+      if (c.order === 'home' && this.nearHome(c, 3.2)) {
+        this.mergeHome(c);
+        continue;
+      }
+      if (c.order === 'attack') {
+        if (this.nearEnemyWalls(c)) this.startAssault(c);
+        else if (arrived) c.order = 'idle';
+      } else if (arrived && c.order === 'move') c.order = 'idle';
+    }
+  }
+
+  private mergeHome(c: Company) {
+    for (const k of ['infantry', 'archers', 'cavalry'] as const) this.state.army[k] += c.troops[k];
+    for (const k of ['rams', 'trebuchets'] as const) this.engines()[k] += c.troops[k];
+    const cap = this.storageCap();
+    let goods = 0;
+    for (const [id, n] of Object.entries(c.cargo ?? {})) {
+      const rid = id as ResourceId;
+      this.state.resources[rid] = rid === 'coins' ? this.state.resources[rid] + (n ?? 0) : Math.min(cap, this.state.resources[rid] + (n ?? 0));
+      goods += n ?? 0;
+    }
+    this.state.companies = this.companies().filter((x) => x !== c);
+    this.log(`Un reparto è rientrato nel castello${goods ? ` con ${Math.round(goods)} unità di bottino` : ''}.`, 'good');
+    this.emit();
+  }
+
+  private nearEnemyWalls(c: Company): boolean {
+    for (const b of this.others) {
+      const def = getBuilding(b.defId);
+      if (!def.fort || def.fort === 'moat') continue;
+      const [w, d] = def.size;
+      const dx = Math.max(b.x - c.x, 0, c.x - (b.x + w));
+      const dz = Math.max(b.z - c.z, 0, c.z - (b.z + d));
+      if (Math.hypot(dx, dz) <= (def.fort === 'keep' ? 3 : 2.2)) return true;
+    }
+    return false;
+  }
+
+  /** I reparti all'attacco vicini tra loro assaltano insieme il castello nemico. */
+  private startAssault(lead: Company) {
+    const group = this.companies().filter((c) => !c.engaged && c.order === 'attack' && Math.hypot(c.x - lead.x, c.z - lead.z) <= 8);
+    const troops: Force = { infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0 };
+    for (const c of group) for (const k of Object.keys(troops) as Array<keyof Force>) troops[k] += c.troops[k];
+    const id = `${this.state.match?.id}:${this.state.match?.slot}:a${this.state.nextUid++}`;
+    for (const c of group) {
+      c.engaged = id;
+      c.path = [];
+    }
+    const a: IncomingAttack = { id, from: this.state.castleName, troops, stance: 'resolute', departDay: this.state.day, arriveDay: this.state.day };
+    this.log(`All'assalto! ${troops.infantry + troops.archers + troops.cavalry} soldati attaccano le mura nemiche.`, 'info');
+    for (const fn of this.assaultListeners) fn(a);
+    this.emit();
+  }
+
+  /** Assalto concluso: le perdite si dividono tra i reparti, il bottino va nei carri. */
+  private applyCompanyResult(r: AttackResult): boolean {
+    const group = this.companies().filter((c) => c.engaged === r.id);
+    if (!group.length) return false;
+    const total: Force = { infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0 };
+    for (const c of group) for (const k of Object.keys(total) as Array<keyof Force>) total[k] += c.troops[k];
+    const soldiers = Math.max(1, r.survivors.infantry + r.survivors.archers + r.survivors.cavalry);
+    for (const c of group) {
+      for (const k of Object.keys(total) as Array<keyof Force>) {
+        c.troops[k] = total[k] ? Math.round((c.troops[k] * r.survivors[k]) / total[k]) : 0;
+      }
+      const share = (c.troops.infantry + c.troops.archers + c.troops.cavalry) / soldiers;
+      c.cargo ??= {};
+      for (const [id, n] of Object.entries(r.loot)) c.cargo[id as ResourceId] = (c.cargo[id as ResourceId] ?? 0) + Math.floor((n ?? 0) * share);
+      c.engaged = undefined;
+      c.order = 'idle';
+    }
+    this.pruneCompanies();
+    const names = { repelled: 'L\'assalto è stato respinto', held: 'Il borgo nemico è saccheggiato, ma il mastio resiste', sacked: 'Il castello nemico è espugnato' };
+    const lootN = Object.values(r.loot).reduce((a, b) => a + (b ?? 0), 0);
+    this.log(
+      `${names[r.outcome]}! Caduti: ${r.attackerLosses}, nemici caduti: ${r.defenderLosses}${lootN ? `. Bottino nei carri: ${Math.round(lootN)} (riportalo al castello)` : ''}.`,
+      r.outcome === 'repelled' ? 'bad' : 'good',
+    );
+    (this.state.campaignLog ??= []).push({ day: this.state.day, text: `Assalto: ${names[r.outcome].toLowerCase()}`, outcome: r.outcome, log: r.log });
+    if (this.state.campaignLog.length > 10) this.state.campaignLog.shift();
+    this.emit();
+    return true;
+  }
+
+  /**
+   * Scontri in campo aperto tra reparti che si incontrano. Li calcola solo chi tiene l'orologio
+   * (l'host), che applica le proprie perdite e restituisce quelle dell'avversario da inviargli.
+   */
+  fieldBattles(): Array<{ enemyLosses: Record<string, Force>; text: string }> {
+    const out: Array<{ enemyLosses: Record<string, Force>; text: string }> = [];
+    const mine = this.companies().filter((c) => !c.engaged);
+    const theirs = this.enemyCompanies.filter((c) => !c.engaged);
+    const used = new Set<string>();
+    for (const c of mine) {
+      if (used.has(c.id)) continue;
+      const foe = theirs.find((e) => !used.has(e.id) && Math.hypot(e.x - c.x, e.z - c.z) < 1.3);
+      if (!foe) continue;
+      const key = `${c.id}|${foe.id}`;
+      if ((this.fieldCooldown.get(key) ?? -1) > this.state.day) continue;
+      this.fieldCooldown.set(key, this.state.day + 1.5);
+      const a = mine.filter((x) => !used.has(x.id) && Math.hypot(x.x - c.x, x.z - c.z) < 2.2);
+      const b = theirs.filter((x) => !used.has(x.id) && Math.hypot(x.x - foe.x, x.z - foe.z) < 2.2);
+      for (const x of [...a, ...b]) used.add(x.id);
+      const power = (g: Company[]) => g.reduce((s, x) => s + x.troops.infantry * 3 + x.troops.archers * 2.5 + x.troops.cavalry * 7, 0);
+      const pa = power(a);
+      const pb = power(b);
+      if (pa <= 0 || pb <= 0) continue;
+      const winA = pa >= pb;
+      const surv = Math.sqrt(Math.abs(pa * pa - pb * pb)) / Math.max(pa, pb);
+      // Il vincitore perde in proporzione, lo sconfitto il 70% e le macchine
+      const lossFor = (g: Company[], won: boolean) => {
+        const m: Record<string, Force> = {};
+        for (const x of g) {
+          const q = won ? 1 - surv : 0.7;
+          m[x.id] = {
+            infantry: Math.round(x.troops.infantry * q),
+            archers: Math.round(x.troops.archers * q),
+            cavalry: Math.round(x.troops.cavalry * q),
+            rams: won ? 0 : x.troops.rams,
+            trebuchets: won ? 0 : x.troops.trebuchets,
+          };
+        }
+        return m;
+      };
+      const mineLoss = lossFor(a, winA);
+      const theirLoss = lossFor(b, !winA);
+      this.applyFieldLosses(mineLoss, winA ? 'Vittoria in campo aperto!' : 'Sconfitta in campo aperto: i nostri ripiegano.');
+      out.push({ enemyLosses: theirLoss, text: winA ? 'Sconfitta in campo aperto: i nostri ripiegano.' : 'Vittoria in campo aperto!' });
+    }
+    return out;
+  }
+
+  /** Applica perdite ai propri reparti (scontro in campo calcolato da questo o dall'altro giocatore). */
+  applyFieldLosses(losses: Record<string, Force>, text?: string) {
+    let dead = 0;
+    for (const c of this.companies()) {
+      const l = losses[c.id];
+      if (!l) continue;
+      for (const k of Object.keys(l) as Array<keyof Force>) {
+        const n = Math.min(c.troops[k], l[k]);
+        c.troops[k] -= n;
+        if (k !== 'rams' && k !== 'trebuchets') dead += n;
+      }
+      c.path = [];
+      c.order = 'idle';
+    }
+    this.pruneCompanies();
+    if (text) this.log(`${text} Caduti: ${dead}.`, text.startsWith('Vittoria') ? 'good' : 'bad');
+    this.emit();
+  }
+
+  // ───────────── Tasse e contento ─────────────
+
+  private lastFed = 1;
+  private lastVariety = 3;
+
+  taxLevel(): number {
+    return Math.max(0, Math.min(TAX_LEVELS.length - 1, this.state.taxLevel ?? 2));
+  }
+
+  setTaxLevel(level: number) {
+    this.state.taxLevel = Math.max(0, Math.min(TAX_LEVELS.length - 1, Math.round(level)));
+    this.emit();
+  }
+
+  /** Gettito giornaliero delle tasse. */
+  taxPerDay(): number {
+    return this.state.population * TAX_PER_PERSON * this.analysis().taxMul * TAX_LEVELS[this.taxLevel()].mul;
+  }
+
+  happiness(): number {
+    return this.state.happiness ?? 60;
+  }
+
+  /** Il contento verso cui tende la popolazione, voce per voce. */
+  moodTarget(): { total: number; parts: Array<[string, number]> } {
+    const a = this.analysis();
+    const parts: Array<[string, number]> = [['Base', 55]];
+    parts.push([`Tasse: ${TAX_LEVELS[this.taxLevel()].name.toLowerCase()}`, TAX_LEVELS[this.taxLevel()].mood]);
+    parts.push(this.lastFed < 0.99 ? ['Fame', -30] : ['Cibo a sufficienza', 6]);
+    if (this.lastVariety > 1) parts.push(['Dieta varia', Math.min(12, (this.lastVariety - 1) * 3)]);
+    const crowd = this.state.population / Math.max(1, a.housing);
+    if (crowd > 1) parts.push(['Sovraffollamento', -12]);
+    else if (crowd < 0.85) parts.push(['Case spaziose', 4]);
+    if (this.has((d) => !!d.market)) parts.push(['Mercato', 5]);
+    if (this.state.lastSiege && this.state.day - this.state.lastSiege.day < 120 && this.state.lastSiege.outcome !== 'repelled') {
+      parts.push(['Saccheggio recente', -15]);
+    }
+    const total = Math.max(0, Math.min(100, parts.reduce((s, [, v]) => s + v, 0)));
+    return { total, parts };
+  }
+
+  /** Moltiplicatore di produzione dovuto al contento (0,85 – 1,15). */
+  productivity(): number {
+    return 0.85 + 0.3 * (this.happiness() / 100);
   }
 
   /** Giorni al prossimo assalto (per l'interfaccia). */

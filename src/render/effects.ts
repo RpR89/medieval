@@ -11,7 +11,23 @@ export const shared = {
   uTime: { value: 0 },
   /** 0 = niente neve, 1 = inverno pieno. */
   uSnow: { value: 0 },
+  /** Quanto fogliame hanno le latifoglie (1 = pieno, 0 = spoglie). */
+  uLeaf: { value: 1 },
 };
+
+/** Le chiome si restringono verso il centro man mano che le foglie cadono. */
+export function addLeafScale(mat: THREE.Material, center = 1.0) {
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = (shader, renderer) => {
+    prev?.call(mat, shader, renderer);
+    shader.uniforms.uLeaf = shared.uLeaf;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>\nuniform float uLeaf;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\ntransformed = mix(vec3(0.0, ${center.toFixed(2)}, 0.0), transformed, max(uLeaf, 0.001));`);
+  };
+  chainKey(mat, 'leaf');
+  mat.needsUpdate = true;
+}
 
 /** Concatena le chiavi di cache dei programmi quando si combinano più effetti. */
 function chainKey(mat: THREE.Material, key: string) {

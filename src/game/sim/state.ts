@@ -63,6 +63,26 @@ export interface Expedition {
   result?: AttackResult;
 }
 
+/** Reparto di truppe sul campo, comandato dal giocatore. */
+export interface Company {
+  id: string;
+  troops: Force;
+  /** Posizione continua sulla mappa (in caselle). */
+  x: number;
+  z: number;
+  /** Ordine corrente. */
+  order: 'idle' | 'move' | 'attack' | 'home';
+  /** Caselle ancora da percorrere. */
+  path?: Array<[number, number]>;
+  /** Bersaglio dell'attacco (casella di un edificio nemico). */
+  target?: [number, number];
+  /** Bottino trasportato. */
+  cargo?: Cost;
+  /** Impegnato in un assalto (id dell'attacco). */
+  engaged?: string;
+  heading?: number;
+}
+
 /** Esercito nemico in marcia verso il proprio castello. */
 export interface IncomingAttack {
   id: string;
@@ -100,9 +120,15 @@ export interface GameState {
   preset?: PresetId;
   /** Partita multigiocatore: id e posto (0 = chi l'ha creata, 1 = chi si è unito). */
   match?: { id: string; slot: 0 | 1 };
+  /** Livello di tassazione (indice di TAX_LEVELS, default 2 = normale). */
+  taxLevel?: number;
+  /** Contento della popolazione, 0-100. */
+  happiness?: number;
   /** Macchine d'assedio in deposito. */
   engines?: { rams: number; trebuchets: number };
   expeditions?: Expedition[];
+  /** Reparti sul campo. */
+  companies?: Company[];
   incoming?: IncomingAttack[];
   /** Ultimi rapporti delle spedizioni concluse. */
   campaignLog?: Array<{ day: number; text: string; outcome: Outcome; log: string[] }>;

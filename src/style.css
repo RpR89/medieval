@@ -163,3 +163,10 @@ button.multi { background: #6b2a1e; border-color: #a3402f; color: var(--ink); }
 /* Spedizioni */
 .war-grid { display: grid; grid-template-columns: 1fr auto auto; gap: 4px 6px; align-items: center; margin: 6px 0; }
 .intel { background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 6px 8px; }
+
+.tax-levels button { font-size: 12px; padding: 3px 6px; }
+
+.companies-panel { right: 10px; bottom: 120px; padding: 8px 12px; width: 310px; z-index: 2; }
+@media (max-width: 900px) { .companies-panel { bottom: 200px; right: 0; left: 0; width: auto; } }
+.companies-panel .row button { font-size: 12px; }
+.company-list .row { border-bottom: 1px solid var(--line); padding: 3px 0; }

@@ -9,8 +9,8 @@ import {
 } from '../game/data/buildings';
 import { formatDate } from '../game/data/calendar';
 import { eraForYear } from '../game/data/eras';
-import { canAfford, formatCost, RESOURCE_IDS, RESOURCES, type ResourceId } from '../game/data/resources';
-import { ENGINES, STANCES, UNITS, type EngineType, type Stance } from '../game/data/units';
+import { canAfford, formatCost, RESOURCE_IDS, RESOURCES, TAX_LEVELS, type ResourceId } from '../game/data/resources';
+import { ENGINES, UNITS, type EngineType, type Stance } from '../game/data/units';
 import type { Force } from '../game/sim/state';
 import type { Game } from '../game/sim/game';
 import type { PlacedBuilding } from '../game/sim/state';
@@ -23,9 +23,14 @@ export interface HudCallbacks {
   onSpeed(speed: number): void;
   onSave(): void;
   onExit(): void;
+  /** Accende o spegne la musica; restituisce il nuovo stato. */
+  onMusic?(): boolean;
+  musicOn?: boolean;
   /** Passa al livello di qualità grafica successivo e ne restituisce il nome. */
   onQuality(): string;
   qualityLabel: string;
+  /** Seleziona reparti sulla mappa. */
+  selectCompanies?(ids: string[]): void;
   /** Spedizioni contro l'altro giocatore (solo nelle partite multigiocatore). */
   war?: () => null | { opponent: string; launch(f: Force, stance: Stance): string | null };
   /** null se il multiplayer non è disponibile (ospite o Supabase non configurato). */
@@ -59,6 +64,9 @@ export class Hud {
   private selPanel: HTMLElement;
   selected: PlacedBuilding | null = null;
   private logEl: HTMLElement;
+  private compPanel: HTMLElement = el('div', { class: 'companies-panel panel hidden' });
+  private compIds: string[] = [];
+  private compKey = '';
   private logKey = '';
   private toastEl: HTMLElement;
   private hintEl: HTMLElement;
@@ -87,6 +95,10 @@ export class Hud {
     qualityBtn.onclick = () => {
       qualityBtn.textContent = `🎨 ${cb.onQuality()}`;
     };
+    const musicBtn = el('button', { text: cb.musicOn === false ? '🔇' : '🎵', title: 'Musica (clic per accendere o spegnere)' });
+    musicBtn.onclick = () => {
+      if (cb.onMusic) musicBtn.textContent = cb.onMusic() ? '🎵' : '🔇';
+    };
     const exitBtn = el('button', { text: '⎋', title: 'Torna al menu' });
     exitBtn.onclick = () => cb.onExit();
     const resBar = el('div', { class: 'resources' });
@@ -111,6 +123,7 @@ export class Hud {
         this.saveEl,
         saveBtn,
         qualityBtn,
+        musicBtn,
         el('span', { class: 'muted small', text: accountLabel }),
         exitBtn,
       ),
@@ -151,7 +164,7 @@ export class Hud {
       text: 'Trascina: sposta · Tasto destro: ruota · Rotella: zoom · WASD: muovi · Spazio: pausa',
     });
 
-    root.append(this.top, build, this.panel, this.selPanel, this.logEl, this.toastEl, this.hintEl);
+    root.append(this.top, build, this.panel, this.selPanel, this.compPanel, this.logEl, this.toastEl, this.hintEl);
     this.renderBuildList();
     this.setTab('castle');
     game.onEvent((e) => {
@@ -346,6 +359,63 @@ export class Hud {
     this.selDyn.replaceChildren(...parts);
   }
 
+  // ───────────── Reparti selezionati ─────────────
+
+  setCompanySelection(ids: string[]) {
+    this.compIds = ids;
+    this.compKey = '';
+    this.refreshCompanies();
+  }
+
+  private refreshCompanies() {
+    const g = this.game;
+    const comps = (g.state.companies ?? []).filter((c) => this.compIds.includes(c.id));
+    this.compPanel.classList.toggle('hidden', !comps.length);
+    if (!comps.length) return;
+    const key = JSON.stringify(comps.map((c) => [c.id, c.troops, c.order, c.engaged, c.cargo]));
+    if (key === this.compKey) return;
+    this.compKey = key;
+    const t = { infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0 };
+    let cargo = 0;
+    for (const c of comps) {
+      for (const k of Object.keys(t) as Array<keyof typeof t>) t[k] += c.troops[k];
+      cargo += Object.values(c.cargo ?? {}).reduce((a, b) => a + (b ?? 0), 0);
+    }
+    const ids = comps.map((c) => c.id);
+    const btn = (label: string, fn: () => void, title = '') => {
+      const b = el('button', { text: label, title });
+      b.onclick = fn;
+      return b;
+    };
+    const buttons = [
+      btn('🏰 Rientra', () => g.orderHome(ids), 'Torna al castello: le truppe e il bottino rientrano'),
+      btn('✋ Fermati', () => g.orderStop(ids)),
+    ];
+    if (comps.length === 1) buttons.push(btn('✂️ Dividi', () => {
+      const n = g.splitCompany(ids[0]);
+      if (n) this.cb.selectCompanies?.([ids[0], n.id]);
+    }));
+    const enemyKeep = g.others.find((b) => getBuilding(b.defId).fort === 'keep');
+    if (enemyKeep) {
+      buttons.push(
+        btn('⚔️ Attacca il castello', () => {
+          const r = g.orderAttack(ids, enemyKeep.x + 1, enemyKeep.z + 1);
+          if (!r.ok) this.toast(r.reason ?? '', 'bad');
+        }, 'Marcia verso il mastio nemico e assalta le mura'),
+      );
+    }
+    buttons.push(btn('✕', () => this.cb.selectCompanies?.([])));
+    this.compPanel.replaceChildren(
+      el('div', { class: 'row' }, el('strong', { text: comps.length === 1 ? '🚩 Reparto' : `🚩 ${comps.length} reparti` }), el('span', { class: 'spacer' })),
+      el('p', {
+        class: 'small',
+        text: `${t.infantry} 🛡️ fanti · ${t.archers} 🏹 arcieri · ${t.cavalry} 🐎 cavalieri${t.rams ? ` · ${t.rams} 🪵 arieti` : ''}${t.trebuchets ? ` · ${t.trebuchets} 🎯 trabucchi` : ''}${cargo ? ` · 💰 bottino ${Math.round(cargo)}` : ''}`,
+      }),
+      el('p', { class: 'small muted', text: comps.some((c) => c.engaged) ? 'In battaglia…' : 'Tasto destro sulla mappa: muovi · su un edificio nemico: attacca' }),
+      el('div', { class: 'row' }, ...buttons),
+    );
+  }
+
   // ───────────── Pannelli ─────────────
 
   private setTab(t: Tab) {
@@ -366,12 +436,38 @@ export class Hud {
     };
     const siege = el('div');
     const body = el('div');
-    this.panelBody.append(defense, repairAll, siege, body);
+    // ───── Tasse e contento della popolazione
+    const taxBtns = TAX_LEVELS.map((lv, i) => {
+      const b = el('button', { text: `${lv.icon} ${lv.name}`, title: `Gettito ×${lv.mul} · contento ${lv.mood >= 0 ? '+' : ''}${lv.mood}` });
+      b.onclick = () => this.game.setTaxLevel(i);
+      return b;
+    });
+    const moodBar = el('div', { class: 'hp-bar' });
+    const moodText = el('p', { class: 'small' });
+    const moodParts = el('p', { class: 'small muted' });
+    const tax = el(
+      'div',
+      { class: 'tax' },
+      el('h4', { text: '🪙 Tasse e contento' }),
+      el('div', { class: 'row tax-levels' }, ...taxBtns),
+      el('div', { class: 'hp' }, moodBar),
+      moodText,
+      moodParts,
+    );
+    this.panelBody.append(tax, defense, repairAll, siege, body);
     let lastSiege = -1;
     this.refreshTab = () => {
       const g = this.game;
       const s = g.summary();
       const d = g.defenseBreakdown();
+      taxBtns.forEach((b, i) => b.classList.toggle('active', i === g.taxLevel()));
+      const h = g.happiness();
+      const mood = g.moodTarget();
+      moodBar.style.width = `${Math.round(h)}%`;
+      moodBar.className = `hp-bar ${h < 30 ? 'ruin' : h < 50 ? 'damaged' : ''}`;
+      const trend = mood.total > h + 1 ? '↗' : mood.total < h - 1 ? '↘' : '→';
+      moodText.innerHTML = `Contento <strong>${Math.round(h)}</strong>/100 ${trend} ${Math.round(mood.total)} · gettito <strong>${fmt(g.taxPerDay())}</strong> 🪙/giorno · produzione ×${g.productivity().toFixed(2)}${h < 30 ? ' · <span class="bad">la gente se ne va!</span>' : ''}${h < 20 ? ' <span class="bad">Rischio di tumulti!</span>' : ''}`;
+      moodParts.textContent = mood.parts.map(([n, v]) => `${n} ${v >= 0 ? '+' : ''}${v}`).join(' · ');
       const era = eraForYear(s.date.year);
       defense.innerHTML = `
         <h4>🏰 Difese</h4>
@@ -490,105 +586,95 @@ export class Hud {
       }
     };
 
-    // ───── Spedizione contro l'avversario ─────
+    // ───── Reparti: si formano dalla guarnigione e si comandano sulla mappa ─────
     const warBox = el('div', { class: 'war' });
     this.panelBody.append(warBox);
     const war = this.cb.war?.() ?? null;
-    if (!war) {
-      warBox.append(
-        el('h4', { text: '⚔️ Spedizioni' }),
-        el('p', { class: 'small muted', text: 'Nelle partite multigiocatore puoi mandare l\'esercito ad assediare il castello dell\'avversario.' }),
-      );
-      return;
-    }
     const keys = ['infantry', 'archers', 'cavalry', 'rams', 'trebuchets'] as const;
     const inputs = new Map<(typeof keys)[number], HTMLInputElement>();
-    const maxEls = new Map<(typeof keys)[number], HTMLElement>();
     const grid = el('div', { class: 'war-grid' });
     for (const k of keys) {
       const label = k in UNITS ? `${UNITS[k as UnitType].icon} ${UNITS[k as UnitType].name}` : `${ENGINES[k as EngineType].icon} ${ENGINES[k as EngineType].name}`;
       const inp = el('input', { type: 'number', min: '0', value: '0', class: 'amount' });
-      const max = el('button', { class: 'link small', text: 'max' });
+      const max = el('button', { class: 'link small', text: 'tutti' });
       max.onclick = () => {
         inp.value = String(k in UNITS ? this.game.state.army[k as UnitType] : this.game.engines()[k as EngineType]);
         refreshWar();
       };
       inp.oninput = () => refreshWar();
       inputs.set(k, inp);
-      maxEls.set(k, max);
       grid.append(el('span', { text: label }), inp, max);
     }
-    const stance = el('select');
-    for (const [id, st] of Object.entries(STANCES)) stance.append(el('option', { value: id, text: `${st.name} — ${st.description}` }));
-    stance.value = 'resolute';
-    const estimate = el('p', { class: 'small' });
-    const intelEl = el('div', { class: 'small intel' });
-    const launch = el('button', { class: 'primary', text: `⚔️ Marcia contro ${war.opponent}` });
     const force = (): Force => {
       const f = { infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0 };
       for (const k of keys) f[k] = Math.max(0, Math.floor(Number(inputs.get(k)!.value) || 0));
       return f;
     };
-    launch.onclick = () => {
-      const err = war.launch(force(), stance.value as Stance);
-      if (err) this.toast(err, 'bad');
-      else {
-        this.toast('L\'esercito si mette in marcia!', 'good');
-        for (const i of inputs.values()) i.value = '0';
+    const estimate = el('p', { class: 'small' });
+    const form = el('button', { class: 'primary', text: '🚩 Forma il reparto ed esci dal castello' });
+    form.onclick = () => {
+      const c = this.game.formCompany(force());
+      if (!c) {
+        this.toast(this.game.canForm(force()).reason ?? 'Impossibile', 'bad');
+        return;
       }
+      for (const i of inputs.values()) i.value = '0';
+      this.cb.selectCompanies?.([c.id]);
+      this.toast('Reparto pronto: tasto destro sulla mappa per muoverlo, su un edificio nemico per attaccare.', 'good');
       refreshWar();
     };
-    const marching = el('div');
+    const intelEl = el('div', { class: 'small intel' });
+    const list = el('div', { class: 'company-list' });
     warBox.append(
-      el('h4', { text: `⚔️ Spedizione contro ${war.opponent}` }),
-      intelEl,
+      el('h4', { text: '🚩 Reparti sul campo' }),
+      el('p', {
+        class: 'small muted',
+        text: 'Forma un reparto con le truppe del castello. Clic su un reparto per selezionarlo (Maiusc+clic per aggiungerne altri), tasto destro per muoverlo o, su un edificio nemico, per attaccare. I reparti vicini al mastio aiutano a difenderlo.',
+      }),
       grid,
-      el('label', { text: 'Condotta in battaglia' }),
-      stance,
       estimate,
-      launch,
-      el('p', { class: 'small muted', text: 'Le truppe che partono non difendono il castello finché non rientrano. L\'avversario vedrà arrivare l\'esercito e potrà prepararsi.' }),
-      el('h4', { text: 'Eserciti in campo' }),
-      marching,
+      form,
+      ...(war ? [el('h4', { text: `🔭 Castello di ${war.opponent}` }), intelEl] : []),
+      el('h4', { text: 'I tuoi reparti' }),
+      list,
     );
-    let lastMarch = '';
+    let lastList = '';
     refreshWar = () => {
       const g = this.game;
       const f = force();
-      const c = g.canLaunch(f);
-      launch.disabled = !c.ok;
+      const c = g.canForm(f);
+      form.disabled = !c.ok;
       const n = f.infantry + f.archers + f.cavalry;
-      estimate.textContent = n
-        ? `${n} soldati${f.rams + f.trebuchets ? ` e ${f.rams + f.trebuchets} macchine` : ''} · ${g.marchDays(f)} giorni di marcia${c.ok ? '' : ` · ${c.reason}`}`
-        : 'Scegli le truppe da mandare.';
-      const intel = g.opponentIntel();
-      intelEl.innerHTML = intel
-        ? `<strong>Rapporto degli esploratori:</strong> cinta ${intel.closed ? '<span class="bad">chiusa</span>' : '<span class="good">aperta</span>'} ·
-           ${intel.walls} tratti di mura, ${intel.towers} torri, ${intel.gates} porte, ${intel.moats} fossati, ${intel.upgrades} miglioramenti ·
-           difese stimate ${fmt(intel.breakdown.total)}. La guarnigione è sconosciuta.`
-        : '<span class="muted">Gli esploratori non hanno ancora notizie del castello nemico.</span>';
-      const day = g.state.day;
-      const items: string[] = [];
-      for (const e of g.state.expeditions ?? []) {
-        const t = e.status === 'marching' ? e.troops : e.result!.survivors;
-        const soldiers = t.infantry + t.archers + t.cavalry;
-        items.push(
-          e.status === 'marching'
-            ? `🚩 I nostri ${soldiers} soldati arrivano al castello nemico tra ${Math.max(0, Math.ceil(e.arriveDay - day))} giorni`
-            : `↩️ ${soldiers} superstiti rientrano tra ${Math.max(0, Math.ceil((e.returnDay ?? day) - day))} giorni`,
-        );
+      estimate.textContent = n ? (c.ok ? `${n} soldati${f.rams + f.trebuchets ? ` e ${f.rams + f.trebuchets} macchine` : ''}` : c.reason ?? '') : 'Scegli le truppe del reparto.';
+      if (war) {
+        const intel = g.opponentIntel();
+        intelEl.innerHTML = intel
+          ? `<strong>Rapporto degli esploratori:</strong> cinta ${intel.closed ? '<span class="bad">chiusa</span>' : '<span class="good">aperta</span>'} ·
+             ${intel.walls} tratti di mura, ${intel.towers} torri, ${intel.gates} porte, ${intel.moats} fossati, ${intel.upgrades} miglioramenti ·
+             difese stimate ${fmt(intel.breakdown.total)}. La guarnigione è sconosciuta.`
+          : '<span class="muted">Gli esploratori non hanno ancora notizie del castello nemico.</span>';
       }
-      for (const a of g.state.incoming ?? []) {
-        if (a.resolved) continue;
-        const soldiers = a.troops.infantry + a.troops.archers + a.troops.cavalry;
-        items.push(`<span class="bad">⚠️ ${escapeHtml(a.from)}: ${soldiers} soldati contro di noi, arrivo tra ${Math.max(0, Math.ceil(a.arriveDay - day))} giorni</span>`);
-      }
-      for (const r of (g.state.campaignLog ?? []).slice(-3).reverse()) items.push(`<span class="muted">${escapeHtml(r.text)}</span>`);
-      const html = items.length ? items.map((i) => `<p class="small">${i}</p>`).join('') : '<p class="small muted">Nessun esercito in marcia.</p>';
-      if (html !== lastMarch) {
-        lastMarch = html;
-        marching.innerHTML = html;
-      }
+      const comps = g.state.companies ?? [];
+      const key = JSON.stringify(comps.map((x) => [x.id, x.troops, x.order, !!x.engaged, x.cargo ? 1 : 0]));
+      if (key === lastList) return;
+      lastList = key;
+      const orders = { idle: 'fermo', move: 'in marcia', attack: 'all\'attacco', home: 'rientra' };
+      list.replaceChildren(
+        ...(comps.length
+          ? comps.map((x) => {
+              const t = x.troops;
+              const b = el('button', { class: 'link', text: 'Seleziona' });
+              b.onclick = () => this.cb.selectCompanies?.([x.id]);
+              return el(
+                'div',
+                { class: 'row small' },
+                el('span', { text: `🚩 ${t.infantry}🛡️ ${t.archers}🏹 ${t.cavalry}🐎${t.rams ? ` ${t.rams}🪵` : ''}${t.trebuchets ? ` ${t.trebuchets}🎯` : ''} · ${x.engaged ? 'in battaglia' : orders[x.order]}${x.cargo ? ' · 💰' : ''}` }),
+                el('span', { class: 'spacer' }),
+                b,
+              );
+            })
+          : [el('p', { class: 'small muted', text: 'Nessun reparto fuori dal castello.' })]),
+      );
     };
   }
 
@@ -746,7 +832,10 @@ export class Hud {
     const days = g.daysToRaid();
     // Avviso: eserciti di altri giocatori in marcia (prima di tutto) o predoni vicini
     const incoming = (g.state.incoming ?? []).filter((a) => !a.resolved).sort((a, b) => a.arriveDay - b.arriveDay)[0];
-    this.raidEl.textContent = incoming
+    const invaders = g.enemiesInTerritory();
+    this.raidEl.textContent = invaders
+      ? `⚔️ ${invaders} soldati nemici nel tuo territorio!`
+      : incoming
       ? `⚔️ ${incoming.from} in arrivo (${Math.max(0, Math.ceil(incoming.arriveDay - g.state.day))} gg)`
       : days < 60
         ? `⚠️ Predoni in avvicinamento (${Math.ceil(days)} gg)`
@@ -763,6 +852,7 @@ export class Hud {
     this.refreshBuildList();
     this.refreshTab();
     this.refreshSelection();
+    this.refreshCompanies();
     const last = g.state.log.at(-1);
     const logKey = `${g.state.log.length}:${last?.day}:${last?.text}`;
     if (logKey !== this.logKey) {

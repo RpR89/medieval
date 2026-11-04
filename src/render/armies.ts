@@ -121,9 +121,19 @@ function buildArmy(f: Force, enemy: boolean): THREE.Group {
   return baked;
 }
 
+const ringGeo = new THREE.RingGeometry(0.55, 0.68, 32).rotateX(-Math.PI / 2);
+const ringMat = new THREE.MeshBasicMaterial({ color: 0xffd54a, transparent: true, opacity: 0.9, depthWrite: false });
+
 export class ArmyView {
   readonly group = new THREE.Group();
   private armies = new Map<string, ArmyObj>();
+  private selected = new Set<string>();
+  /** Posizioni mostrate dei reparti nemici (si avvicinano dolcemente a quelle ricevute). */
+  private shown = new Map<string, { x: number; z: number }>();
+
+  setSelected(ids: string[]) {
+    this.selected = new Set(ids);
+  }
 
   constructor(private game: Game, private terrain: TerrainView) {}
 
@@ -162,7 +172,38 @@ export class ArmyView {
       else if (e.result) show(e.id, e.result.survivors, away, home, e.arriveDay, e.returnDay ?? e.arriveDay, false);
     }
     for (const a of g.state.incoming ?? []) {
-      if (!a.resolved) show(`in:${a.id}`, a.troops, away, home, a.departDay, a.arriveDay, true);
+      // Gli assalti dei reparti nemici sono già visibili come reparti
+      if (!a.resolved && a.arriveDay > a.departDay) show(`in:${a.id}`, a.troops, away, home, a.departDay, a.arriveDay, true);
+    }
+    // Reparti comandati dai giocatori
+    const place = (id: string, f: Force, x: number, z: number, heading: number, moving: boolean, enemy: boolean) => {
+      const key = `${id}:${JSON.stringify(f)}`;
+      seen.add(id);
+      let a = this.armies.get(id);
+      if (!a || a.key !== key) {
+        if (a) this.group.remove(a.obj);
+        a = { obj: buildArmy(f, enemy), key };
+        a.obj.name = `army:${id}`;
+        const ring = new THREE.Mesh(ringGeo, ringMat);
+        ring.userData.ring = true;
+        ring.position.y = 0.04;
+        ring.scale.setScalar(1 + Math.min(1.2, Math.sqrt(f.infantry + f.archers + f.cavalry) * 0.12));
+        a.obj.add(ring);
+        this.armies.set(id, a);
+        this.group.add(a.obj);
+      }
+      a.obj.position.set(x, this.terrain.heightAt(x, z) + (moving ? Math.abs(Math.sin(t * 7 + x)) * 0.02 : 0), z);
+      a.obj.rotation.y = heading;
+      for (const ch of a.obj.children) if (ch.userData.ring) ch.visible = this.selected.has(id);
+    };
+    for (const c of g.state.companies ?? []) place(c.id, c.troops, c.x, c.z, c.heading ?? 0, !!c.path?.length, false);
+    for (const c of g.enemyCompanies) {
+      const prev = this.shown.get(c.id) ?? { x: c.x, z: c.z };
+      const moving = Math.hypot(c.x - prev.x, c.z - prev.z) > 0.01;
+      prev.x += (c.x - prev.x) * 0.15;
+      prev.z += (c.z - prev.z) * 0.15;
+      this.shown.set(c.id, prev);
+      place(`e:${c.id}`, c.troops, prev.x, prev.z, c.heading ?? 0, moving, true);
     }
     for (const [id, a] of this.armies) {
       if (seen.has(id)) continue;

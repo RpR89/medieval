@@ -6,6 +6,7 @@ import { Game, lineTiles } from './game/sim/game';
 import type { GameState } from './game/sim/state';
 import { SupabaseRealm, type RealmPlayer } from './net/realm';
 import { MatchSession } from './net/matchSession';
+import { moodFor, Music } from './audio/music';
 import { WorldRenderer, type PointerTile, type Quality } from './render/scene';
 import { el } from './ui/dom';
 import { Hud } from './ui/hud';
@@ -41,6 +42,15 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
   const view = new WorldRenderer(canvas, game, loadQuality());
   let speed = 1;
   let tool: string | null = null;
+  const music = new Music();
+  // I browser permettono l'audio solo dopo un gesto dell'utente
+  const unlockAudio = () => {
+    music.start();
+    window.removeEventListener('pointerdown', unlockAudio);
+    window.removeEventListener('keydown', unlockAudio);
+  };
+  window.addEventListener('pointerdown', unlockAudio);
+  window.addEventListener('keydown', unlockAudio);
   /** Partita multigiocatore in corso (null in solitario). */
   let ms: MatchSession | null = null;
   const setSpeed = (s: number) => {
@@ -84,8 +94,14 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
     {
       onTool: (id) => setTool(id),
       onDeselect: () => select(null),
+      selectCompanies: (ids) => selectCompanies(ids),
       onSpeed: (s) => setSpeed(s),
       onSave: () => save(true),
+      musicOn: music.enabled,
+      onMusic: () => {
+        music.setEnabled(!music.enabled);
+        return music.enabled;
+      },
       qualityLabel: QUALITY_LABELS[view.currentQuality],
       onQuality: () => {
         const next = QUALITY_ORDER[(QUALITY_ORDER.indexOf(view.currentQuality) + 1) % QUALITY_ORDER.length];
@@ -131,6 +147,13 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
 
   // ───── Strumenti e selezione ─────
   let hover: PointerTile | null = null;
+  /** Reparti selezionati sulla mappa. */
+  let selectedCompanies: string[] = [];
+  function selectCompanies(ids: string[]) {
+    selectedCompanies = ids;
+    view.setSelectedCompanies(ids);
+    hud.setCompanySelection(ids);
+  }
   function setTool(id: string | null) {
     tool = id;
     hud.setTool(id);
@@ -218,9 +241,31 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
     const moved = down ? Math.hypot(e.clientX - down.x, e.clientY - down.y) : 99;
     if (down && moved < 5 && e.target === canvas) {
       if (down.button === 2 && tool) setTool(null);
-      else if (down.button === 0 && !tool) {
+      else if (down.button === 2 && selectedCompanies.length) {
+        // Ordine ai reparti selezionati: su un edificio nemico attacca, altrimenti muove
         const t = view.pick(e.clientX, e.clientY);
-        select(t ? game.buildingAt(t.x, t.z) ?? null : null);
+        const p = view.pickPoint(e.clientX, e.clientY);
+        if (t && p) {
+          const b = game.buildingAt(t.x, t.z);
+          if (b && game.isForeign(b)) {
+            const r = game.orderAttack(selectedCompanies, t.x + 0.5, t.z + 0.5);
+            hud.toast(r.ok ? '⚔️ All\'attacco!' : r.reason ?? '', r.ok ? 'good' : 'bad');
+          } else game.orderMove(selectedCompanies, p.x, p.z);
+        }
+      } else if (down.button === 0 && !tool) {
+        const p = view.pickPoint(e.clientX, e.clientY);
+        const c = p ? game.companyAt(p.x, p.z) : undefined;
+        if (c) {
+          // Maiusc (o Ctrl) per aggiungere o togliere dalla selezione
+          if (e.shiftKey || e.ctrlKey) {
+            selectCompanies(selectedCompanies.includes(c.id) ? selectedCompanies.filter((x) => x !== c.id) : [...selectedCompanies, c.id]);
+          } else selectCompanies([c.id]);
+          select(null);
+        } else {
+          if (!e.shiftKey) selectCompanies([]);
+          const t = view.pick(e.clientX, e.clientY);
+          select(t ? game.buildingAt(t.x, t.z) ?? null : null);
+        }
       }
     }
     down = null;
@@ -232,6 +277,7 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
     if (e.key === 'Escape') {
       lineStart = null;
       view.setLinePreview(null);
+      if (selectedCompanies.length) selectCompanies([]);
       if (tool) setTool(null);
       else select(null);
     } else if (e.key === ' ') {
@@ -256,6 +302,12 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
     ms?.tick(now);
     if (now - lastHud > 200) {
       lastHud = now;
+      // Atmosfera musicale: stagione, oppure pericolo se ci sono nemici vicini
+      const danger =
+        game.enemiesInTerritory() > 0 ||
+        (game.state.incoming ?? []).some((a) => !a.resolved && a.arriveDay - game.state.day < 6) ||
+        game.daysToRaid() < 8;
+      music.setMood(moodFor(game.date.season, danger));
       hud.refresh(ms ? ms.displaySpeed : speed);
       if (tool) updateGhost();
     }
@@ -287,7 +339,7 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
     }
   }
   // Per i test automatici e il debug dalla console
-  (window as unknown as { medieval: unknown }).medieval = { game, view, setTool, match: () => ms };
+  (window as unknown as { medieval: unknown }).medieval = { game, view, setTool, match: () => ms, music };
 }
 
 boot().catch((e) => {

@@ -1,6 +1,6 @@
 import { PRESETS } from '../game/world/presets';
 import type { Game } from '../game/sim/game';
-import type { AttackResult, Expedition, Force, IncomingAttack } from '../game/sim/state';
+import type { AttackResult, Company, Expedition, Force, IncomingAttack } from '../game/sim/state';
 import type { Stance } from '../game/data/units';
 import { el, escapeHtml } from '../ui/dom';
 import { packBuildings, type MatchInfo, type MatchRoom, type MatchService } from './match';
@@ -55,8 +55,15 @@ export class MatchSession {
     room.onGame((kind, data) => {
       if (kind === 'attack') game.receiveAttack(data as IncomingAttack);
       else if (kind === 'result') game.applyAttackResult(data as AttackResult);
+      else if (kind === 'companies') game.setEnemyCompanies(data as Company[]);
+      else if (kind === 'field') {
+        const f = data as { losses: Record<string, Force>; text: string };
+        game.applyFieldLosses(f.losses, f.text);
+      }
     });
     game.onAttackResolved((r) => this.room.sendGame('result', r));
+    // I nostri reparti all'assalto: l'avversario risolve l'assedio con il suo stato vero
+    game.onAssault((a) => this.room.sendGame('attack', a));
     room.onSpeedRequest((s) => {
       if (this.isHost) this.hostSpeed = s;
     });
@@ -78,6 +85,7 @@ export class MatchSession {
       if (fresh) this.info = fresh;
       this.everMet = true;
       this.sendBuildings(true);
+      this.sendCompanies(true);
       if (this.isHost) this.room.sendClock({ day: this.game.state.day, speed: this.hostSpeed });
       // Dopo una riconnessione si rimandano attacchi in corso ed esiti già calcolati (sono idempotenti)
       for (const e of this.game.state.expeditions ?? []) if (e.status === 'marching') this.announce(e);
@@ -165,6 +173,31 @@ export class MatchSession {
       this.lastSent = now;
       this.sendBuildings(now % 10000 < 500);
     }
+    if (now - this.lastCompanies > 300) {
+      this.lastCompanies = now;
+      this.sendCompanies(false);
+      // Gli scontri in campo aperto li calcola chi tiene l'orologio
+      if (this.isHost) for (const f of this.game.fieldBattles()) this.room.sendGame('field', { losses: f.enemyLosses, text: f.text });
+    }
+  }
+
+  private lastCompanies = 0;
+  private companiesKey = '';
+
+  private sendCompanies(force: boolean) {
+    const list = (this.game.state.companies ?? []).map((c) => ({
+      id: c.id,
+      troops: c.troops,
+      x: Math.round(c.x * 100) / 100,
+      z: Math.round(c.z * 100) / 100,
+      order: c.order,
+      engaged: c.engaged,
+      heading: c.heading,
+    }));
+    const key = JSON.stringify(list);
+    if (!force && key === this.companiesKey) return;
+    this.companiesKey = key;
+    this.room.sendGame('companies', list);
   }
 
   private sendBuildings(force: boolean) {

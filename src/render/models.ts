@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { Season } from '../game/data/calendar';
+import type { Season, SeasonMix } from '../game/data/calendar';
 import type { BuildingDef, Species } from '../game/data/buildings';
 import { mulberry32 } from '../game/world/terrain';
 import {
@@ -167,15 +167,17 @@ function field(g: G, def: BuildingDef, seed: number) {
   g.add(crop);
 }
 
-/** Ricolora e fa crescere le colture secondo la stagione. */
-export function applySeason(obj: THREE.Object3D, defId: string, season: Season) {
+/** Ricolora e fa crescere le colture, sfumando tra una stagione e la successiva. */
+export function applySeason(obj: THREE.Object3D, defId: string, m: SeasonMix) {
   const colors = CROP_COLORS[defId];
   if (!colors) return;
+  const color = new THREE.Color(colors[m.from]).lerp(new THREE.Color(colors[m.to]), m.t);
+  const s = CROP_SCALE[defId][m.from] + (CROP_SCALE[defId][m.to] - CROP_SCALE[defId][m.from]) * m.t;
+  const season = m.t < 0.5 ? m.from : m.to;
   obj.traverse((o) => {
     if (o.userData.crop && o instanceof THREE.Mesh) {
-      (o.material as THREE.MeshStandardMaterial).color.setHex(colors[season]);
-      const s = CROP_SCALE[defId][season];
-      o.visible = s > 0;
+      (o.material as THREE.MeshStandardMaterial).color.copy(color);
+      o.visible = s > 0.02;
       o.scale.set(1, Math.max(0.01, s), 1);
     }
     if (o.userData.haystack) o.visible = season === 'summer' || season === 'autumn';

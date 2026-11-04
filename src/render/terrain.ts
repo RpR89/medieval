@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { Season } from '../game/data/calendar';
+import { mixNumber, type Season, type SeasonMix } from '../game/data/calendar';
 import { mulberry32, Tile, tileAt, type Terrain } from '../game/world/terrain';
 import { textures } from './textures';
-import { addCloudShadows, addSnow, addWind } from './effects';
+import { addCloudShadows, addLeafScale, addSnow, addWind, shared } from './effects';
 
 /** Vertici per lato di ogni casella. */
 const RES = 4;
@@ -31,6 +31,26 @@ const PALETTE: Record<Season, { grass: Rgb; forest: Rgb; rock: Rgb; sand: Rgb; b
   autumn: { grass: hex(0x93903f), forest: hex(0x6e5a2c), rock: hex(0x8a8279), sand: hex(0xd2be88), bed: hex(0x5d6a4a), earth: hex(0x765c3e) },
   winter: { grass: hex(0xe8eef2), forest: hex(0xd8e0e4), rock: hex(0xb8bcc0), sand: hex(0xd8d8d0), bed: hex(0x4d5a4a), earth: hex(0xcfd2d0) },
 };
+
+const LEAF: Record<Season, number> = { spring: 1, summer: 1, autumn: 0.85, winter: 0 };
+const BLOOM: Record<Season, number> = { spring: 1, summer: 0.7, autumn: 0, winter: 0 };
+const SNOW: Record<Season, number> = { spring: 0, summer: 0, autumn: 0, winter: 1 };
+type Palette = (typeof PALETTE)['spring'];
+
+function lerpRgb(a: Rgb, b: Rgb, t: number): Rgb {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+}
+
+function mixPalette(m: SeasonMix): Palette {
+  const a = PALETTE[m.from];
+  const b = PALETTE[m.to];
+  const out = {} as Palette;
+  for (const k of Object.keys(a) as Array<keyof Palette>) out[k] = lerpRgb(a[k], b[k], m.t);
+  return out;
+}
+
+const mixHex = (table: Record<Season, number>, m: SeasonMix, target: THREE.Color) =>
+  target.copy(new THREE.Color(table[m.from])).lerp(new THREE.Color(table[m.to]), m.t);
 
 const FOLIAGE: Record<Season, number> = { spring: 0x6fa83e, summer: 0x4a8030, autumn: 0xc0702a, winter: 0x6a5a48 };
 const CONIFER: Record<Season, number> = { spring: 0x3f6e34, summer: 0x355f2e, autumn: 0x3a5e30, winter: 0x7d9488 };
@@ -66,7 +86,8 @@ export class TerrainView {
   private heights: Float32Array;
   private mesh: THREE.Mesh;
   private geo: THREE.PlaneGeometry;
-  private season: Season = 'summer';
+  private mix: SeasonMix = { from: 'summer', to: 'autumn', t: 0 };
+  private bushMat!: THREE.MeshStandardMaterial;
   private footprints: Footprint[] = [];
   private earthMask: Float32Array;
   private dryMask: Uint8Array;
@@ -145,6 +166,8 @@ export class TerrainView {
     this.coniferMat = new THREE.MeshStandardMaterial({ color: CONIFER.summer, roughness: 0.85, flatShading: true });
     this.grassMat = new THREE.MeshStandardMaterial({ color: GRASS_TUFT.summer, roughness: 1, side: THREE.DoubleSide });
     addWind(this.leafMat, 0.045, 1.3);
+    addLeafScale(this.leafMat, 1.05);
+    this.bushMat = new THREE.MeshStandardMaterial({ color: FOLIAGE.summer, roughness: 0.85, flatShading: true });
     addWind(this.coniferMat, 0.03, 1.5);
     addSnow(this.coniferMat, 0.85);
     addWind(this.grassMat, 0.035, 0.16);
@@ -323,20 +346,24 @@ export class TerrainView {
 
   // ───────────── Colori ─────────────
 
-  setSeason(season: Season) {
-    this.season = season;
+  /** Stagione sfumata: colori, neve, foglie e fiori passano gradualmente alla stagione successiva. */
+  setSeasonMix(m: SeasonMix) {
+    this.mix = m;
     this.paint();
-    this.leafMat.color.setHex(FOLIAGE[season]);
-    this.leaves.visible = season !== 'winter';
-    this.coniferMat.color.setHex(CONIFER[season]);
-    this.grassMat.color.setHex(GRASS_TUFT[season]);
-    this.flowers.visible = this.detailOn && (season === 'spring' || season === 'summer');
-    this.grass.visible = this.detailOn && season !== 'winter';
-    this.skirtMat.color.setRGB(...PALETTE[season].grass);
+    mixHex(FOLIAGE, m, this.leafMat.color);
+    mixHex(FOLIAGE, m, this.bushMat.color).lerp(new THREE.Color(0x4a6a32), 0.4);
+    const leaf = mixNumber(m, LEAF);
+    shared.uLeaf.value = leaf;
+    this.leaves.visible = leaf > 0.03;
+    mixHex(CONIFER, m, this.coniferMat.color);
+    mixHex(GRASS_TUFT, m, this.grassMat.color);
+    this.flowers.visible = this.detailOn && mixNumber(m, BLOOM) > 0.4;
+    this.grass.visible = this.detailOn && mixNumber(m, SNOW) < 0.6;
+    this.skirtMat.color.setRGB(...mixPalette(m).grass);
   }
 
   private paint() {
-    const p = PALETTE[this.season];
+    const p = mixPalette(this.mix);
     const col = this.geo.getAttribute('color') as THREE.BufferAttribute;
     const tileCol = (x: number, z: number): Rgb => {
       if ((this.terrain.sea === 'east' && x >= this.size) || (this.terrain.sea === 'south' && z >= this.size)) return p.bed;
@@ -393,8 +420,8 @@ export class TerrainView {
 
   setDetail(on: boolean) {
     this.detailOn = on;
-    this.grass.visible = on && this.season !== 'winter';
-    this.flowers.visible = on && (this.season === 'spring' || this.season === 'summer');
+    this.grass.visible = on && mixNumber(this.mix, SNOW) < 0.6;
+    this.flowers.visible = on && mixNumber(this.mix, BLOOM) > 0.4;
   }
 
   private register(tile: number, mesh: THREE.InstancedMesh, index: number, matrix: THREE.Matrix4) {
@@ -510,7 +537,7 @@ export class TerrainView {
     const leaves = inst(leafGeo, this.leafMat, decid);
     tint(leaves, decid.length, 0.06);
     inst(branchGeo, bark, decid);
-    const bush = inst(bushGeo, this.leafMat, bushes.map((b) => b[0]));
+    const bush = inst(bushGeo, this.bushMat, bushes.map((b) => b[0]));
     tint(bush, bushes.length, 0.05);
     const rock = inst(rockGeo, new THREE.MeshStandardMaterial({ color: 0x8a857d, roughness: 1, flatShading: true }), rocks.map((r) => r[0]));
     tint(rock, rocks.length, 0.02);

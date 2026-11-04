@@ -69,3 +69,12 @@ export function formatCost(cost: Cost): string {
     .map(([id, n]) => `${RESOURCES[id as ResourceId].icon}${n}`)
     .join(' ');
 }
+
+/** Livelli di tassazione: moltiplicatore del gettito ed effetto sul contento della popolazione. */
+export const TAX_LEVELS = [
+  { id: 'none', name: 'Nessuna', icon: '🕊️', mul: 0, mood: 18 },
+  { id: 'low', name: 'Bassa', icon: '🙂', mul: 0.5, mood: 8 },
+  { id: 'normal', name: 'Normale', icon: '⚖️', mul: 1, mood: 0 },
+  { id: 'high', name: 'Alta', icon: '💰', mul: 1.6, mood: -14 },
+  { id: 'harsh', name: 'Esosa', icon: '🗡️', mul: 2.4, mood: -32 },
+] as const;
