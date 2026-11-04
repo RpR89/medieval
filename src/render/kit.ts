@@ -48,6 +48,7 @@ function build() {
     ),
     flag: new THREE.MeshStandardMaterial({ color: 0xb02a2a, roughness: 0.9, side: THREE.DoubleSide }),
     flagGold: new THREE.MeshStandardMaterial({ color: 0xd9a83a, roughness: 0.9, side: THREE.DoubleSide }),
+    flagBlue: new THREE.MeshStandardMaterial({ color: 0x2f5fb8, roughness: 0.9, side: THREE.DoubleSide }),
     smoke: new THREE.MeshStandardMaterial({ color: 0x9a9690, transparent: true, opacity: 0.45, depthWrite: false }),
     fire: new THREE.MeshStandardMaterial({ color: 0xff7a20, emissive: 0xff5a10, emissiveIntensity: 2.5 }),
     road: textured(t.ground, 0x8a7052, { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }, 0.4),

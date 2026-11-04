@@ -246,11 +246,13 @@ export class Hud {
     if (def.workers) lines.push(`Lavoratori: ${def.workers}`);
     if (def.housing) lines.push(`Alloggi: ${def.housing}`);
     this.selDyn = el('div', { class: 'sel-dyn' });
+    const foreign = this.game.isForeign(b);
     this.selPanel.replaceChildren(
       el('div', { class: 'row' }, el('h3', { text: def.name }), el('span', { class: 'spacer' }), close),
+      ...(foreign ? [el('p', { class: 'bad small', text: '🔵 Appartiene all\'altro giocatore' })] : []),
       ...lines.map((l) => el('p', { class: 'small', text: l })),
       this.selDyn,
-      demolish,
+      ...(foreign ? [] : [demolish]),
     );
     this.refreshSelection();
   }

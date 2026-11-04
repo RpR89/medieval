@@ -129,3 +129,33 @@ td:last-child { text-align: right; }
 .good { color: var(--good); }
 .bad { color: var(--bad); }
 .siege-log { padding-left: 18px; margin: 4px 0; max-height: 140px; overflow-y: auto; }
+
+/* Lobby multigiocatore */
+.start-card.wide { width: min(720px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; }
+.start-card h2 { margin: 0; color: var(--accent); font-weight: normal; }
+button.multi { background: #6b2a1e; border-color: #a3402f; color: var(--ink); }
+.lobby-list { display: flex; flex-direction: column; gap: 6px; }
+.lobby-row { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: rgba(0, 0, 0, 0.2); }
+.lobby-row .icon { font-size: 24px; }
+.grow { flex: 1; min-width: 0; }
+.presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.preset { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 2px; padding: 8px; }
+.preset .icon { font-size: 22px; }
+.preset.active { background: rgba(217, 164, 65, 0.25); color: var(--ink); border-color: var(--accent); }
+/* Attesa in partita */
+.match-wait { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); z-index: 5; width: min(460px, 92vw);
+  background: var(--panel-solid); border: 1px solid var(--accent); border-radius: 12px; padding: 18px 20px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+.match-wait h3 { color: var(--accent); }
+.match-wait .dots::after { content: '…'; animation: dots 1.4s steps(4) infinite; }
+@keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '…'; } }
+.match-badge { display: inline-flex; gap: 6px; align-items: center; }
+.online-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); display: inline-block; }
+.online-dot.on { background: var(--good); }
+
+/* Scelta della modalità */
+.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mode { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: 18px 12px; border-radius: 10px; }
+.mode .icon { font-size: 34px; }
+.mode strong { font-size: 17px; color: var(--accent); }
+.mode:hover { border-color: var(--accent); }
+@media (max-width: 480px) { .modes { grid-template-columns: 1fr; } }

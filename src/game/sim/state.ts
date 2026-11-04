@@ -1,6 +1,7 @@
 import type { UnitType } from '../data/buildings';
 import { emptyResources, type Resources } from '../data/resources';
 import { DAYS_PER_YEAR } from '../data/calendar';
+import type { PresetId } from '../world/presets';
 
 export interface PlacedBuilding {
   uid: number;
@@ -48,6 +49,15 @@ export interface GameState {
   nextRaidDay: number;
   log: GameEvent[];
   lastSiege?: SiegeReport;
+  /** Tipo di mappa (default: classica). */
+  preset?: PresetId;
+  /** Partita multigiocatore: id e posto (0 = chi l'ha creata, 1 = chi si è unito). */
+  match?: { id: string; slot: 0 | 1 };
+}
+
+export interface StateOptions {
+  preset?: PresetId;
+  match?: { id: string; slot: 0 | 1 };
 }
 
 export const BASE_HOUSING = 10;
@@ -55,7 +65,7 @@ export const BASE_STORAGE = 500;
 export const FOOD_PER_PERSON = 0.1;
 export const TAX_PER_PERSON = 0.04;
 
-export function createInitialState(seed: number, castleName = 'Castello senza nome'): GameState {
+export function createInitialState(seed: number, castleName = 'Castello senza nome', opts: StateOptions = {}): GameState {
   const resources = emptyResources();
   Object.assign(resources, {
     coins: 300,
@@ -77,6 +87,8 @@ export function createInitialState(seed: number, castleName = 'Castello senza no
     army: { infantry: 0, archers: 0, cavalry: 0 },
     nextUid: 1,
     nextRaidDay: DAYS_PER_YEAR * 2 + 120,
+    preset: opts.preset,
+    match: opts.match,
     log: [
       {
         day: 0,

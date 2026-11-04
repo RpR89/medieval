@@ -28,7 +28,14 @@ attraverso cinque secoli: dalle motte con palizzate in legno ai castelli concent
 - **Esercito di base**: fanteria, arcieri (rendono di più con le torri) e cavalleria (mangia fieno), con paga giornaliera.
 - **Assalti periodici**: ungari, vichinghi, baroni rivali, compagnie di ventura. Le difese sono messe a confronto con la forza del nemico.
 - **Account e salvataggi**: login con Supabase e salvataggio nel cloud, oppure gioco da ospite con salvataggio nel browser. Salvataggio automatico ogni 30 secondi.
-- **Multiplayer "Regno"** (Supabase Realtime): vedi chi è online, chat, classifica e carovane di merci da inviare agli altri giocatori.
+- **Scelta iniziale**: giocatore singolo o multigiocatore, e il tipo di mappa: Terre di confine, Pianura, Montana, Costa, Valle fluviale.
+- **Multigiocatore a due** (`src/net/match.ts`, `src/net/matchSession.ts`):
+  - un giocatore crea la partita scegliendo la mappa e resta **in attesa** (tempo fermo, costruzioni bloccate) finché il secondo non si unisce dalle "Partite aperte";
+  - ognuno ha la sua metà della mappa (88×88), segnata da cippi di confine, e vede il castello dell'altro con le bandiere blu;
+  - chi ha creato la partita tiene l'orologio; il tempo scorre solo quando sono **online entrambi**;
+  - se uno esce, la partita si **salva da sola** e va in pausa, e si riprende da "Le tue partite" quando sono di nuovo connessi tutti e due;
+  - senza account c'è una **modalità locale di prova**, tra due schede dello stesso browser.
+- **Regno** (solo in solitario, Supabase Realtime): vedi chi è online, chat, classifica e carovane di merci.
 
 ## Comandi
 
@@ -47,7 +54,7 @@ Senza variabili d'ambiente il gioco parte **offline**: si gioca come ospite e si
 
 1. Crea un progetto su [supabase.com](https://supabase.com).
 2. Applica lo schema con uno dei due metodi:
-   - incolla `supabase/migrations/20261104000000_init.sql` nel **SQL Editor**, oppure
+   - incolla nel **SQL Editor**, in ordine, `supabase/migrations/20261104000000_init.sql` e `supabase/migrations/20261104120000_matches.sql` (partite multigiocatore), oppure
    - usa la CLI: `supabase link --project-ref <ref>` e poi `supabase db push`.
 3. In **Authentication → URL Configuration** imposta il dominio Vercel come *Site URL* e aggiungilo ai *Redirect URLs*.
 4. In **Project Settings → API** copia la *Project URL* e la *anon/publishable key*.

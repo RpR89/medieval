@@ -99,6 +99,8 @@ interface Analysis {
 type Listener = () => void;
 
 const D4 = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
+/** Gli uid degli edifici dell'altro giocatore partono da qui. */
+export const FOREIGN = 1_000_000;
 const D8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] as const;
 
 /** Caselle di una linea retta (anche diagonale) tra due caselle, senza buchi. */
@@ -143,9 +145,13 @@ export class Game {
   private cache: Analysis | null = null;
   /** Cresce a ogni cambiamento visibile (costruzioni, demolizioni, miglioramenti, danni). */
   structureVersion = 0;
+  /** Edifici dell'altro giocatore (solo da guardare: non entrano nella nostra economia). */
+  others: PlacedBuilding[] = [];
+  /** Bloccato: in multigiocatore finché non sono online entrambi i giocatori. */
+  locked = false;
 
   constructor(public state: GameState, private random: () => number = Math.random) {
-    this.terrain = generateTerrain(state.seed);
+    this.terrain = generateTerrain(state.seed, { preset: state.preset, players: state.match ? 2 : 1 });
     this.occupancy = new Int32Array(this.terrain.size * this.terrain.size);
     for (const b of state.buildings) {
       this.mark(b, b.uid);
@@ -197,7 +203,40 @@ export class Game {
   }
 
   byUid(uid: number): PlacedBuilding | undefined {
-    return this.state.buildings.find((b) => b.uid === uid);
+    return this.state.buildings.find((b) => b.uid === uid) ?? (uid >= FOREIGN ? this.others.find((b) => b.uid === uid) : undefined);
+  }
+
+  isForeign(b: PlacedBuilding): boolean {
+    return b.uid >= FOREIGN;
+  }
+
+  /** Centro del proprio sito (dove inquadrare la telecamera). */
+  homeSite(): [number, number] {
+    return this.terrain.sites[this.state.match?.slot ?? 0] ?? [this.terrain.size / 2, this.terrain.size / 2];
+  }
+
+  /** Territorio in cui si può costruire: in multigiocatore, la propria metà della mappa. */
+  territory(): { x0: number; x1: number; z0: number; z1: number } {
+    const n = this.terrain.size;
+    if (!this.state.match) return { x0: 0, x1: n, z0: 0, z1: n };
+    return this.state.match.slot === 0 ? { x0: 0, x1: Math.floor(n / 2), z0: 0, z1: n } : { x0: Math.floor(n / 2), x1: n, z0: 0, z1: n };
+  }
+
+  /** Sostituisce gli edifici dell'altro giocatore (ricevuti dalla rete). */
+  setOthers(list: PlacedBuilding[]) {
+    for (const b of this.others) this.mark(b, 0);
+    this.others = list.map((b) => ({ ...b, uid: FOREIGN + b.uid }));
+    for (const b of this.others) {
+      // Non sovrascrive i propri edifici (non dovrebbe succedere: territori separati)
+      const [w, d] = getBuilding(b.defId).size;
+      let free = true;
+      for (let z = b.z; z < b.z + d && free; z++) for (let x = b.x; x < b.x + w && free; x++) {
+        const k = this.tileIndex(x, z);
+        if (this.occupancy[k] && this.occupancy[k] < FOREIGN) free = false;
+      }
+      if (free) this.mark(b, b.uid);
+    }
+    this.changed();
   }
 
   buildingAt(x: number, z: number): PlacedBuilding | undefined {
@@ -500,6 +539,8 @@ export class Game {
   }
 
   canUpgrade(b: PlacedBuilding, upId: string): PlaceCheck {
+    if (this.isForeign(b)) return { ok: false, reason: 'Appartiene all\'altro giocatore' };
+    if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
     const u = UPGRADE_BY_ID[upId];
     if (!u || !u.appliesTo.includes(b.defId)) return { ok: false, reason: 'Non applicabile' };
     if (b.upgrades?.includes(upId)) return { ok: false, reason: 'Già costruito' };
@@ -565,6 +606,7 @@ export class Game {
   }
 
   repair(b: PlacedBuilding): boolean {
+    if (this.isForeign(b) || this.locked) return false;
     const cost = this.repairCost(b);
     if (!Object.keys(cost).length || !canAfford(this.state.resources, cost)) return false;
     const was = this.hpState(b);
@@ -576,6 +618,7 @@ export class Game {
   }
 
   repairAll(): number {
+    if (this.locked) return 0;
     let n = 0;
     let visual = false;
     for (const b of this.state.buildings) {
@@ -598,8 +641,11 @@ export class Game {
     if (!isAvailable(def, this.date.year)) {
       return { ok: false, reason: `Disponibile dal ${def.minYear}` };
     }
+    if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
     if (def.unique && this.count(def.id) > 0) return { ok: false, reason: 'Ne puoi avere uno solo' };
     const [w, d] = def.size;
+    const t = this.territory();
+    if (x < t.x0 || z < t.z0 || x + w > t.x1 || z + d > t.z1) return { ok: false, reason: 'Fuori dal tuo territorio' };
     let rock = 0;
     let gold = 0;
     let river = 0;
@@ -681,6 +727,7 @@ export class Game {
   }
 
   demolish(uid: number): boolean {
+    if (this.locked) return false;
     const i = this.state.buildings.findIndex((b) => b.uid === uid);
     if (i < 0) return false;
     const b = this.state.buildings[i];
@@ -705,6 +752,7 @@ export class Game {
   // ───────────── Esercito ─────────────
 
   canRecruit(unit: UnitType): PlaceCheck {
+    if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
     if (!this.has((d) => d.trains === unit)) return { ok: false, reason: 'Serve l\'edificio di addestramento' };
     if (this.state.population < 2) return { ok: false, reason: 'Non ci sono abbastanza abitanti' };
     if (!canAfford(this.state.resources, UNITS[unit].cost)) return { ok: false, reason: 'Risorse insufficienti' };
@@ -750,6 +798,7 @@ export class Game {
 
   trade(id: ResourceId, amount: number): PlaceCheck {
     if (id === 'coins') return { ok: false, reason: 'Non si commerciano monete' };
+    if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
     if (!this.summary().hasMarket) return { ok: false, reason: 'Serve un mercato' };
     const r = this.state.resources;
     if (amount > 0) {

@@ -1,7 +1,10 @@
 import { supabase } from '../config/supabase';
 import { createInitialState, type GameState } from '../game/sim/state';
+import { PRESET_LIST, type PresetId } from '../game/world/presets';
+import { localIdentity, LocalMatchService, SupabaseMatchService, type MatchInfo, type MatchService } from '../net/match';
 import { CloudSaveStore, LocalSaveStore, type SaveStore } from '../save/store';
 import { el } from './dom';
+import { showLobby } from './lobby';
 
 export interface Session {
   userId: string | null;
@@ -12,6 +15,8 @@ export interface Session {
 export interface StartResult {
   session: Session;
   state: GameState;
+  /** Presente nelle partite multigiocatore. */
+  match?: { info: MatchInfo; service: MatchService };
 }
 
 /** Schermata iniziale: accesso (o ospite), poi continua o nuova partita. */
@@ -40,32 +45,30 @@ export function showStartScreen(root: HTMLElement): Promise<StartResult> {
       card.append(el('p', { class: 'error', text: msg }));
     };
 
-    async function chooseGame(session: Session) {
-      card.replaceChildren(header(), el('p', { class: 'muted', text: 'Caricamento…' }));
-      let existing: GameState | null = null;
-      try {
-        existing = await session.store.load();
-      } catch (e) {
-        showError(`Impossibile leggere il salvataggio: ${(e as Error).message}`);
-      }
-      const nameInput = el('input', { type: 'text', placeholder: 'Nome del castello', maxlength: '40', value: 'Rocca di ' + session.name });
-      const newBtn = el('button', { class: 'primary', text: 'Nuova partita' });
-      newBtn.onclick = () => {
-        if (existing && !confirm('Iniziare una nuova partita sovrascriverà il salvataggio attuale. Continuare?')) return;
-        const seed = Math.floor(Math.random() * 2 ** 31);
-        finish({ session, state: createInitialState(seed, nameInput.value.trim() || 'Castello senza nome') });
-      };
+    /** Prima scelta dopo l'accesso: giocatore singolo o multigiocatore. */
+    function chooseGame(session: Session) {
+      card.classList.remove('wide');
+      const single = el(
+        'button',
+        { class: 'mode' },
+        el('span', { class: 'icon', text: '🏰' }),
+        el('strong', { text: 'Giocatore singolo' }),
+        el('span', { class: 'small muted', text: 'Il tuo castello contro i predoni, al tuo ritmo.' }),
+      );
+      single.onclick = () => void singlePlayer(session);
+      const multi = el(
+        'button',
+        { class: 'mode' },
+        el('span', { class: 'icon', text: '⚔️' }),
+        el('strong', { text: 'Multigiocatore' }),
+        el('span', { class: 'small muted', text: 'Due signori sulla stessa mappa: si gioca quando siete online entrambi.' }),
+      );
+      multi.onclick = () => void openLobby(session);
       const items: Node[] = [
         header(),
-        el('p', { text: `Ciao ${session.name}! I salvataggi sono su: ${session.store.label}.` }),
+        el('p', { text: `Ciao ${session.name}! Come vuoi giocare?` }),
+        el('div', { class: 'modes' }, single, multi),
       ];
-      if (existing) {
-        const year = 900 + Math.floor(existing.day / 360);
-        const cont = el('button', { class: 'primary', text: `Continua: ${existing.castleName} (anno ${year})` });
-        cont.onclick = () => finish({ session, state: existing! });
-        items.push(cont, el('hr'));
-      }
-      items.push(el('label', { text: 'Nuovo castello' }), nameInput, newBtn);
       if (session.userId && supabase) {
         const out = el('button', { class: 'link', text: 'Esci dall\'account' });
         out.onclick = async () => {
@@ -75,6 +78,61 @@ export function showStartScreen(root: HTMLElement): Promise<StartResult> {
         items.push(out);
       }
       card.replaceChildren(...items);
+    }
+
+    async function singlePlayer(session: Session) {
+      card.replaceChildren(header(), el('p', { class: 'muted', text: 'Caricamento…' }));
+      let existing: GameState | null = null;
+      try {
+        existing = await session.store.load();
+      } catch (e) {
+        showError(`Impossibile leggere il salvataggio: ${(e as Error).message}`);
+      }
+      const nameInput = el('input', { type: 'text', placeholder: 'Nome del castello', maxlength: '40', value: 'Rocca di ' + session.name });
+      const mapSelect = el('select');
+      for (const p of PRESET_LIST) mapSelect.append(el('option', { value: p.id, text: `${p.icon} ${p.name} — ${p.description}` }));
+      const newBtn = el('button', { class: 'primary', text: 'Nuova partita in solitario' });
+      newBtn.onclick = () => {
+        if (existing && !confirm('Iniziare una nuova partita sovrascriverà il salvataggio attuale. Continuare?')) return;
+        const seed = Math.floor(Math.random() * 2 ** 31);
+        finish({ session, state: createInitialState(seed, nameInput.value.trim() || 'Castello senza nome', { preset: mapSelect.value as PresetId }) });
+      };
+      const back = el('button', { class: 'link', text: '← Indietro' });
+      back.onclick = () => chooseGame(session);
+      const items: Node[] = [
+        el('div', { class: 'row' }, el('h2', { text: '🏰 Giocatore singolo' }), el('span', { class: 'spacer' }), back),
+        el('p', { class: 'small muted', text: `I salvataggi sono su: ${session.store.label}.` }),
+      ];
+      if (existing) {
+        const year = 900 + Math.floor(existing.day / 360);
+        const cont = el('button', { class: 'primary', text: `Continua: ${existing.castleName} (anno ${year})` });
+        cont.onclick = () => finish({ session, state: existing! });
+        items.push(cont, el('hr'));
+      }
+      items.push(el('label', { text: 'Nuovo castello' }), nameInput, el('label', { text: 'Mappa' }), mapSelect, newBtn);
+      card.replaceChildren(...items);
+    }
+
+    async function openLobby(session: Session) {
+      const service: MatchService =
+        session.userId && supabase
+          ? new SupabaseMatchService(supabase, { id: session.userId, name: session.name })
+          : new LocalMatchService(localIdentity(session.name === 'Ospite' ? `Ospite ${Math.floor(Math.random() * 90 + 10)}` : session.name));
+      const choice = await showLobby(card, service, () => chooseGame(session));
+      card.replaceChildren(header(), el('p', { class: 'muted', text: 'Caricamento della partita…' }));
+      const info = choice.match;
+      let state: GameState | null = null;
+      try {
+        state = await service.loadState(info.id);
+      } catch (e) {
+        showError(`Impossibile leggere la partita: ${(e as Error).message}`);
+        return;
+      }
+      const slot: 0 | 1 = info.hostId === service.me.id ? 0 : 1;
+      state ??= createInitialState(info.seed, choice.castleName, { preset: info.preset, match: { id: info.id, slot } });
+      // Chi si unisce più tardi parte dal giorno della partita
+      if (slot === 1 && state.day < info.day) state.day = info.day;
+      finish({ session: { ...session, name: service.me.name }, state, match: { info, service } });
     }
 
     function guest() {

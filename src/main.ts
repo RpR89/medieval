@@ -5,10 +5,11 @@ import { RESOURCES } from './game/data/resources';
 import { Game, lineTiles } from './game/sim/game';
 import type { GameState } from './game/sim/state';
 import { SupabaseRealm, type RealmPlayer } from './net/realm';
+import { MatchSession } from './net/matchSession';
 import { WorldRenderer, type PointerTile, type Quality } from './render/scene';
 import { el } from './ui/dom';
 import { Hud } from './ui/hud';
-import { showStartScreen, type Session } from './ui/start';
+import { showStartScreen, type Session, type StartResult } from './ui/start';
 
 const AUTOSAVE_MS = 30_000;
 const QUALITY_KEY = 'medieval.quality';
@@ -29,17 +30,23 @@ const PRESENCE_MS = 10_000;
 
 async function boot() {
   const app = document.getElementById('app')!;
-  const { session, state } = await showStartScreen(app);
-  startGame(app, session, state);
+  const { session, state, match } = await showStartScreen(app);
+  await startGame(app, session, state, match);
 }
 
-function startGame(app: HTMLElement, session: Session, state: GameState) {
+async function startGame(app: HTMLElement, session: Session, state: GameState, match?: StartResult['match']) {
   const canvas = el('canvas', { class: 'world' });
   app.append(canvas);
   const game = new Game(state);
   const view = new WorldRenderer(canvas, game, loadQuality());
   let speed = 1;
   let tool: string | null = null;
+  /** Partita multigiocatore in corso (null in solitario). */
+  let ms: MatchSession | null = null;
+  const setSpeed = (s: number) => {
+    if (ms && !ms.isHost) ms.requestSpeed(s);
+    else speed = s;
+  };
 
   // ───── Salvataggi ─────
   let saving = false;
@@ -48,9 +55,10 @@ function startGame(app: HTMLElement, session: Session, state: GameState) {
     saving = true;
     hud.setSaveStatus('Salvataggio…');
     try {
-      await session.store.save(game.state);
+      if (ms) await ms.save();
+      else await session.store.save(game.state);
       hud.setSaveStatus(`Salvato ${new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}`);
-      if (manual) hud.toast(`Partita salvata (${session.store.label}).`, 'good');
+      if (manual) hud.toast(ms ? 'Partita multigiocatore salvata.' : `Partita salvata (${session.store.label}).`, 'good');
     } catch (e) {
       hud.setSaveStatus('⚠️ Salvataggio fallito');
       hud.toast(`Salvataggio fallito: ${(e as Error).message}`, 'bad');
@@ -60,7 +68,7 @@ function startGame(app: HTMLElement, session: Session, state: GameState) {
   };
 
   // ───── Multiplayer ─────
-  const realm = session.userId && supabase ? new SupabaseRealm(supabase) : null;
+  const realm = session.userId && supabase && !match ? new SupabaseRealm(supabase) : null;
   const me = (): RealmPlayer => ({
     id: session.userId!,
     name: session.name,
@@ -76,7 +84,7 @@ function startGame(app: HTMLElement, session: Session, state: GameState) {
     {
       onTool: (id) => setTool(id),
       onDeselect: () => select(null),
-      onSpeed: (s) => (speed = s),
+      onSpeed: (s) => setSpeed(s),
       onSave: () => save(true),
       qualityLabel: QUALITY_LABELS[view.currentQuality],
       onQuality: () => {
@@ -91,6 +99,7 @@ function startGame(app: HTMLElement, session: Session, state: GameState) {
       },
       onExit: async () => {
         await save();
+        await ms?.leave();
         await realm?.leave();
         location.reload();
       },
@@ -110,7 +119,7 @@ function startGame(app: HTMLElement, session: Session, state: GameState) {
         },
       },
     },
-    session.userId ? `👤 ${session.name}` : '👤 Ospite',
+    match ? `⚔️ ${match.info.name} · 👤 ${session.name}` : session.userId ? `👤 ${session.name}` : '👤 Ospite',
   );
   hud.myId = session.userId;
   if (realm) {
@@ -226,7 +235,7 @@ function startGame(app: HTMLElement, session: Session, state: GameState) {
       else select(null);
     } else if (e.key === ' ') {
       e.preventDefault();
-      speed = speed === 0 ? 1 : 0;
+      setSpeed((ms ? ms.displaySpeed : speed) === 0 ? 1 : 0);
     } else if (e.key === 'Delete' && hud.selected) {
       game.demolish(hud.selected.uid);
       select(null);
@@ -241,10 +250,12 @@ function startGame(app: HTMLElement, session: Session, state: GameState) {
   const frame = (now: number) => {
     const dt = Math.min(0.25, (now - last) / 1000);
     last = now;
-    if (speed > 0) game.advance(dt * speed);
+    const eff = ms ? ms.speed(speed) : speed;
+    if (eff > 0) game.advance(dt * eff);
+    ms?.tick(now);
     if (now - lastHud > 200) {
       lastHud = now;
-      hud.refresh(speed);
+      hud.refresh(ms ? ms.displaySpeed : speed);
       if (tool) updateGhost();
     }
     if (now - lastSave > AUTOSAVE_MS) {
@@ -255,15 +266,27 @@ function startGame(app: HTMLElement, session: Session, state: GameState) {
       lastPresence = now;
       void realm.update(me());
     }
-    view.render();
+    // Interruttore di debug (test automatici): sospende solo il disegno, non la simulazione
+    if (!(window as unknown as { __noRender?: boolean }).__noRender) view.render();
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') void save();
   });
+  // Partita multigiocatore: presenza, orologio condiviso, salvataggi
+  if (match) {
+    try {
+      const room = await match.service.connect(match.info);
+      ms = new MatchSession(game, match.info, match.service, room, app, (text, kind) => hud.toast(text, kind));
+      window.addEventListener('beforeunload', () => void ms?.save());
+    } catch (e) {
+      hud.toast(`Connessione alla partita fallita: ${(e as Error).message}`, 'bad');
+      game.locked = true;
+    }
+  }
   // Per i test automatici e il debug dalla console
-  (window as unknown as { medieval: unknown }).medieval = { game, view, setTool };
+  (window as unknown as { medieval: unknown }).medieval = { game, view, setTool, match: () => ms };
 }
 
 boot().catch((e) => {

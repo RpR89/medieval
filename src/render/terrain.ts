@@ -116,26 +116,29 @@ export class TerrainView {
     addCloudShadows(this.mesh.material as THREE.Material);
     this.group.add(this.mesh);
 
-    // Terra oltre i bordi (a est c'è il mare aperto)
+    // Terra oltre i bordi, e mare aperto dal lato del mare
     this.skirtMat = new THREE.MeshStandardMaterial({ color: 0x6a9e3c, roughness: 1, map: ground });
     addCloudShadows(this.skirtMat);
     const s = this.size;
     const far = 220;
-    for (const [w, d, x, z] of [
-      [far, s + far * 2, -far / 2, s / 2],
-      [s, far, s / 2, -far / 2],
-      [s, far, s / 2, s + far / 2],
-    ]) {
-      const p = new THREE.Mesh(new THREE.PlaneGeometry(w, d), this.skirtMat);
+    const sea = terrain.sea;
+    const sides: Array<[number, number, number, number, boolean]> = [
+      // larghezza, profondità, x, z, è mare
+      [far, s + far * 2, -far / 2, s / 2, false],
+      [far, s + far * 2, s + far / 2, s / 2, sea === 'east'],
+      [s, far, s / 2, -far / 2, false],
+      [s, far, s / 2, s + far / 2, sea === 'south'],
+    ];
+    for (const [w, d, x, z, isSea] of sides) {
+      const p = new THREE.Mesh(
+        new THREE.PlaneGeometry(w, d),
+        isSea ? new THREE.MeshStandardMaterial({ color: 0x3e5a52 }) : this.skirtMat,
+      );
       p.rotation.x = -Math.PI / 2;
-      p.position.set(x, 0.0, z);
-      p.receiveShadow = true;
+      p.position.set(x, isSea ? -1.2 : 0, z);
+      p.receiveShadow = !isSea;
       this.group.add(p);
     }
-    const seabed = new THREE.Mesh(new THREE.PlaneGeometry(far * 2, s + far * 2), new THREE.MeshStandardMaterial({ color: 0x3e5a52 }));
-    seabed.rotation.x = -Math.PI / 2;
-    seabed.position.set(s + far, -1.2, s / 2);
-    this.group.add(seabed);
 
     // ───── Vegetazione ─────
     this.leafMat = new THREE.MeshStandardMaterial({ color: FOLIAGE.summer, roughness: 0.85, flatShading: true });
@@ -158,8 +161,8 @@ export class TerrainView {
 
   private target(x: number, z: number): number {
     const t = tileAt(this.terrain, Math.min(this.size - 1, Math.max(0, x)), Math.min(this.size - 1, Math.max(0, z)));
-    // Oltre il bordo est c'è il mare
-    if (x >= this.size) return TARGET[Tile.Sea];
+    // Oltre il bordo dal lato del mare c'è mare aperto
+    if ((this.terrain.sea === 'east' && x >= this.size) || (this.terrain.sea === 'south' && z >= this.size)) return TARGET[Tile.Sea];
     return TARGET[t ?? Tile.Grass];
   }
 
@@ -185,7 +188,13 @@ export class TerrainView {
         const rock = lerp(lerp(rockAt(x0, z0), rockAt(x0 + 1, z0), sx), lerp(rockAt(x0, z0 + 1), rockAt(x0 + 1, z0 + 1), sx), sz);
         const nz = this.noise[j * this.n + i];
         const low = Math.sin(i * 0.07 + j * 0.05) * Math.cos(j * 0.06 - i * 0.03) * 0.04;
-        h[j * this.n + i] = v + low + (nz - 0.5) * (0.025 + rock * 0.35) + rock * 0.12;
+        // Colline (mappe montane): solo sulla terraferma
+        const land = Math.max(0, Math.min(1, (v + 0.15) / 0.17));
+        const hill =
+          this.terrain.hills *
+          land *
+          (0.5 + 0.35 * Math.sin(i * 0.019 + 1.3) * Math.cos(j * 0.023 - 0.7) + 0.15 * Math.sin(i * 0.051 + j * 0.043));
+        h[j * this.n + i] = v + low + hill + (nz - 0.5) * (0.025 + rock * 0.35) + rock * (0.12 + this.terrain.hills * 0.8);
       }
     }
     return h;
@@ -209,6 +218,22 @@ export class TerrainView {
     const i = Math.round(Math.max(0, Math.min(this.n - 1, x * RES)));
     const j = Math.round(Math.max(0, Math.min(this.n - 1, z * RES)));
     return this.base[j * this.n + i];
+  }
+
+  /** Quota a cui spianare un ingombro: la media del terreno originale (così sulle colline non si scavano buche). */
+  baseLevel(x: number, z: number, w: number, d: number): number {
+    let sum = 0;
+    let n = 0;
+    for (let j = Math.ceil(z * RES); j <= Math.floor((z + d) * RES); j++) {
+      for (let i = Math.ceil(x * RES); i <= Math.floor((x + w) * RES); i++) {
+        if (i < 0 || j < 0 || i >= this.n || j >= this.n) continue;
+        sum += this.base[j * this.n + i];
+        n++;
+      }
+    }
+    // In pianura resta 0 (come prima); sulle colline segue il terreno
+    const avg = n ? sum / n : 0;
+    return Math.abs(avg) < 0.08 ? 0 : Math.max(0, avg);
   }
 
   private applyHeights() {
@@ -245,7 +270,8 @@ export class TerrainView {
     const ordered = [...fps].sort((a, b) => (a.defId === 'moat' ? -1 : 0) - (b.defId === 'moat' ? -1 : 0));
     // 1) dentro l'ingombro: quota fissa
     this.dryMask.fill(0);
-    const level = (f: Footprint) => (f.defId === 'moat' ? -(0.35 + 0.25 * ((f.depth ?? 1) - 1)) : 0);
+    const level = (f: Footprint) =>
+      this.baseLevel(f.x, f.z, f.w, f.d) + (f.defId === 'moat' ? -(0.35 + 0.25 * ((f.depth ?? 1) - 1)) : 0);
     for (const f of ordered) {
       const lvl = level(f);
       const i0 = Math.ceil(f.x * RES);
@@ -313,7 +339,7 @@ export class TerrainView {
     const p = PALETTE[this.season];
     const col = this.geo.getAttribute('color') as THREE.BufferAttribute;
     const tileCol = (x: number, z: number): Rgb => {
-      if (x >= this.size) return p.bed;
+      if ((this.terrain.sea === 'east' && x >= this.size) || (this.terrain.sea === 'south' && z >= this.size)) return p.bed;
       const t = tileAt(this.terrain, Math.min(this.size - 1, Math.max(0, x)), Math.min(this.size - 1, Math.max(0, z)));
       switch (t) {
         case Tile.Forest: return p.forest;

@@ -13,6 +13,7 @@ import type { Game } from '../game/sim/game';
 import type { PlacedBuilding } from '../game/sim/state';
 import { animate, applySeason, buildModel, LINKED_TYPES, ROAD_FAMILY, updateHerd, WALL_FAMILY, type Link, type ModelCtx } from './models';
 import { StaticBatches } from './batches';
+import { mats } from './kit';
 import type { Footprint } from './terrain';
 import { TerrainView, WATER_LEVEL } from './terrain';
 import { textures } from './textures';
@@ -77,11 +78,12 @@ export class WorldRenderer {
     this.pmrem = new THREE.PMREMGenerator(this.renderer);
 
     const size = game.terrain.size;
+    const [hx, hz] = game.homeSite();
     this.camera = new THREE.PerspectiveCamera(42, 1, 0.1, 600);
-    this.camera.position.set(size / 2 - 4, 22, size / 2 + 24);
+    this.camera.position.set(hx - 4, 22, hz + 24);
 
     this.controls = new MapControls(this.camera, canvas);
-    this.controls.target.set(size / 2, 0, size / 2);
+    this.controls.target.set(hx, 0, hz);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.12;
     this.controls.minDistance = 4;
@@ -108,8 +110,11 @@ export class WorldRenderer {
     this.sun.shadow.normalBias = 0.02;
     this.scene.add(this.sun, this.sun.target);
 
-    this.terrainView = new TerrainView(game.terrain, quality === 'high' ? 10 : quality === 'medium' ? 6 : 3);
+    // Densità dell'erba proporzionata alla dimensione della mappa
+    const area = (64 / size) ** 2;
+    this.terrainView = new TerrainView(game.terrain, Math.max(2, Math.round((quality === 'high' ? 10 : quality === 'medium' ? 6 : 3) * area)));
     this.scene.add(this.terrainView.group);
+    if (game.state.match) this.addTerritoryBorder();
 
     // Acqua animata con mappa delle normali procedurale
     const normals = textures().waterNormals;
@@ -350,7 +355,8 @@ export class WorldRenderer {
   private makeObject(b: PlacedBuilding, ctx: ModelCtx): THREE.Object3D {
     const def = getBuilding(b.defId);
     const obj = buildModel(def, ctx);
-    obj.position.set(b.x + def.size[0] / 2, 0, b.z + def.size[1] / 2);
+    const y = def.id === 'bridge' ? 0 : this.terrainView.baseLevel(b.x, b.z, def.size[0], def.size[1]);
+    obj.position.set(b.x + def.size[0] / 2, y, b.z + def.size[1] / 2);
     obj.userData.uid = b.uid;
     if (this.season) applySeason(obj, def.id, this.season);
     if (def.herd) updateHerd(obj, def, Math.round(b.herd ?? 0));
@@ -364,9 +370,40 @@ export class WorldRenderer {
     });
   }
 
+  /** Confine tra i due territori: una fila di cippi di pietra con un nastro dorato. */
+  private addTerritoryBorder() {
+    const size = this.game.terrain.size;
+    const x = Math.floor(size / 2);
+    const stones = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.06, 0.09, 0.45, 6).translate(0, 0.2, 0),
+      new THREE.MeshStandardMaterial({ color: 0xcfc6b0, roughness: 0.9 }),
+      Math.ceil(size / 2),
+    );
+    const m = new THREE.Matrix4();
+    let n = 0;
+    for (let z = 0; z < size; z += 2) {
+      m.makeTranslation(x, this.terrainView.heightAt(x, z + 0.5), z + 0.5);
+      stones.setMatrixAt(n++, m);
+    }
+    stones.count = n;
+    stones.castShadow = true;
+    this.scene.add(stones);
+    const ribbon = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.12, size),
+      new THREE.MeshBasicMaterial({ color: 0xd9a441, transparent: true, opacity: 0.5, depthWrite: false }),
+    );
+    ribbon.rotation.x = -Math.PI / 2;
+    ribbon.position.set(x, 0.06, size / 2);
+    this.scene.add(ribbon);
+  }
+
+  private allBuildings(): PlacedBuilding[] {
+    return this.game.others.length ? [...this.game.state.buildings, ...this.game.others] : this.game.state.buildings;
+  }
+
   private syncBuildings() {
     const alive = new Set<number>();
-    for (const b of this.game.state.buildings) {
+    for (const b of this.allBuildings()) {
       alive.add(b.uid);
       const ctx = this.ctxFor(b);
       const key = JSON.stringify(ctx);
@@ -374,6 +411,12 @@ export class WorldRenderer {
       const old = this.buildingObjs.get(b.uid);
       if (old) this.disposeObject(old);
       const obj = this.makeObject(b, ctx);
+      // Gli edifici dell'avversario hanno bandiere blu
+      if (this.game.isForeign(b)) {
+        obj.traverse((o) => {
+          if (o instanceof THREE.Mesh && (o.material === mats().flag || o.material === mats().flagGold)) o.material = mats().flagBlue;
+        });
+      }
       this.scene.add(obj);
       // Le parti statiche vanno nei blocchi fusi; l'oggetto tiene solo quelle animate
       this.batches.set(b.uid, obj, b.x, b.z);
@@ -390,13 +433,13 @@ export class WorldRenderer {
     }
     this.batches.flush();
     this.animated = [];
-    for (const b of this.game.state.buildings) {
+    for (const b of this.allBuildings()) {
       const obj = this.buildingObjs.get(b.uid);
       const herd = !!getBuilding(b.defId).herd;
       if (obj && (obj.children.length || herd)) this.animated.push({ b, obj, herd });
     }
     const fps: Footprint[] = [];
-    for (const b of this.game.state.buildings) {
+    for (const b of this.allBuildings()) {
       if (b.defId === 'bridge') continue;
       const [w, d] = getBuilding(b.defId).size;
       fps.push({
@@ -420,7 +463,7 @@ export class WorldRenderer {
     const list = tiles ?? [];
     this.linePreview.count = Math.min(list.length, 256);
     for (let i = 0; i < this.linePreview.count; i++) {
-      m.makeTranslation(list[i].x + 0.5, 0.1, list[i].z + 0.5);
+      m.makeTranslation(list[i].x + 0.5, 0.1 + this.terrainView.baseLevel(list[i].x, list[i].z, 1, 1), list[i].z + 0.5);
       this.linePreview.setMatrixAt(i, m);
       this.linePreview.setColorAt(i, c.setHex(list[i].ok ? 0x4caf50 : 0xe53935));
     }
@@ -487,7 +530,7 @@ export class WorldRenderer {
     this.ghost.visible = !!tile;
     if (!tile) return;
     const def = getBuilding(defId);
-    this.ghost.position.set(tile.x + def.size[0] / 2, 0.02, tile.z + def.size[1] / 2);
+    this.ghost.position.set(tile.x + def.size[0] / 2, 0.02 + this.terrainView.baseLevel(tile.x, tile.z, def.size[0], def.size[1]), tile.z + def.size[1] / 2);
     this.ghost.traverse((o) => {
       if (o instanceof THREE.Mesh && o.userData.base) {
         (o.material as THREE.MeshBasicMaterial).color.setHex(valid ? 0x4caf50 : 0xe53935);
@@ -503,7 +546,7 @@ export class WorldRenderer {
     const def = getBuilding(b.defId);
     const r = Math.max(def.size[0], def.size[1]) * 0.75;
     this.selection.scale.set(r * 1.6, r * 1.6, 1);
-    this.selection.position.set(b.x + def.size[0] / 2, 0.08, b.z + def.size[1] / 2);
+    this.selection.position.set(b.x + def.size[0] / 2, 0.08 + this.terrainView.baseLevel(b.x, b.z, def.size[0], def.size[1]), b.z + def.size[1] / 2);
     this.selection.visible = true;
   }
 

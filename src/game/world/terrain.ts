@@ -1,3 +1,5 @@
+import { mapSize, PRESETS, siteCenters, type PresetId } from './presets';
+
 /** Generazione procedurale del territorio attorno al castello. */
 export const MAP_SIZE = 64;
 
@@ -25,6 +27,12 @@ export interface Terrain {
   size: number;
   seed: number;
   tiles: Uint8Array;
+  preset: PresetId;
+  /** Centri dei siti dei castelli (uno per giocatore). */
+  sites: Array<[number, number]>;
+  sea: 'east' | 'south' | 'none';
+  /** Ampiezza delle colline, per la grafica. */
+  hills: number;
 }
 
 export function mulberry32(seed: number): () => number {
@@ -57,72 +65,108 @@ function makeNoise(seed: number, cell: number) {
   };
 }
 
-export function generateTerrain(seed: number, size = MAP_SIZE): Terrain {
+export interface TerrainOptions {
+  preset?: PresetId;
+  players?: 1 | 2;
+}
+
+export function generateTerrain(seed: number, opts: TerrainOptions | number = {}): Terrain {
+  // Compatibilità: generateTerrain(seed, size)
+  const o: TerrainOptions = typeof opts === 'number' ? {} : opts;
+  const players = o.players ?? 1;
+  const preset = PRESETS[o.preset ?? 'classica'];
+  const size = typeof opts === 'number' ? opts : mapSize(players);
+  const sites = siteCenters(size, players);
   const tiles = new Uint8Array(size * size).fill(Tile.Grass);
   const rand = mulberry32(seed ^ 0x9e3779b9);
   const n1 = makeNoise(seed + 1, 8);
   const n2 = makeNoise(seed + 2, 4);
-  const center = size / 2;
   const set = (x: number, z: number, t: Tile) => {
     if (x >= 0 && z >= 0 && x < size && z < size) tiles[z * size + x] = t;
   };
   const get = (x: number, z: number) => tiles[z * size + x] as Tile;
+  const siteDist = (x: number, z: number) => Math.min(...sites.map(([sx, sz]) => Math.hypot(x - sx, z - sz)));
 
-  // Boschi
+  // Boschi, con una radura attorno a ogni sito di castello
   for (let z = 0; z < size; z++) {
     for (let x = 0; x < size; x++) {
-      const dist = Math.hypot(x - center, z - center);
-      // Radura attorno al sito del castello, con margine sfumato
+      const dist = siteDist(x, z);
       const clear = dist < 13 ? 0.32 : dist < 16 ? 0.32 * (1 - (dist - 13) / 3) : 0;
       const f = n1(x, z) * 0.7 + n2(x, z) * 0.3 - clear;
-      if (f > 0.56) set(x, z, Tile.Forest);
+      // Entro 10 caselle dal sito non c'è mai bosco, qualunque sia la mappa
+      if (dist >= 10 && f > preset.forest) set(x, z, Tile.Forest);
     }
   }
 
-  // Affioramenti rocciosi, uno con vena d'oro
-  const blobs = 3 + Math.floor(rand() * 2);
+  // Affioramenti rocciosi (lontani dai siti), alcuni con vena d'oro
+  const blobs = preset.rocks[0] + Math.floor(rand() * (preset.rocks[1] - preset.rocks[0] + 1));
   const centers: Array<[number, number]> = [];
-  for (let b = 0; b < blobs; b++) {
+  for (let b = 0, tries = 0; b < blobs && tries < 200; tries++) {
+    const [cx, cz] = sites[b % sites.length];
     const angle = rand() * Math.PI * 2;
     const r = 16 + rand() * 10;
-    const bx = Math.round(center + Math.cos(angle) * r);
-    const bz = Math.round(center + Math.sin(angle) * r);
+    const bx = Math.round(cx + Math.cos(angle) * r);
+    const bz = Math.round(cz + Math.sin(angle) * r);
+    if (bx < 3 || bz < 3 || bx > size - 4 || bz > size - 4 || siteDist(bx, bz) < 15) continue;
+    b++;
     centers.push([bx, bz]);
-    const radius = 2 + rand() * 1.8;
-    for (let z = -4; z <= 4; z++) {
-      for (let x = -4; x <= 4; x++) {
+    const radius = preset.rockRadius * (0.75 + rand() * 0.6);
+    const R = Math.ceil(radius + 2);
+    for (let z = -R; z <= R; z++) {
+      for (let x = -R; x <= R; x++) {
         if (Math.hypot(x, z) <= radius + (n2(bx + x, bz + z) - 0.5) * 1.5) set(bx + x, bz + z, Tile.Rock);
       }
     }
-    if (b === 0 || rand() < 0.35) {
+    if (b === 1 || rand() < preset.gold) {
       set(bx, bz, Tile.Gold);
       set(bx + 1, bz, Tile.Gold);
       if (rand() < 0.5) set(bx, bz + 1, Tile.Gold);
     }
   }
 
-  // Mare sul lato est con spiaggia
-  for (let z = 0; z < size; z++) {
-    const coast = size - 6 + Math.round((n1(z * 1.7, 3) - 0.5) * 6);
-    for (let x = coast - 1; x < size; x++) set(x, z, x === coast - 1 ? Tile.Sand : Tile.Sea);
-  }
-
-  // Fiume da nord a sud che si getta nel mare
-  let rx = Math.round(center - 18 + rand() * 6);
-  for (let z = 0; z < size; z++) {
-    rx += Math.round((n2(z, 7) - 0.5) * 2.2);
-    if (z > size * 0.7) rx += 1; // piega verso il mare
-    rx = Math.max(3, Math.min(size - 4, rx));
-    // Lascia libera l'area centrale del castello
-    if (Math.abs(z - center) < 14) rx = Math.min(rx, Math.round(center - 14));
-    const width = 2;
-    for (let w = 0; w < width; w++) {
-      if (get(rx + w, z) !== Tile.Sea) set(rx + w, z, Tile.River);
+  // Mare con spiaggia
+  if (preset.sea === 'east') {
+    for (let z = 0; z < size; z++) {
+      const coast = size - 6 + Math.round((n1(z * 1.7, 3) - 0.5) * 6);
+      for (let x = coast - 1; x < size; x++) set(x, z, x === coast - 1 ? Tile.Sand : Tile.Sea);
     }
-    if (get(rx + width, z) === Tile.Sea) break;
+  } else if (preset.sea === 'south') {
+    for (let x = 0; x < size; x++) {
+      const coast = size - 6 + Math.round((n1(3, x * 1.7) - 0.5) * 6);
+      for (let z = coast - 1; z < size; z++) set(x, z, z === coast - 1 ? Tile.Sand : Tile.Sea);
+    }
   }
 
-  // Garantisce almeno una vena d'oro sulla terraferma (il mare o il fiume possono averla coperta)
+  // Fiume da nord a sud
+  if (preset.river !== 'none') {
+    const width = preset.river === 'wide' ? 4 : 2;
+    let rx: number;
+    let lo: number;
+    let hi: number;
+    if (players === 2) {
+      // Tra i due castelli, a distanza dai siti
+      const mid = size / 2 - width / 2;
+      rx = Math.round(mid + (rand() - 0.5) * 4);
+      lo = Math.round(mid - 6);
+      hi = Math.round(mid + 6);
+    } else {
+      rx = Math.round(size / 2 - 18 + rand() * 6);
+      lo = 3;
+      hi = size - 4;
+    }
+    for (let z = 0; z < size; z++) {
+      rx += Math.round((n2(z, 7) - 0.5) * 2.2);
+      if (preset.sea === 'east' && z > size * 0.7) rx += 1; // piega verso il mare
+      rx = Math.max(lo, Math.min(hi, rx));
+      if (players === 1 && Math.abs(z - size / 2) < 14) rx = Math.min(rx, Math.round(size / 2 - 14));
+      for (let w = 0; w < width; w++) {
+        if (get(rx + w, z) !== Tile.Sea) set(rx + w, z, Tile.River);
+      }
+      if (get(rx + width, z) === Tile.Sea || (preset.sea === 'south' && get(rx, Math.min(size - 1, z + 1)) === Tile.Sea)) break;
+    }
+  }
+
+  // Garantisce almeno una vena d'oro sulla terraferma
   if (!tiles.includes(Tile.Gold)) {
     for (const [bx, bz] of centers) {
       if (get(bx, bz) === Tile.Rock) {
@@ -133,7 +177,7 @@ export function generateTerrain(seed: number, size = MAP_SIZE): Terrain {
     }
   }
 
-  return { size, seed, tiles };
+  return { size, seed, tiles, preset: preset.id, sites, sea: preset.sea, hills: preset.hills };
 }
 
 export function tileAt(t: Terrain, x: number, z: number): Tile | undefined {
