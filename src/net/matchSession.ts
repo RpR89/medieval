@@ -1,5 +1,7 @@
 import { PRESETS } from '../game/world/presets';
 import type { Game } from '../game/sim/game';
+import type { AttackResult, Expedition, Force, IncomingAttack } from '../game/sim/state';
+import type { Stance } from '../game/data/units';
 import { el, escapeHtml } from '../ui/dom';
 import { packBuildings, type MatchInfo, type MatchRoom, type MatchService } from './match';
 
@@ -49,6 +51,12 @@ export class MatchSession {
       if (gap > 0.3) this.game.advance(Math.min(gap, 400));
     });
     room.onBuildings((_from, list) => game.setOthers(list));
+    // Guerra: annunci di attacco (li risolve il difensore) ed esiti (all'attaccante)
+    room.onGame((kind, data) => {
+      if (kind === 'attack') game.receiveAttack(data as IncomingAttack);
+      else if (kind === 'result') game.applyAttackResult(data as AttackResult);
+    });
+    game.onAttackResolved((r) => this.room.sendGame('result', r));
     room.onSpeedRequest((s) => {
       if (this.isHost) this.hostSpeed = s;
     });
@@ -71,6 +79,9 @@ export class MatchSession {
       this.everMet = true;
       this.sendBuildings(true);
       if (this.isHost) this.room.sendClock({ day: this.game.state.day, speed: this.hostSpeed });
+      // Dopo una riconnessione si rimandano attacchi in corso ed esiti già calcolati (sono idempotenti)
+      for (const e of this.game.state.expeditions ?? []) if (e.status === 'marching') this.announce(e);
+      for (const r of this.game.resolvedAttacks()) this.room.sendGame('result', r);
       this.onStatus(`${this.opponentName} è online: la partita riprende!`, 'good');
     } else if (!this.bothOnline && was) {
       this.onStatus(`${this.opponentName} è uscito: partita salvata e in pausa.`, 'bad');
@@ -104,6 +115,34 @@ export class MatchSession {
     // L'ospite non può andare più avanti dell'host
     if (this.game.state.day > this.hostDay + 1) return 0;
     return this.hostSpeed;
+  }
+
+  /** Nome dell'avversario, per l'interfaccia. */
+  get opponent(): string {
+    return this.opponentName;
+  }
+
+  /** Fa partire una spedizione contro l'avversario e gliela annuncia. */
+  launch(f: Force, stance: Stance): string | null {
+    const check = this.game.canLaunch(f);
+    if (!check.ok) return check.reason ?? 'Impossibile partire';
+    const e = this.game.launch(f, stance);
+    if (!e) return 'Impossibile partire';
+    this.announce(e);
+    void this.save();
+    return null;
+  }
+
+  private announce(e: Expedition) {
+    const a: IncomingAttack = {
+      id: e.id,
+      from: this.game.state.castleName,
+      troops: e.troops,
+      stance: e.stance,
+      departDay: e.departDay,
+      arriveDay: e.arriveDay,
+    };
+    this.room.sendGame('attack', a);
   }
 
   /** L'ospite chiede all'host di cambiare velocità. */

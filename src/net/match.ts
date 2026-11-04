@@ -44,6 +44,9 @@ export interface MatchRoom {
   onClock(fn: (c: ClockMsg) => void): void;
   onBuildings(fn: (from: string, list: PlacedBuilding[], castle: string) => void): void;
   onSpeedRequest(fn: (speed: number) => void): void;
+  /** Eventi di gioco tra i due giocatori (attacchi, esiti delle battaglie). */
+  onGame(fn: (kind: string, data: unknown) => void): void;
+  sendGame(kind: string, data: unknown): void;
   sendClock(c: ClockMsg): void;
   sendBuildings(list: PlacedBuilding[], castle: string): void;
   requestSpeed(speed: number): void;
@@ -214,6 +217,7 @@ class SupabaseRoom implements MatchRoom {
   private clock = new Emitter<[ClockMsg]>();
   private buildings = new Emitter<[string, PlacedBuilding[], string]>();
   private speed = new Emitter<[number]>();
+  private game = new Emitter<[string, unknown]>();
 
   constructor(private channel: RealtimeChannel, private me: Me) {}
 
@@ -230,7 +234,11 @@ class SupabaseRoom implements MatchRoom {
         const p = payload as { from: string; list: PlacedBuilding[]; castle: string };
         if (p.from !== this.me.id) this.buildings.emit(p.from, p.list, p.castle);
       })
-      .on('broadcast', { event: 'speed' }, ({ payload }) => this.speed.emit((payload as { speed: number }).speed));
+      .on('broadcast', { event: 'speed' }, ({ payload }) => this.speed.emit((payload as { speed: number }).speed))
+      .on('broadcast', { event: 'game' }, ({ payload }) => {
+        const p = payload as { from: string; kind: string; data: unknown };
+        if (p.from !== this.me.id) this.game.emit(p.kind, p.data);
+      });
     await new Promise<void>((resolve, reject) => {
       ch.subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
@@ -254,6 +262,12 @@ class SupabaseRoom implements MatchRoom {
   }
   onSpeedRequest(fn: (s: number) => void) {
     this.speed.on(fn);
+  }
+  onGame(fn: (kind: string, data: unknown) => void) {
+    this.game.on(fn);
+  }
+  sendGame(kind: string, data: unknown) {
+    void this.channel.send({ type: 'broadcast', event: 'game', payload: { from: this.me.id, kind, data } });
   }
   sendClock(c: ClockMsg) {
     void this.channel.send({ type: 'broadcast', event: 'clock', payload: c });
@@ -395,6 +409,7 @@ class LocalRoom implements MatchRoom {
   private clock = new Emitter<[ClockMsg]>();
   private buildings = new Emitter<[string, PlacedBuilding[], string]>();
   private speed = new Emitter<[number]>();
+  private game = new Emitter<[string, unknown]>();
   private onUnload = () => this.bc.postMessage({ t: 'bye', id: this.me.id });
 
   constructor(matchId: string, private me: Me) {
@@ -408,6 +423,7 @@ class LocalRoom implements MatchRoom {
       else if (m.t === 'clock') this.clock.emit(m.c as ClockMsg);
       else if (m.t === 'buildings') this.buildings.emit(m.id, m.list as PlacedBuilding[], m.castle as string);
       else if (m.t === 'speed') this.speed.emit(m.speed as number);
+      else if (m.t === 'game') this.game.emit(m.kind as string, m.data);
     };
     const tick = () => {
       this.bc.postMessage({ t: 'hb', id: this.me.id });
@@ -448,6 +464,12 @@ class LocalRoom implements MatchRoom {
   }
   onSpeedRequest(fn: (s: number) => void) {
     this.speed.on(fn);
+  }
+  onGame(fn: (kind: string, data: unknown) => void) {
+    this.game.on(fn);
+  }
+  sendGame(kind: string, data: unknown) {
+    this.bc.postMessage({ t: 'game', id: this.me.id, kind, data });
   }
   sendClock(c: ClockMsg) {
     this.bc.postMessage({ t: 'clock', id: this.me.id, c });

@@ -72,6 +72,29 @@ const MELEE = { infantry: 3, archers: 1.5, cavalry: 6 };
 const GUARD = { infantry: 4, archers: 2, cavalry: 5 };
 
 const has = (s: SiegeSegment, id: string) => s.upgrades.includes(id);
+
+/** Quanto danno fa ogni fante, per turno, ai diversi materiali (la pietra si scalfisce appena). */
+const INFANTRY_BREACH: Record<string, number> = {
+  palisade: 1.0,
+  gate_wood: 0.7,
+  tower_wood: 0.6,
+  wall_stone: 0.12,
+  gate_stone: 0.2,
+  gatehouse: 0.15,
+  tower_square: 0.1,
+  tower_round: 0.1,
+};
+/** Danno per turno di ogni ariete (micidiale sulle porte). */
+const RAM_BREACH: Record<string, number> = {
+  palisade: 10,
+  gate_wood: 16,
+  gate_stone: 14,
+  gatehouse: 12,
+  tower_wood: 8,
+  wall_stone: 5,
+  tower_square: 3,
+  tower_round: 2,
+};
 const upFire = (s: SiegeSegment) => s.upgrades.reduce((a, u) => a + (UPGRADE_BY_ID[u]?.fire ?? 0), 0);
 const upResist = (s: SiegeSegment) => s.upgrades.reduce((a, u) => a * (UPGRADE_BY_ID[u]?.resist ?? 1), 1);
 const health = (s: SiegeSegment) => (s.maxHp > 0 ? Math.max(0, s.hp) / s.maxHp : 0);
@@ -185,12 +208,12 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
     // ───── 2. Avvicinamento sotto il tiro ─────
     const cov = def.moat.coverage;
     const exposure = 1 + cov * (0.25 + 0.25 * (def.moat.depth - 1) + 0.5 * def.moat.flooded + 0.3 * def.moat.stakes);
+    const breachRate = (s: SiegeSegment) =>
+      (atk.infantry * (INFANTRY_BREACH[s.defId] ?? 0.12) + atkIn.rams * (RAM_BREACH[s.defId] ?? 3) + atkIn.trebuchets * 10) / upResist(s);
+    // Il nemico sceglie il punto che crolla prima
     const effective = (s: SiegeSegment) => {
-      let e = s.hp * upResist(s);
-      if (s.role === 'gate') {
-        e /= 1 + atkIn.rams * 0.6;
-        if (has(s, 'drawbridge') && s.moatAhead) e *= 1.5;
-      }
+      let e = s.hp / Math.max(0.1, breachRate(s));
+      if (s.role === 'gate' && has(s, 'drawbridge') && s.moatAhead) e *= 1.5;
       return e;
     };
     const candidates = [...walls(), ...gates()];
@@ -220,7 +243,7 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
         pitchRounds = 3;
         log.push('Dalle caditoie della porta si versa la pece bollente!');
       }
-      for (let r = 0; r < 25 && target.hp > 0 && !broken(); r++) {
+      for (let r = 0; r < 18 && target.hp > 0 && !broken(); r++) {
         rounds++;
         let f = firepower(true);
         if (pitchRounds > 0) {
@@ -228,16 +251,36 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
           pitchRounds--;
         }
         casualties(atk, f, atkLoss);
-        const ram = target.role === 'gate' ? atkIn.rams * 14 : 0;
-        const breach = (atk.infantry * 1.0 + ram) / upResist(target);
-        hit(target, breach);
+        hit(target, breachRate(target));
         casualties(gar, atk.archers * 0.3, defLoss);
       }
       if (target.hp <= 0) log.push(`Breccia aperta: ${segmentName(target)} crolla!`);
     }
-    if (broken() || !target || target.hp > 0) {
+    if (broken() || !target) {
       log.push(`Le perdite sono troppe: il nemico si ritira.`);
       return finish('repelled');
+    }
+    if (target.hp > 0) {
+      // ───── Scalata con le scale: possibile, ma i difensori in alto hanno un grande vantaggio
+      log.push('Le mura reggono: il nemico tenta la scalata con le scale.');
+      rounds++;
+      const walk = walls().length ? walls().filter((w) => has(w, 'walkway') || has(w, 'walkway_wood')).length / walls().length : 0;
+      const height = 1.6 + 0.6 * walk + Math.min(0.6, towers().length * 0.1);
+      // Salire sulle scale sotto il tiro costa caro prima ancora di arrivare in cima
+      casualties(atk, total(atk) * UNIT_HP.infantry * (0.15 + 0.1 * walk), atkLoss);
+      const d = guard(gar) * armoryMul * height + firepower(true);
+      const a = melee(atk, 0.2) * 0.6;
+      const b = battle(d, a);
+      if (b.aWins) {
+        casualties(atk, total(atk) * UNIT_HP.infantry * 0.7, atkLoss);
+        casualties(gar, total(gar) * UNIT_HP.infantry * (1 - b.survivors) * 0.6, defLoss);
+        log.push('Gli assalitori vengono ricacciati giù dalle scale: il nemico si ritira.');
+        return finish('repelled');
+      }
+      casualties(gar, total(gar) * UNIT_HP.infantry * 0.8, defLoss);
+      casualties(atk, total(atk) * UNIT_HP.infantry * (1 - b.survivors), atkLoss);
+      log.push('Il nemico conquista un tratto di mura e scende nella corte!');
+      return breachFight(target.uid);
     }
     return breachFight(target.uid);
   }

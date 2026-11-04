@@ -84,6 +84,8 @@ export interface BuildingDef {
   trains?: UnitType;
   /** Abilita il mercato. */
   market?: boolean;
+  /** Costruisce macchine d'assedio. */
+  workshop?: boolean;
   /** Si può costruire una sola volta. */
   unique?: boolean;
   /** Si può "trascinare" per costruire file (mura, fossati). */
@@ -522,6 +524,18 @@ export const BUILDINGS: BuildingDef[] = [
     placement: 'land',
     workers: 2,
     trains: 'cavalry',
+  },
+  {
+    id: 'siege_workshop',
+    name: 'Officina d\'assedio',
+    category: 'military',
+    description: 'Costruisce arieti (dal 1000) e trabucchi (dal 1200) per assaltare i castelli nemici.',
+    size: [3, 2],
+    cost: { wood: 120, stone: 30, coins: 100 },
+    minYear: 1000,
+    placement: 'land',
+    workers: 3,
+    workshop: true,
   },
 
   // ───── Strade ─────

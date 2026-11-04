@@ -10,7 +10,8 @@ import {
 import { formatDate } from '../game/data/calendar';
 import { eraForYear } from '../game/data/eras';
 import { canAfford, formatCost, RESOURCE_IDS, RESOURCES, type ResourceId } from '../game/data/resources';
-import { UNITS } from '../game/data/units';
+import { ENGINES, STANCES, UNITS, type EngineType, type Stance } from '../game/data/units';
+import type { Force } from '../game/sim/state';
 import type { Game } from '../game/sim/game';
 import type { PlacedBuilding } from '../game/sim/state';
 import type { ChatMessage, RealmPlayer } from '../net/realm';
@@ -25,6 +26,8 @@ export interface HudCallbacks {
   /** Passa al livello di qualità grafica successivo e ne restituisce il nome. */
   onQuality(): string;
   qualityLabel: string;
+  /** Spedizioni contro l'altro giocatore (solo nelle partite multigiocatore). */
+  war?: () => null | { opponent: string; launch(f: Force, stance: Stance): string | null };
   /** null se il multiplayer non è disponibile (ospite o Supabase non configurato). */
   realm: null | {
     join(name: string): Promise<void>;
@@ -441,6 +444,7 @@ export class Hud {
         ),
       );
     }
+    let refreshWar: () => void = () => {};
     this.refreshTab = () => {
       for (const u of units) {
         counts.get(u)!.textContent = String(this.game.state.army[u]);
@@ -448,7 +452,143 @@ export class Hud {
         reasons.get(u)!.textContent = c.ok ? '' : c.reason ?? '';
       }
       const d = Math.ceil(this.game.daysToRaid());
-      info.textContent = `Difesa totale: ${fmt(this.game.fortDefense() * 0.8 + this.game.armyPower())}. Gli arcieri rendono di più con le torri. Le spie segnalano movimenti di nemici tra circa ${d} giorni.`;
+      info.textContent = `Difesa totale: ${fmt(this.game.fortDefense() * 0.8 + this.game.armyPower())}. Gli arcieri rendono di più con le torri. Le spie segnalano movimenti di predoni tra circa ${d} giorni.`;
+      refreshEngines();
+      refreshWar();
+    };
+
+    // ───── Macchine d'assedio ─────
+    const engineBox = el('div');
+    rows.after(engineBox);
+    engineBox.before(el('h4', { text: '🪵 Macchine d\'assedio' }));
+    const engineRows = new Map<EngineType, { count: HTMLElement; btn: HTMLButtonElement; why: HTMLElement }>();
+    for (const t of Object.keys(ENGINES) as EngineType[]) {
+      const e = ENGINES[t];
+      const count = el('strong');
+      const why = el('span', { class: 'small muted' });
+      const btn = el('button', { text: 'Costruisci' });
+      btn.onclick = () => this.game.buildEngine(t);
+      engineRows.set(t, { count, btn, why });
+      engineBox.append(
+        el(
+          'div',
+          { class: 'unit' },
+          el('div', { class: 'row' }, el('span', { text: `${e.icon} ${e.name}` }), el('span', { class: 'spacer' }), count),
+          el('div', { class: 'small muted', text: `${e.description} Costo ${formatCost(e.cost)} · dal ${e.minYear}` }),
+          el('div', { class: 'row' }, btn, why),
+        ),
+      );
+    }
+    const refreshEngines = () => {
+      const have = this.game.engines();
+      for (const [t, r] of engineRows) {
+        const away = this.game.troopsAway()[t];
+        r.count.textContent = `${have[t]}${away ? ` (+${away} in campo)` : ''}`;
+        const c = this.game.canBuildEngine(t);
+        r.btn.disabled = !c.ok;
+        r.why.textContent = c.ok ? '' : c.reason ?? '';
+      }
+    };
+
+    // ───── Spedizione contro l'avversario ─────
+    const warBox = el('div', { class: 'war' });
+    this.panelBody.append(warBox);
+    const war = this.cb.war?.() ?? null;
+    if (!war) {
+      warBox.append(
+        el('h4', { text: '⚔️ Spedizioni' }),
+        el('p', { class: 'small muted', text: 'Nelle partite multigiocatore puoi mandare l\'esercito ad assediare il castello dell\'avversario.' }),
+      );
+      return;
+    }
+    const keys = ['infantry', 'archers', 'cavalry', 'rams', 'trebuchets'] as const;
+    const inputs = new Map<(typeof keys)[number], HTMLInputElement>();
+    const maxEls = new Map<(typeof keys)[number], HTMLElement>();
+    const grid = el('div', { class: 'war-grid' });
+    for (const k of keys) {
+      const label = k in UNITS ? `${UNITS[k as UnitType].icon} ${UNITS[k as UnitType].name}` : `${ENGINES[k as EngineType].icon} ${ENGINES[k as EngineType].name}`;
+      const inp = el('input', { type: 'number', min: '0', value: '0', class: 'amount' });
+      const max = el('button', { class: 'link small', text: 'max' });
+      max.onclick = () => {
+        inp.value = String(k in UNITS ? this.game.state.army[k as UnitType] : this.game.engines()[k as EngineType]);
+        refreshWar();
+      };
+      inp.oninput = () => refreshWar();
+      inputs.set(k, inp);
+      maxEls.set(k, max);
+      grid.append(el('span', { text: label }), inp, max);
+    }
+    const stance = el('select');
+    for (const [id, st] of Object.entries(STANCES)) stance.append(el('option', { value: id, text: `${st.name} — ${st.description}` }));
+    stance.value = 'resolute';
+    const estimate = el('p', { class: 'small' });
+    const intelEl = el('div', { class: 'small intel' });
+    const launch = el('button', { class: 'primary', text: `⚔️ Marcia contro ${war.opponent}` });
+    const force = (): Force => {
+      const f = { infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0 };
+      for (const k of keys) f[k] = Math.max(0, Math.floor(Number(inputs.get(k)!.value) || 0));
+      return f;
+    };
+    launch.onclick = () => {
+      const err = war.launch(force(), stance.value as Stance);
+      if (err) this.toast(err, 'bad');
+      else {
+        this.toast('L\'esercito si mette in marcia!', 'good');
+        for (const i of inputs.values()) i.value = '0';
+      }
+      refreshWar();
+    };
+    const marching = el('div');
+    warBox.append(
+      el('h4', { text: `⚔️ Spedizione contro ${war.opponent}` }),
+      intelEl,
+      grid,
+      el('label', { text: 'Condotta in battaglia' }),
+      stance,
+      estimate,
+      launch,
+      el('p', { class: 'small muted', text: 'Le truppe che partono non difendono il castello finché non rientrano. L\'avversario vedrà arrivare l\'esercito e potrà prepararsi.' }),
+      el('h4', { text: 'Eserciti in campo' }),
+      marching,
+    );
+    let lastMarch = '';
+    refreshWar = () => {
+      const g = this.game;
+      const f = force();
+      const c = g.canLaunch(f);
+      launch.disabled = !c.ok;
+      const n = f.infantry + f.archers + f.cavalry;
+      estimate.textContent = n
+        ? `${n} soldati${f.rams + f.trebuchets ? ` e ${f.rams + f.trebuchets} macchine` : ''} · ${g.marchDays(f)} giorni di marcia${c.ok ? '' : ` · ${c.reason}`}`
+        : 'Scegli le truppe da mandare.';
+      const intel = g.opponentIntel();
+      intelEl.innerHTML = intel
+        ? `<strong>Rapporto degli esploratori:</strong> cinta ${intel.closed ? '<span class="bad">chiusa</span>' : '<span class="good">aperta</span>'} ·
+           ${intel.walls} tratti di mura, ${intel.towers} torri, ${intel.gates} porte, ${intel.moats} fossati, ${intel.upgrades} miglioramenti ·
+           difese stimate ${fmt(intel.breakdown.total)}. La guarnigione è sconosciuta.`
+        : '<span class="muted">Gli esploratori non hanno ancora notizie del castello nemico.</span>';
+      const day = g.state.day;
+      const items: string[] = [];
+      for (const e of g.state.expeditions ?? []) {
+        const t = e.status === 'marching' ? e.troops : e.result!.survivors;
+        const soldiers = t.infantry + t.archers + t.cavalry;
+        items.push(
+          e.status === 'marching'
+            ? `🚩 I nostri ${soldiers} soldati arrivano al castello nemico tra ${Math.max(0, Math.ceil(e.arriveDay - day))} giorni`
+            : `↩️ ${soldiers} superstiti rientrano tra ${Math.max(0, Math.ceil((e.returnDay ?? day) - day))} giorni`,
+        );
+      }
+      for (const a of g.state.incoming ?? []) {
+        if (a.resolved) continue;
+        const soldiers = a.troops.infantry + a.troops.archers + a.troops.cavalry;
+        items.push(`<span class="bad">⚠️ ${escapeHtml(a.from)}: ${soldiers} soldati contro di noi, arrivo tra ${Math.max(0, Math.ceil(a.arriveDay - day))} giorni</span>`);
+      }
+      for (const r of (g.state.campaignLog ?? []).slice(-3).reverse()) items.push(`<span class="muted">${escapeHtml(r.text)}</span>`);
+      const html = items.length ? items.map((i) => `<p class="small">${i}</p>`).join('') : '<p class="small muted">Nessun esercito in marcia.</p>';
+      if (html !== lastMarch) {
+        lastMarch = html;
+        marching.innerHTML = html;
+      }
     };
   }
 
@@ -604,7 +744,13 @@ export class Hud {
     this.dateEl.textContent = formatDate(d);
     this.eraEl.textContent = eraForYear(d.year).name;
     const days = g.daysToRaid();
-    this.raidEl.textContent = days < 60 ? `⚠️ Nemici in avvicinamento (${Math.ceil(days)} gg)` : '';
+    // Avviso: eserciti di altri giocatori in marcia (prima di tutto) o predoni vicini
+    const incoming = (g.state.incoming ?? []).filter((a) => !a.resolved).sort((a, b) => a.arriveDay - b.arriveDay)[0];
+    this.raidEl.textContent = incoming
+      ? `⚔️ ${incoming.from} in arrivo (${Math.max(0, Math.ceil(incoming.arriveDay - g.state.day))} gg)`
+      : days < 60
+        ? `⚠️ Predoni in avvicinamento (${Math.ceil(days)} gg)`
+        : '';
     this.speedBtns.forEach((b, i) => b.classList.toggle('active', SPEEDS[i] === speed));
     const cap = g.storageCap();
     for (const [id, e] of this.resEls) {

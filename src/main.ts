@@ -103,6 +103,7 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
         await realm?.leave();
         location.reload();
       },
+      war: () => (ms ? { opponent: ms.opponent, launch: (f, st) => ms!.launch(f, st) } : null),
       realm: realm && {
         join: (name) => realm.join(name, me()),
         leave: () => realm.leave(),

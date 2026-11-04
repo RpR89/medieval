@@ -2,6 +2,8 @@ import type { UnitType } from '../data/buildings';
 import { emptyResources, type Resources } from '../data/resources';
 import { DAYS_PER_YEAR } from '../data/calendar';
 import type { PresetId } from '../world/presets';
+import type { Cost } from '../data/resources';
+import type { Stance } from '../data/units';
 
 export interface PlacedBuilding {
   uid: number;
@@ -25,6 +27,51 @@ export interface SiegeReport {
   attackerLosses: number;
   defenderLosses: number;
   loot: number;
+}
+
+/** Forze di una spedizione: soldati e macchine d'assedio. */
+export interface Force {
+  infantry: number;
+  archers: number;
+  cavalry: number;
+  rams: number;
+  trebuchets: number;
+}
+
+export type Outcome = 'repelled' | 'held' | 'sacked';
+
+/** Esito di un attacco, calcolato dal difensore e inviato all'attaccante. */
+export interface AttackResult {
+  id: string;
+  outcome: Outcome;
+  survivors: Force;
+  loot: Cost;
+  log: string[];
+  attackerLosses: number;
+  defenderLosses: number;
+}
+
+/** Spedizione in partenza dal proprio castello. */
+export interface Expedition {
+  id: string;
+  troops: Force;
+  stance: Stance;
+  departDay: number;
+  arriveDay: number;
+  status: 'marching' | 'returning';
+  returnDay?: number;
+  result?: AttackResult;
+}
+
+/** Esercito nemico in marcia verso il proprio castello. */
+export interface IncomingAttack {
+  id: string;
+  from: string;
+  troops: Force;
+  stance: Stance;
+  departDay: number;
+  arriveDay: number;
+  resolved?: AttackResult;
 }
 
 export type EventKind = 'info' | 'good' | 'bad';
@@ -53,6 +100,12 @@ export interface GameState {
   preset?: PresetId;
   /** Partita multigiocatore: id e posto (0 = chi l'ha creata, 1 = chi si è unito). */
   match?: { id: string; slot: 0 | 1 };
+  /** Macchine d'assedio in deposito. */
+  engines?: { rams: number; trebuchets: number };
+  expeditions?: Expedition[];
+  incoming?: IncomingAttack[];
+  /** Ultimi rapporti delle spedizioni concluse. */
+  campaignLog?: Array<{ day: number; text: string; outcome: Outcome; log: string[] }>;
 }
 
 export interface StateOptions {

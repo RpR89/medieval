@@ -18,7 +18,7 @@ import {
   type Cost,
   type ResourceId,
 } from '../data/resources';
-import { SOLDIER_FOOD, UNITS } from '../data/units';
+import { CARRY, ENGINES, MARCH_SPEED, SOLDIER_FOOD, STANCES, UNITS, type EngineType, type Stance } from '../data/units';
 import { UPGRADE_BY_ID, upgradesFor, type UpgradeDef } from '../data/upgrades';
 import {
   generateTerrain,
@@ -32,10 +32,15 @@ import { resolveSiege, type AttackerArmy, type DefenderSnapshot, type SiegeSegme
 import {
   BASE_HOUSING,
   BASE_STORAGE,
+  createInitialState,
   FOOD_PER_PERSON,
   TAX_PER_PERSON,
+  type AttackResult,
   type EventKind,
+  type Expedition,
+  type Force,
   type GameState,
+  type IncomingAttack,
   type PlacedBuilding,
 } from './state';
 
@@ -140,6 +145,7 @@ export class Game {
   readonly occupancy: Int32Array;
   private listeners = new Set<Listener>();
   private eventListeners = new Set<(e: { text: string; kind: EventKind }) => void>();
+  private attackListeners = new Set<(r: AttackResult) => void>();
   private lastSeasonIndex: number;
   private lastYear: number;
   private cache: Analysis | null = null;
@@ -874,7 +880,8 @@ export class Game {
 
     // Alimentazione
     const pop = s.population;
-    let need = (pop * FOOD_PER_PERSON + this.soldiers() * SOLDIER_FOOD) * dt;
+    const away = this.troopsAway();
+    let need = (pop * FOOD_PER_PERSON + (this.soldiers() + away.infantry + away.archers + away.cavalry) * SOLDIER_FOOD) * dt;
     const needed = need;
     let variety = 0;
     for (const id of EATING_ORDER) {
@@ -898,9 +905,13 @@ export class Game {
     // Tasse
     r.coins += s.population * TAX_PER_PERSON * a.taxMul * dt;
 
-    // Mantenimento dell'esercito
+    // Mantenimento dell'esercito (anche le truppe in spedizione e le macchine d'assedio)
+    for (const id of Object.keys(ENGINES) as EngineType[]) {
+      const n = (s.engines?.[id] ?? 0) + away[id];
+      for (const [res, u] of Object.entries(ENGINES[id].upkeep)) r[res as ResourceId] = Math.max(0, r[res as ResourceId] - (u ?? 0) * n * dt);
+    }
     for (const id of Object.keys(UNITS) as UnitType[]) {
-      const n = s.army[id];
+      const n = s.army[id] + away[id];
       if (!n) continue;
       let ok = true;
       for (const [res, u] of Object.entries(UNITS[id].upkeep)) {
@@ -909,7 +920,7 @@ export class Game {
         if (r[rid] < cost) ok = false;
         r[rid] = Math.max(0, r[rid] - cost);
       }
-      if (!ok && this.random() < 0.05 * dt) {
+      if (!ok && s.army[id] > 0 && this.random() < 0.05 * dt) {
         s.army[id] -= 1;
         this.log(`Un soldato (${UNITS[id].name}) ha disertato: paga o rifornimenti mancanti.`, 'bad');
       }
@@ -925,6 +936,7 @@ export class Game {
     }
 
     if (s.day >= s.nextRaidDay) this.resolveRaid();
+    this.stepWar();
   }
 
   private stepHerd(b: PlacedBuilding, def: BuildingDef, si: number, staffing: number, dt: number) {
@@ -997,6 +1009,230 @@ export class Game {
       this.log(`Nuova epoca: ${after.name}. ${after.description}`, 'good');
     }
   }
+
+
+  // ───────────── Guerra: macchine d'assedio e spedizioni ─────────────
+
+  onAttackResolved(fn: (r: AttackResult) => void): () => void {
+    this.attackListeners.add(fn);
+    return () => this.attackListeners.delete(fn);
+  }
+
+  engines(): { rams: number; trebuchets: number } {
+    this.state.engines ??= { rams: 0, trebuchets: 0 };
+    return this.state.engines;
+  }
+
+  canBuildEngine(type: EngineType): PlaceCheck {
+    if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
+    if (!this.has((d) => !!d.workshop)) return { ok: false, reason: 'Serve l\'officina d\'assedio' };
+    if (this.date.year < ENGINES[type].minYear) return { ok: false, reason: `Disponibile dal ${ENGINES[type].minYear}` };
+    if (!canAfford(this.state.resources, ENGINES[type].cost)) return { ok: false, reason: 'Risorse insufficienti' };
+    return { ok: true };
+  }
+
+  buildEngine(type: EngineType): boolean {
+    if (!this.canBuildEngine(type).ok) return false;
+    pay(this.state.resources, ENGINES[type].cost);
+    this.engines()[type]++;
+    this.emit();
+    return true;
+  }
+
+  /** Truppe attualmente fuori dal castello (in marcia o di ritorno). */
+  troopsAway(): Force {
+    const f: Force = { infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0 };
+    for (const e of this.state.expeditions ?? []) {
+      const t = e.status === 'returning' && e.result ? e.result.survivors : e.troops;
+      for (const k of Object.keys(f) as Array<keyof Force>) f[k] += t[k];
+    }
+    return f;
+  }
+
+  /** Distanza in caselle tra il proprio sito e quello dell'avversario. */
+  private warDistance(): number {
+    const slot = this.state.match?.slot ?? 0;
+    const a = this.terrain.sites[slot];
+    const b = this.terrain.sites[1 - slot] ?? a;
+    return Math.hypot(a[0] - b[0], a[1] - b[1]);
+  }
+
+  /** Giorni di marcia: decide il reparto più lento. */
+  marchDays(f: Force): number {
+    let speed = Infinity;
+    for (const k of ['infantry', 'archers', 'cavalry'] as const) if (f[k] > 0) speed = Math.min(speed, MARCH_SPEED[k]);
+    for (const k of ['rams', 'trebuchets'] as const) if (f[k] > 0) speed = Math.min(speed, ENGINES[k].speed);
+    if (!isFinite(speed)) speed = 4;
+    return Math.max(2, Math.ceil(this.warDistance() / speed));
+  }
+
+  canLaunch(f: Force): PlaceCheck {
+    if (!this.state.match) return { ok: false, reason: 'Le spedizioni sono possibili nelle partite multigiocatore' };
+    if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
+    const soldiers = f.infantry + f.archers + f.cavalry;
+    if (soldiers < 1) return { ok: false, reason: 'Scegli almeno un soldato' };
+    if (f.rams + f.trebuchets > 0 && f.infantry < 2 * (f.rams + f.trebuchets)) {
+      return { ok: false, reason: 'Ogni macchina d\'assedio richiede almeno 2 fanti per spingerla' };
+    }
+    for (const k of ['infantry', 'archers', 'cavalry'] as const) if (f[k] > this.state.army[k]) return { ok: false, reason: `Non hai abbastanza ${UNITS[k].name.toLowerCase()}` };
+    for (const k of ['rams', 'trebuchets'] as const) if (f[k] > this.engines()[k]) return { ok: false, reason: `Non hai abbastanza ${ENGINES[k].name.toLowerCase()}` };
+    if (Object.values(f).some((v) => v < 0 || !Number.isInteger(v))) return { ok: false, reason: 'Numeri non validi' };
+    return { ok: true };
+  }
+
+  /** Fa partire una spedizione: le truppe lasciano il castello (che resta più sguarnito). */
+  launch(f: Force, stance: Stance): Expedition | null {
+    if (!this.canLaunch(f).ok) return null;
+    for (const k of ['infantry', 'archers', 'cavalry'] as const) this.state.army[k] -= f[k];
+    for (const k of ['rams', 'trebuchets'] as const) this.engines()[k] -= f[k];
+    const e: Expedition = {
+      id: `${this.state.match!.id}:${this.state.match!.slot}:${this.state.nextUid++}`,
+      troops: { ...f },
+      stance,
+      departDay: this.state.day,
+      arriveDay: this.state.day + this.marchDays(f),
+      status: 'marching',
+    };
+    (this.state.expeditions ??= []).push(e);
+    this.log(`La spedizione è partita: arriverà al castello nemico tra ${Math.round(e.arriveDay - e.departDay)} giorni.`, 'info');
+    this.emit();
+    return e;
+  }
+
+  /** Riceve l'annuncio di un esercito nemico in marcia (idempotente). */
+  receiveAttack(a: IncomingAttack) {
+    const list = (this.state.incoming ??= []);
+    if (list.some((x) => x.id === a.id)) return;
+    list.push({ ...a, resolved: undefined });
+    const days = Math.max(0, Math.ceil(a.arriveDay - this.state.day));
+    const n = a.troops.infantry + a.troops.archers + a.troops.cavalry;
+    const engines = a.troops.rams + a.troops.trebuchets;
+    this.log(`⚠️ ${a.from} marcia contro di noi con circa ${n} soldati${engines ? ` e ${engines} macchine d'assedio` : ''}: arriverà tra ${days} giorni!`, 'bad');
+    this.emit();
+  }
+
+  /** Risultati già calcolati, da rimandare all'attaccante se si riconnette. */
+  resolvedAttacks(): AttackResult[] {
+    return (this.state.incoming ?? []).filter((a) => a.resolved).map((a) => a.resolved!);
+  }
+
+  /** L'attaccante riceve l'esito: i superstiti tornano a casa con il bottino. */
+  applyAttackResult(r: AttackResult) {
+    const e = (this.state.expeditions ?? []).find((x) => x.id === r.id);
+    if (!e || e.status !== 'marching') return;
+    e.status = 'returning';
+    e.result = r;
+    e.returnDay = this.state.day + this.marchDays(r.survivors);
+    const names = { repelled: 'respinta', held: 'ha saccheggiato il borgo nemico (il mastio ha resistito)', sacked: 'ha espugnato il castello nemico' };
+    const lootN = Object.values(r.loot).reduce((a, b) => a + (b ?? 0), 0);
+    this.log(
+      `La spedizione ${names[r.outcome]}! Caduti: ${r.attackerLosses}, nemici caduti: ${r.defenderLosses}${lootN ? `, bottino di ${Math.round(lootN)} unità di merci` : ''}. Rientro tra ${Math.ceil(e.returnDay - this.state.day)} giorni.`,
+      r.outcome === 'repelled' ? 'bad' : 'good',
+    );
+    (this.state.campaignLog ??= []).push({ day: this.state.day, text: `Attacco: ${names[r.outcome]}`, outcome: r.outcome, log: r.log });
+    if (this.state.campaignLog.length > 10) this.state.campaignLog.shift();
+    this.emit();
+  }
+
+  private stepWar() {
+    const s = this.state;
+    // Eserciti nemici arrivati: si combatte qui, con lo stato vero del nostro castello
+    for (const a of s.incoming ?? []) {
+      if (a.resolved || s.day < a.arriveDay) continue;
+      const r = this.defendAgainst(a);
+      a.resolved = r;
+      for (const fn of this.attackListeners) fn(r);
+    }
+    // Pulizia: tieni solo gli ultimi attacchi risolti
+    if (s.incoming && s.incoming.length > 12) s.incoming = s.incoming.slice(-12);
+    // Spedizioni rientrate
+    for (const e of [...(s.expeditions ?? [])]) {
+      if (e.status !== 'returning' || s.day < (e.returnDay ?? Infinity) || !e.result) continue;
+      const back = e.result.survivors;
+      for (const k of ['infantry', 'archers', 'cavalry'] as const) s.army[k] += back[k];
+      for (const k of ['rams', 'trebuchets'] as const) this.engines()[k] += back[k];
+      const cap = this.storageCap();
+      for (const [id, n] of Object.entries(e.result.loot)) {
+        const rid = id as ResourceId;
+        s.resources[rid] = rid === 'coins' ? s.resources[rid] + (n ?? 0) : Math.min(cap, s.resources[rid] + (n ?? 0));
+      }
+      s.expeditions = s.expeditions!.filter((x) => x !== e);
+      this.log(`La spedizione è rientrata al castello con ${back.infantry + back.archers + back.cavalry} soldati.`, 'good');
+    }
+  }
+
+  /** Difesa contro un esercito di un altro giocatore. */
+  private defendAgainst(a: IncomingAttack): AttackResult {
+    const before = { ...this.state.resources };
+    const army: AttackerArmy = {
+      name: `L'esercito di ${a.from}`,
+      infantry: a.troops.infantry,
+      archers: a.troops.archers,
+      cavalry: a.troops.cavalry,
+      rams: a.troops.rams,
+      trebuchets: a.troops.trebuchets,
+      morale: STANCES[a.stance]?.morale ?? 0.5,
+    };
+    const res = this.besiege(army);
+    const lost = res.attackerLosses;
+    const survivors: Force = {
+      infantry: Math.max(0, a.troops.infantry - lost.infantry),
+      archers: Math.max(0, a.troops.archers - lost.archers),
+      cavalry: Math.max(0, a.troops.cavalry - lost.cavalry),
+      // Le macchine si perdono in parte se l'assalto fallisce
+      rams: res.outcome === 'repelled' ? Math.floor(a.troops.rams / 2) : a.troops.rams,
+      trebuchets: res.outcome === 'repelled' ? Math.floor(a.troops.trebuchets / 2) : a.troops.trebuchets,
+    };
+    // Bottino: una parte di ciò che il difensore ha perso, quanto i superstiti riescono a portare
+    const carry = survivors.infantry * CARRY.infantry + survivors.archers * CARRY.archers + survivors.cavalry * CARRY.cavalry;
+    const lostGoods: Cost = {};
+    let total = 0;
+    for (const id of RESOURCE_IDS) {
+      const d = Math.max(0, before[id] - this.state.resources[id]) * 0.6;
+      if (d >= 1) {
+        lostGoods[id] = d;
+        total += id === 'coins' ? d / 5 : d;
+      }
+    }
+    const k = total > carry ? carry / total : 1;
+    const loot: Cost = {};
+    for (const [id, d] of Object.entries(lostGoods)) loot[id as ResourceId] = Math.floor((d ?? 0) * k);
+    return {
+      id: a.id,
+      outcome: res.outcome,
+      survivors,
+      loot,
+      log: res.log,
+      attackerLosses: lost.infantry + lost.archers + lost.cavalry,
+      defenderLosses: res.defenderLosses.infantry + res.defenderLosses.archers + res.defenderLosses.cavalry,
+    };
+  }
+
+  /** Stima delle difese dell'avversario, dai suoi edifici visibili (la guarnigione resta ignota). */
+  opponentIntel(): { closed: boolean; breakdown: DefenseBreakdown; walls: number; towers: number; gates: number; moats: number; upgrades: number } | null {
+    if (!this.state.match || !this.others.length) return null;
+    const key = this.others.length + ':' + this.structureVersion;
+    if (this.intelCache?.key === key) return this.intelCache.value;
+    const slot = (1 - this.state.match.slot) as 0 | 1;
+    const st = createInitialState(this.state.seed, '', { preset: this.state.preset, match: { id: this.state.match.id, slot } });
+    st.day = this.state.day;
+    st.buildings = this.others.map((b) => ({ ...b, uid: b.uid - FOREIGN }));
+    const g = new Game(st);
+    const count = (role: string) => g.state.buildings.filter((b) => getBuilding(b.defId).fort === role).length;
+    const value = {
+      closed: g.analysis().closed,
+      breakdown: g.defenseBreakdown(),
+      walls: count('wall'),
+      towers: count('tower'),
+      gates: count('gate'),
+      moats: count('moat'),
+      upgrades: g.state.buildings.reduce((a, b) => a + (b.upgrades?.length ?? 0), 0),
+    };
+    this.intelCache = { key, value };
+    return value;
+  }
+
+  private intelCache: { key: string; value: NonNullable<ReturnType<Game['opponentIntel']>> } | null = null;
 
   // ───────────── Assedi ─────────────
 
@@ -1106,7 +1342,7 @@ export class Game {
     if (result.outcome === 'repelled') {
       loot = Math.round(atkLost * 3);
       s.resources.coins += loot;
-      this.log(`${army.name} respinti! Nemici caduti: ${atkLost}, nostri caduti: ${defLost}. Bottino: ${loot} monete.`, 'good');
+      this.log(`Assalto respinto (${army.name})! Nemici caduti: ${atkLost}, nostri caduti: ${defLost}. Bottino: ${loot} monete.`, 'good');
     } else {
       const ratio = result.outcome === 'held' ? 0.15 : 0.45;
       for (const id of RESOURCE_IDS) s.resources[id] *= 1 - ratio;
@@ -1114,8 +1350,8 @@ export class Game {
       s.population -= dead;
       this.log(
         result.outcome === 'held'
-          ? `${army.name} hanno saccheggiato il borgo (−${Math.round(ratio * 100)}% scorte, ${dead} morti), ma il mastio ha resistito.`
-          : `${army.name} hanno espugnato il castello! Perse il ${Math.round(ratio * 100)}% delle scorte e ${dead} abitanti.`,
+          ? `Borgo saccheggiato (${army.name}): −${Math.round(ratio * 100)}% delle scorte, ${dead} morti. Il mastio ha resistito.`
+          : `Castello espugnato (${army.name})! Perso il ${Math.round(ratio * 100)}% delle scorte e ${dead} abitanti.`,
         'bad',
       );
     }

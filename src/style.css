@@ -159,3 +159,7 @@ button.multi { background: #6b2a1e; border-color: #a3402f; color: var(--ink); }
 .mode strong { font-size: 17px; color: var(--accent); }
 .mode:hover { border-color: var(--accent); }
 @media (max-width: 480px) { .modes { grid-template-columns: 1fr; } }
+
+/* Spedizioni */
+.war-grid { display: grid; grid-template-columns: 1fr auto auto; gap: 4px 6px; align-items: center; margin: 6px 0; }
+.intel { background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 6px 8px; }

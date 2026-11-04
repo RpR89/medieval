@@ -13,6 +13,7 @@ import type { Game } from '../game/sim/game';
 import type { PlacedBuilding } from '../game/sim/state';
 import { animate, applySeason, buildModel, LINKED_TYPES, ROAD_FAMILY, updateHerd, WALL_FAMILY, type Link, type ModelCtx } from './models';
 import { StaticBatches } from './batches';
+import { ArmyView } from './armies';
 import { mats } from './kit';
 import type { Footprint } from './terrain';
 import { TerrainView, WATER_LEVEL } from './terrain';
@@ -43,6 +44,7 @@ export class WorldRenderer {
   /** Edifici con parti animate (bandiere, fumo, animali, colture). */
   private animated: Array<{ b: PlacedBuilding; obj: THREE.Object3D; herd: boolean }> = [];
   private batches = new StaticBatches();
+  private armyView!: ArmyView;
   private shadowDirty = true;
   private shadowFrame = 0;
   private shadowCenter = new THREE.Vector3(1e9, 0, 0);
@@ -115,6 +117,8 @@ export class WorldRenderer {
     this.terrainView = new TerrainView(game.terrain, Math.max(2, Math.round((quality === 'high' ? 10 : quality === 'medium' ? 6 : 3) * area)));
     this.scene.add(this.terrainView.group);
     if (game.state.match) this.addTerritoryBorder();
+    this.armyView = new ArmyView(game, this.terrainView);
+    this.scene.add(this.armyView.group);
 
     // Acqua animata con mappa delle normali procedurale
     const normals = textures().waterNormals;
@@ -602,6 +606,8 @@ export class WorldRenderer {
       sphere.set(obj.position, Math.max(def.size[0], def.size[1]) + 2);
       if (frustum.intersectsSphere(sphere)) animate(obj, t, dt);
     }
+    this.armyView.update(t);
+    for (const o of this.armyView.objects()) animate(o, t, dt);
     const n = this.water.material as THREE.MeshStandardMaterial;
     n.normalMap!.offset.set(t * 0.012, t * 0.008);
 
