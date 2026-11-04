@@ -101,3 +101,39 @@ export const STANCES = {
 } as const;
 
 export type Stance = keyof typeof STANCES;
+
+// ───────────── Formazioni e comportamenti dei reparti ─────────────
+
+export type Formation = 'line' | 'column' | 'wedge' | 'square' | 'shields';
+
+export interface FormationDef {
+  id: Formation;
+  name: string;
+  icon: string;
+  description: string;
+  /** Moltiplicatore della velocità di marcia. */
+  speed: number;
+  /** Forza in attacco e tenuta in difesa (scontri in campo aperto). */
+  attack: number;
+  defense: number;
+  /** Quota di perdite da frecce subite (1 = normali). */
+  arrows: number;
+  /** Bonus contro le cariche di cavalleria. */
+  vsCavalry: number;
+}
+
+export const FORMATIONS: Record<Formation, FormationDef> = {
+  line: { id: 'line', name: 'Linea', icon: '▬', description: 'Equilibrata: tutti gli arcieri possono tirare.', speed: 1, attack: 1, defense: 1, arrows: 1, vsCavalry: 1 },
+  column: { id: 'column', name: 'Colonna', icon: '⋮', description: 'Marcia veloce sulle strade, ma debole se attaccata.', speed: 1.25, attack: 0.8, defense: 0.75, arrows: 1.15, vsCavalry: 0.8 },
+  wedge: { id: 'wedge', name: 'Cuneo', icon: '▲', description: 'Punta d\'urto: sfonda le linee nemiche (ottimo con la cavalleria).', speed: 1, attack: 1.35, defense: 0.85, arrows: 1, vsCavalry: 0.9 },
+  square: { id: 'square', name: 'Quadrato', icon: '■', description: 'Muro di picche: regge le cariche, ma è lento.', speed: 0.7, attack: 0.85, defense: 1.35, arrows: 1, vsCavalry: 1.8 },
+  shields: { id: 'shields', name: 'Testuggine', icon: '🛡️', description: 'Scudi e pavesi: dimezza le perdite da frecce. Ideale per assaltare le mura.', speed: 0.75, attack: 0.85, defense: 1.1, arrows: 0.5, vsCavalry: 1.1 },
+};
+
+export type Behavior = 'aggressive' | 'defensive' | 'hold';
+
+export const BEHAVIORS: Record<Behavior, { name: string; icon: string; description: string }> = {
+  aggressive: { name: 'Aggressivo', icon: '⚔️', description: 'Insegue e attacca i nemici entro 6 caselle.' },
+  defensive: { name: 'Difensivo', icon: '🛡️', description: 'Resta dove si trova e combatte meglio (+20%) se attaccato.' },
+  hold: { name: 'Tieni la posizione', icon: '⚓', description: 'Non si muove mai da solo; +35% in difesa, nessun inseguimento.' },
+};

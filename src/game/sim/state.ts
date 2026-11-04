@@ -3,7 +3,7 @@ import { emptyResources, type Resources } from '../data/resources';
 import { DAYS_PER_YEAR } from '../data/calendar';
 import type { PresetId } from '../world/presets';
 import type { Cost } from '../data/resources';
-import type { Stance } from '../data/units';
+import type { Behavior, Formation, Stance } from '../data/units';
 
 export interface PlacedBuilding {
   uid: number;
@@ -81,6 +81,10 @@ export interface Company {
   /** Impegnato in un assalto (id dell'attacco). */
   engaged?: string;
   heading?: number;
+  formation?: Formation;
+  behavior?: Behavior;
+  /** Velocità imposta quando si marcia in gruppo (quella del più lento). */
+  groupSpeed?: number;
 }
 
 /** Esercito nemico in marcia verso il proprio castello. */
@@ -92,6 +96,8 @@ export interface IncomingAttack {
   departDay: number;
   arriveDay: number;
   resolved?: AttackResult;
+  /** Effetto della formazione degli assalitori: frecce subite e forza in mischia. */
+  tactics?: { arrows: number; melee: number };
 }
 
 export type EventKind = 'info' | 'good' | 'bad';

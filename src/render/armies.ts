@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Game } from '../game/sim/game';
-import type { Force } from '../game/sim/state';
+import type { Company, Force } from '../game/sim/state';
+import type { Formation } from '../game/data/units';
 import { bake, box, cone, cyl, flag, mats, sphere } from './kit';
 import type { TerrainView } from './terrain';
 
@@ -86,34 +87,71 @@ function trebuchet(): THREE.Group {
   return g;
 }
 
-function buildArmy(f: Force, enemy: boolean): THREE.Group {
+/** Posizioni dei soldati (in avanti = +x) secondo la formazione. */
+function slots(n: number, formation: Formation): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  const sp = formation === 'shields' ? 0.17 : 0.21;
+  if (formation === 'column') {
+    for (let i = 0; i < n; i++) out.push([-Math.floor(i / 2) * sp, ((i % 2) - 0.5) * sp]);
+  } else if (formation === 'wedge') {
+    for (let r = 0; out.length < n; r++) for (let c = -r; c <= r && out.length < n; c++) out.push([-r * sp, c * sp]);
+  } else if (formation === 'square') {
+    const side = Math.max(2, Math.ceil(n / 4) + 1);
+    const h = ((side - 1) * sp) / 2;
+    for (let i = 0; out.length < n; i++) {
+      const k = i % (side - 1);
+      const e = Math.floor(i / (side - 1)) % 4;
+      const ring = Math.floor(i / (4 * (side - 1)));
+      const t = -h + k * sp;
+      const hh = h - ring * sp;
+      out.push(e === 0 ? [hh, t] : e === 1 ? [-t, hh] : e === 2 ? [-hh, -t] : [t, -hh]);
+    }
+  } else {
+    const per = formation === 'shields' ? 5 : 7;
+    for (let i = 0; i < n; i++) out.push([-Math.floor(i / per) * sp, ((i % per) - (per - 1) / 2) * sp]);
+  }
+  return out;
+}
+
+function buildArmy(f: Force, enemy: boolean, formation: Formation = 'line'): THREE.Group {
   const m = enemy ? tabardBlue : tabardRed;
   const g = new THREE.Group();
-  // Formazione: fanti davanti, arcieri dietro, cavalieri sui fianchi, macchine in coda
-  const show = (n: number) => Math.min(n, 18);
-  let row = 0;
-  const place = (n: number, kind: 'infantry' | 'archers' | 'cavalry', perRow: number) => {
-    for (let i = 0; i < show(n); i++) {
-      const s = soldier(m, kind);
-      const r = Math.floor(i / perRow);
-      const c = (i % perRow) - (perRow - 1) / 2;
-      s.position.set(-(row + r) * 0.22, 0, c * 0.2);
-      g.add(s);
+  const k = mats();
+  const cap = (n: number) => Math.min(n, 18);
+  // Fanti davanti, arcieri dietro (al centro nel quadrato), cavalieri in coda
+  const kinds: Array<'infantry' | 'archers' | 'cavalry'> = [];
+  for (let i = 0; i < cap(f.infantry); i++) kinds.push('infantry');
+  const archers: Array<'archers'> = Array(cap(f.archers)).fill('archers');
+  if (formation !== 'square') kinds.push(...archers);
+  for (let i = 0; i < cap(f.cavalry); i++) kinds.push('cavalry');
+  const pos = slots(kinds.length, formation);
+  kinds.forEach((kind, i) => {
+    const s = soldier(m, kind);
+    s.position.set(pos[i][0], 0, pos[i][1]);
+    if (formation === 'shields' && kind === 'infantry') {
+      // Pavese: grande scudo davanti al fante
+      s.add(box(0.02, 0.17, 0.12, enemy ? tabardBlue : tabardRed, 0.06, 0.02, 0));
+      s.add(box(0.021, 0.04, 0.124, k.planks, 0.061, 0.08, 0));
     }
-    row += Math.ceil(show(n) / perRow);
-  };
-  place(f.infantry, 'infantry', 5);
-  place(f.archers, 'archers', 5);
-  place(f.cavalry, 'cavalry', 4);
+    g.add(s);
+  });
+  if (formation === 'square') {
+    const inner = slots(archers.length, 'line');
+    archers.forEach((kind, i) => {
+      const s = soldier(m, kind);
+      s.position.set(inner[i][0] * 0.6 - 0.1, 0, inner[i][1] * 0.6);
+      g.add(s);
+    });
+  }
+  const back = Math.min(...pos.map((p) => p[0]), 0) - 0.3;
   for (let i = 0; i < Math.min(f.rams, 3); i++) {
     const r = ram();
-    r.position.set(-(row + 0.6) * 0.22, 0, (i - 1) * 0.35);
+    r.position.set(back - 0.1, 0, (i - 1) * 0.35);
     g.add(r);
   }
-  if (f.rams) row += 2;
   for (let i = 0; i < Math.min(f.trebuchets, 2); i++) {
     const t = trebuchet();
-    t.position.set(-(row + 1) * 0.22, 0, (i - 0.5) * 0.45);
+    t.position.set(back - (f.rams ? 0.55 : 0.2), 0, (i - 0.5) * 0.45);
     g.add(t);
   }
   const baked = bake(g);
@@ -176,13 +214,13 @@ export class ArmyView {
       if (!a.resolved && a.arriveDay > a.departDay) show(`in:${a.id}`, a.troops, away, home, a.departDay, a.arriveDay, true);
     }
     // Reparti comandati dai giocatori
-    const place = (id: string, f: Force, x: number, z: number, heading: number, moving: boolean, enemy: boolean) => {
-      const key = `${id}:${JSON.stringify(f)}`;
+    const place = (id: string, f: Force, x: number, z: number, heading: number, moving: boolean, enemy: boolean, formation: Formation = 'line') => {
+      const key = `${id}:${JSON.stringify(f)}:${formation}`;
       seen.add(id);
       let a = this.armies.get(id);
       if (!a || a.key !== key) {
         if (a) this.group.remove(a.obj);
-        a = { obj: buildArmy(f, enemy), key };
+        a = { obj: buildArmy(f, enemy, formation), key };
         a.obj.name = `army:${id}`;
         const ring = new THREE.Mesh(ringGeo, ringMat);
         ring.userData.ring = true;
@@ -196,14 +234,15 @@ export class ArmyView {
       a.obj.rotation.y = heading;
       for (const ch of a.obj.children) if (ch.userData.ring) ch.visible = this.selected.has(id);
     };
-    for (const c of g.state.companies ?? []) place(c.id, c.troops, c.x, c.z, c.heading ?? 0, !!c.path?.length, false);
+    for (const c of g.state.companies ?? []) place(c.id, c.troops, c.x, c.z, c.heading ?? 0, !!c.path?.length, false, c.formation);
+    this.updatePaths(g.state.companies ?? []);
     for (const c of g.enemyCompanies) {
       const prev = this.shown.get(c.id) ?? { x: c.x, z: c.z };
       const moving = Math.hypot(c.x - prev.x, c.z - prev.z) > 0.01;
       prev.x += (c.x - prev.x) * 0.15;
       prev.z += (c.z - prev.z) * 0.15;
       this.shown.set(c.id, prev);
-      place(`e:${c.id}`, c.troops, prev.x, prev.z, c.heading ?? 0, moving, true);
+      place(`e:${c.id}`, c.troops, prev.x, prev.z, c.heading ?? 0, moving, true, c.formation);
     }
     for (const [id, a] of this.armies) {
       if (seen.has(id)) continue;
@@ -212,6 +251,47 @@ export class ArmyView {
         if (o instanceof THREE.Mesh) o.geometry.dispose();
       });
       this.armies.delete(id);
+    }
+  }
+
+  private paths = new Map<string, { line: THREE.Line; marker: THREE.Group; key: string }>();
+  private pathMat = new THREE.LineDashedMaterial({ color: 0xffd54a, dashSize: 0.3, gapSize: 0.2, transparent: true, opacity: 0.85, depthTest: false });
+
+  /** Percorso tratteggiato e bandierina di arrivo per i reparti selezionati. */
+  private updatePaths(list: Company[]) {
+    const keep = new Set<string>();
+    for (const c of list) {
+      if (!this.selected.has(c.id) || !c.path?.length) continue;
+      keep.add(c.id);
+      const key = `${c.path.length}:${c.path[c.path.length - 1]}:${Math.round(c.x * 4)}:${Math.round(c.z * 4)}`;
+      let p = this.paths.get(c.id);
+      if (p && p.key === key) continue;
+      const pts = [new THREE.Vector3(c.x, this.terrain.heightAt(c.x, c.z) + 0.08, c.z)];
+      for (const [x, z] of c.path) pts.push(new THREE.Vector3(x + 0.5, this.terrain.heightAt(x + 0.5, z + 0.5) + 0.08, z + 0.5));
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      if (!p) {
+        const line = new THREE.Line(geo, this.pathMat);
+        line.renderOrder = 5;
+        const marker = new THREE.Group();
+        marker.add(cyl(0.015, 0.015, 0.5, mats().beam, 0, 0, 0, 4));
+        marker.add(box(0.2, 0.12, 0.01, ringMat, 0.1, 0.36, 0));
+        p = { line, marker, key };
+        this.paths.set(c.id, p);
+        this.group.add(line, marker);
+      } else {
+        p.line.geometry.dispose();
+        p.line.geometry = geo;
+        p.key = key;
+      }
+      p.line.computeLineDistances();
+      const end = pts[pts.length - 1];
+      p.marker.position.copy(end).setY(end.y - 0.08);
+    }
+    for (const [id, p] of this.paths) {
+      if (keep.has(id)) continue;
+      this.group.remove(p.line, p.marker);
+      p.line.geometry.dispose();
+      this.paths.delete(id);
     }
   }
 

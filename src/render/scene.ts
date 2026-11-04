@@ -572,6 +572,20 @@ export class WorldRenderer {
     return { x: p.x, z: p.z };
   }
 
+  /** Posizione sullo schermo (pixel nel canvas) di un punto del terreno. */
+  toScreen(x: number, z: number): { x: number; y: number; visible: boolean } {
+    const v = new THREE.Vector3(x, this.terrainView.heightAt(x, z), z).project(this.camera);
+    const rect = this.canvas.getBoundingClientRect();
+    return { x: rect.left + ((v.x + 1) / 2) * rect.width, y: rect.top + ((1 - v.y) / 2) * rect.height, visible: v.z < 1 };
+  }
+
+  /** Sposta la telecamera su un punto mantenendo l'inquadratura. */
+  focus(x: number, z: number) {
+    const off = this.camera.position.clone().sub(this.controls.target);
+    this.controls.target.set(x, 0, z);
+    this.camera.position.copy(this.controls.target).add(off);
+  }
+
   setSelectedCompanies(ids: string[]) {
     this.armyView.setSelected(ids);
   }

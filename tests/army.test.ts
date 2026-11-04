@@ -169,3 +169,98 @@ describe('stagioni graduali', () => {
     expect(seasonMix(359).to).toBe('spring');
   });
 });
+
+describe('formazioni e comandi', () => {
+  it('il quadrato regge la carica di cavalleria, la linea no', () => {
+    const a = world(0);
+    const mk = (form: 'line' | 'square') => {
+      const g = world(1);
+      g.state.army.infantry = 20;
+      const c = g.formCompany(F({ infantry: 20 }))!;
+      c.formation = form;
+      return c;
+    };
+    a.state.army.cavalry = 8;
+    const cav = a.formCompany(F({ cavalry: 8 }))!;
+    cav.formation = 'wedge';
+    const vsLine = a.fieldStrength([cav], [mk('line')]);
+    const vsSquare = a.fieldStrength([cav], [mk('square')]);
+    expect(vsSquare).toBeLessThan(vsLine * 0.6);
+  });
+
+  it('la colonna marcia più veloce, il quadrato più lento', () => {
+    const g = world(0, false);
+    g.state.army.infantry = 30;
+    const c = g.formCompany(F({ infantry: 10 }))!;
+    const base = g.companySpeed(c);
+    c.formation = 'column';
+    expect(g.companySpeed(c)).toBeGreaterThan(base);
+    c.formation = 'square';
+    expect(g.companySpeed(c)).toBeLessThan(base);
+  });
+
+  it('più reparti mossi insieme si schierano in fila e marciano alla velocità del più lento', () => {
+    const g = world(0, false);
+    Object.assign(g.state.army, { infantry: 20, cavalry: 10 });
+    const inf = g.formCompany(F({ infantry: 20 }))!;
+    const cav = g.formCompany(F({ cavalry: 10 }))!;
+    const [x, z] = g.homeSite();
+    g.orderMove([inf.id, cav.id], x + 12, z);
+    expect(cav.groupSpeed).toBeCloseTo(g.companySpeed(inf));
+    const endA = inf.path!.at(-1)!;
+    const endB = cav.path!.at(-1)!;
+    expect(endA).not.toEqual(endB); // destinazioni diverse, una accanto all'altra
+    expect(Math.abs(endA[0] - endB[0])).toBeLessThanOrEqual(1); // fila perpendicolare alla marcia (asse x)
+  });
+
+  it('Maiusc aggiunge una tappa al percorso invece di sostituirlo', () => {
+    const g = world(0, false);
+    g.state.army.infantry = 5;
+    const c = g.formCompany(F({ infantry: 5 }))!;
+    const [x, z] = g.homeSite();
+    g.orderMove([c.id], x + 8, z);
+    const first = c.path!.length;
+    g.orderMove([c.id], x + 8, z + 8, true);
+    expect(c.path!.length).toBeGreaterThan(first);
+    expect(c.path!.at(-1)).toEqual([x + 8, z + 8]);
+  });
+
+  it('i reparti aggressivi inseguono i nemici vicini, quelli difensivi no', () => {
+    const g = world(0);
+    g.state.army.infantry = 20;
+    const agg = g.formCompany(F({ infantry: 10 }))!;
+    const def = g.formCompany(F({ infantry: 10 }))!;
+    agg.behavior = 'aggressive';
+    g.setEnemyCompanies([{ id: 'e1', troops: F({ infantry: 5 }), x: agg.x + 4, z: agg.z, order: 'idle' }]);
+    g.advance(0.25);
+    expect(agg.order).toBe('move');
+    expect(def.order).toBe('idle');
+  });
+
+  it('la testuggine riduce le perdite nell\'assalto alle mura', () => {
+    const b = world(1);
+    const [bx, bz] = b.homeSite();
+    b.place('keep_wood', bx - 1, bz - 1);
+    const r = 4;
+    b.placeLine('palisade', lineTiles(bx - r, bz - r, bx + r, bz - r));
+    b.placeLine('palisade', lineTiles(bx - r, bz + r, bx + r, bz + r));
+    b.placeLine('palisade', lineTiles(bx - r, bz - r + 1, bx - r, bz + r - 1));
+    b.placeLine('palisade', lineTiles(bx + r, bz - r + 1, bx + r, bz + r - 1));
+    Object.assign(b.state.army, { infantry: 2, archers: 10 });
+    const losses = (arrows: number) => {
+      let sum = 0;
+      for (let i = 0; i < 6; i++) {
+        const st = JSON.parse(JSON.stringify(b.state));
+        const g = new Game(st, mulberry32(i));
+        g.terrain.tiles.fill(Tile.Grass);
+        g.receiveAttack({ id: `x${i}`, from: 'N', troops: F({ infantry: 30 }), stance: 'resolute', departDay: g.state.day, arriveDay: g.state.day, tactics: { arrows, melee: 1 } });
+        let res = 0;
+        g.onAttackResolved((r) => (res = r.attackerLosses));
+        g.advance(0.25);
+        sum += res;
+      }
+      return sum;
+    };
+    expect(losses(0.5)).toBeLessThan(losses(1));
+  });
+});

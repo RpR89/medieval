@@ -193,6 +193,9 @@ export class MatchSession {
       order: c.order,
       engaged: c.engaged,
       heading: c.heading,
+      formation: c.formation,
+      behavior: c.behavior,
+      path: c.path?.length ? [c.path[c.path.length - 1]] : undefined,
     }));
     const key = JSON.stringify(list);
     if (!force && key === this.companiesKey) return;

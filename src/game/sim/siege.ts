@@ -48,6 +48,9 @@ export interface AttackerArmy extends Troops {
   trebuchets: number;
   /** Quota di perdite oltre la quale l'esercito si ritira (0-1). */
   morale: number;
+  /** Formazione: quota di perdite da frecce subite (Testuggine = 0,5) e forza in mischia. */
+  arrows?: number;
+  melee?: number;
 }
 
 export type SiegeOutcome = 'repelled' | 'held' | 'sacked';
@@ -148,6 +151,8 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
   };
   const atkStart = total(atk);
   const armoryMul = def.armory ? 1.2 : 1;
+  const arrowsF = atkIn.arrows ?? 1;
+  const meleeF = atkIn.melee ?? 1;
   let charcoal = def.charcoal;
   let charcoalUsed = 0;
   let rounds = 0;
@@ -198,7 +203,7 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
     log.push('La cinta muraria non è chiusa: il nemico entra dal varco senza dover assaltare le mura.');
     for (let r = 0; r < 2; r++) {
       rounds++;
-      casualties(atk, firepower(false) * 0.6, atkLoss);
+      casualties(atk, firepower(false) * 0.6 * arrowsF, atkLoss);
     }
     if (broken()) {
       log.push('Le perdite sono troppe: il nemico si ritira.');
@@ -228,7 +233,7 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
     );
     for (let r = 0; r < approach && !broken(); r++) {
       rounds++;
-      casualties(atk, firepower(false) * exposure, atkLoss);
+      casualties(atk, firepower(false) * exposure * arrowsF, atkLoss);
       const cover = walls().some((w) => has(w, 'walkway')) ? 0.65 : 0.35;
       casualties(gar, atk.archers * 0.5 * (1 - cover), defLoss);
     }
@@ -250,7 +255,7 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
           f += 15;
           pitchRounds--;
         }
-        casualties(atk, f, atkLoss);
+        casualties(atk, f * arrowsF, atkLoss);
         hit(target, breachRate(target));
         casualties(gar, atk.archers * 0.3, defLoss);
       }
@@ -269,7 +274,7 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
       // Salire sulle scale sotto il tiro costa caro prima ancora di arrivare in cima
       casualties(atk, total(atk) * UNIT_HP.infantry * (0.15 + 0.1 * walk), atkLoss);
       const d = guard(gar) * armoryMul * height + firepower(true);
-      const a = melee(atk, 0.2) * 0.6;
+      const a = melee(atk, 0.2) * 0.6 * meleeF;
       const b = battle(d, a);
       if (b.aWins) {
         casualties(atk, total(atk) * UNIT_HP.infantry * 0.7, atkLoss);
@@ -290,7 +295,7 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
     // ───── 4. Battaglia nella breccia (o nel varco) ─────
     const narrow = breachUid !== undefined ? 1.4 : 1.0;
     const d = guard(gar) * armoryMul * narrow;
-    const a = melee(atk, breachUid !== undefined ? 0.5 : 1);
+    const a = melee(atk, breachUid !== undefined ? 0.5 : 1) * meleeF;
     const b = battle(d, a);
     rounds++;
     if (b.aWins) {

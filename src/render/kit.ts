@@ -31,6 +31,9 @@ function build() {
     beam: plain(0x3b2a1c),
     thatch: textured(t.thatch, 0xf0d9a0, {}, 1.2),
     roofTile: textured(t.roofTiles, 0xf0c0a8, {}, 1),
+    slate: textured(t.roofTiles, 0x7a8692, {}, 0.8),
+    shingle: textured(t.planks, 0xb89a74, {}, 0.9),
+    logWall: textured(t.bark, 0xb08860, {}, 0.8),
     plaster: textured(t.plaster, 0xffffff, {}, 0.3),
     wattle: textured(t.plaster, 0xc9b58f, {}, 0.5),
     soil: textured(t.soil, 0xffffff, {}, 1),
@@ -69,7 +72,7 @@ function build() {
 
 /** Materiali su cui si posa la neve d'inverno. */
 const SNOWY: Array<keyof ReturnType<typeof build>> = [
-  'road', 'paving', 'stone', 'stoneDark', 'stoneLight', 'planks', 'darkPlanks', 'log', 'thatch', 'roofTile', 'grassMound', 'straw', 'earth',
+  'road', 'paving', 'slate', 'shingle', 'stone', 'stoneDark', 'stoneLight', 'planks', 'darkPlanks', 'log', 'thatch', 'roofTile', 'grassMound', 'straw', 'earth',
 ];
 
 let cache: ReturnType<typeof build> | null = null;

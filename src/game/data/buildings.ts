@@ -48,6 +48,8 @@ export type SeasonalCurve = [number, number, number, number];
 
 export interface BuildingDef {
   id: string;
+  /** Icona breve per il menu di costruzione. */
+  icon: string;
   name: string;
   category: BuildingCategory;
   description: string;
@@ -98,6 +100,7 @@ export const BUILDINGS: BuildingDef[] = [
   // ───── Fortificazioni ─────
   {
     id: 'keep_wood',
+    icon: '🏯',
     fort: 'keep',
     hp: 300,
     name: 'Motta con torre lignea',
@@ -116,6 +119,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'keep_stone',
+    icon: '🏰',
     fort: 'keep',
     hp: 1000,
     name: 'Mastio in pietra',
@@ -133,6 +137,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'palisade',
+    icon: '🪵',
     fort: 'wall',
     hp: 60,
     name: 'Palizzata',
@@ -148,6 +153,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'tower_wood',
+    icon: '🗼',
     fort: 'tower',
     hp: 140,
     name: 'Torre lignea',
@@ -162,6 +168,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'gate_wood',
+    icon: '🚪',
     fort: 'gate',
     hp: 90,
     name: 'Porta lignea',
@@ -176,6 +183,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'moat',
+    icon: '💧',
     fort: 'moat',
     name: 'Fossato',
     category: 'fortification',
@@ -190,6 +198,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'wall_stone',
+    icon: '🧱',
     fort: 'wall',
     hp: 220,
     name: 'Mura in pietra',
@@ -205,6 +214,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'tower_square',
+    icon: '♜',
     fort: 'tower',
     hp: 450,
     name: 'Torre quadrata',
@@ -219,6 +229,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'gate_stone',
+    icon: '⛩️',
     fort: 'gate',
     hp: 320,
     name: 'Porta in pietra',
@@ -233,6 +244,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'tower_round',
+    icon: '🛕',
     fort: 'tower',
     hp: 560,
     name: 'Torre circolare',
@@ -247,6 +259,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'gatehouse',
+    icon: '🏛️',
     fort: 'gate',
     hp: 650,
     name: 'Corpo di guardia',
@@ -263,6 +276,7 @@ export const BUILDINGS: BuildingDef[] = [
   // ───── Abitazioni ─────
   {
     id: 'hut',
+    icon: '🛖',
     name: 'Capanna',
     category: 'housing',
     description: 'Abitazione contadina in legno e paglia.',
@@ -275,6 +289,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'house',
+    icon: '🏠',
     name: 'Casa in muratura',
     category: 'housing',
     description: 'Casa in pietra e legno con tetto in coppi.',
@@ -289,6 +304,7 @@ export const BUILDINGS: BuildingDef[] = [
   // ───── Agricoltura ─────
   {
     id: 'field_grain',
+    icon: '🌾',
     name: 'Campo di grano',
     category: 'farming',
     description: 'Si raccoglie in estate. In inverno il campo riposa.',
@@ -302,6 +318,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'field_vegetables',
+    icon: '🥬',
     name: 'Orto',
     category: 'farming',
     description: 'Rape, cavoli, fave e cipolle: produce quasi tutto l\'anno.',
@@ -315,6 +332,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'hay_meadow',
+    icon: '🌿',
     name: 'Prato da fieno',
     category: 'farming',
     description: 'Fienagione in estate: il fieno nutre gli animali d\'inverno.',
@@ -330,6 +348,7 @@ export const BUILDINGS: BuildingDef[] = [
   // ───── Allevamento ─────
   {
     id: 'pasture_cattle',
+    icon: '🐄',
     name: 'Pascolo bovino',
     category: 'animals',
     description: 'Vacche e buoi: latte, carne e pelli. D\'inverno mangiano molto fieno.',
@@ -342,6 +361,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'pasture_pigs',
+    icon: '🐖',
     name: 'Porcile',
     category: 'animals',
     description: 'I maiali si ingrassano in autunno nel bosco e si macellano a inizio inverno.',
@@ -354,6 +374,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'pasture_goats',
+    icon: '🐐',
     name: 'Recinto caprino',
     category: 'animals',
     description: 'Capre robuste: latte e pelo, poche pretese.',
@@ -366,6 +387,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'dairy',
+    icon: '🧀',
     name: 'Caseificio',
     category: 'animals',
     description: 'Trasforma il latte deperibile in formaggio che si conserva.',
@@ -381,6 +403,7 @@ export const BUILDINGS: BuildingDef[] = [
   // ───── Raccolta ─────
   {
     id: 'woodcutter',
+    icon: '🪓',
     name: 'Taglialegna',
     category: 'gathering',
     description: 'Abbatte alberi nel bosco vicino.',
@@ -394,6 +417,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'hunter',
+    icon: '🦌',
     name: 'Capanno del cacciatore',
     category: 'gathering',
     description: 'Caccia a cervi e cinghiali: carne e pelli. Meglio in autunno.',
@@ -407,6 +431,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'fisher',
+    icon: '🎣',
     name: 'Capanno del pescatore',
     category: 'gathering',
     description: 'Pesca di fiume o di mare. D\'inverno si esce poco.',
@@ -420,6 +445,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'quarry',
+    icon: '⛏️',
     name: 'Cava di pietra',
     category: 'gathering',
     description: 'Estrae blocchi da costruzione. Va costruita sulla roccia.',
@@ -433,6 +459,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'gold_mine',
+    icon: '💰',
     name: 'Miniera d\'oro',
     category: 'gathering',
     description: 'Scavata su una vena aurifera. Consuma carbone per lampade e fusione.',
@@ -448,6 +475,7 @@ export const BUILDINGS: BuildingDef[] = [
   // ───── Produzione ─────
   {
     id: 'charcoal_kiln',
+    icon: '🔥',
     name: 'Carbonaia',
     category: 'industry',
     description: 'Cumulo di legna che brucia lentamente: legna → carbone.',
@@ -461,6 +489,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'granary',
+    icon: '📦',
     name: 'Granaio',
     category: 'industry',
     description: 'Aumenta la capacità dei magazzini.',
@@ -475,6 +504,7 @@ export const BUILDINGS: BuildingDef[] = [
   // ───── Commercio ─────
   {
     id: 'market',
+    icon: '⚖️',
     name: 'Mercato',
     category: 'trade',
     description: 'Permette di comprare e vendere merci e aumenta le tasse.',
@@ -491,6 +521,7 @@ export const BUILDINGS: BuildingDef[] = [
   // ───── Esercito ─────
   {
     id: 'barracks',
+    icon: '🛡️',
     name: 'Caserma',
     category: 'military',
     description: 'Addestra la fanteria.',
@@ -503,6 +534,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'archery',
+    icon: '🏹',
     name: 'Campo degli arcieri',
     category: 'military',
     description: 'Addestra gli arcieri, che difendono meglio dalle torri.',
@@ -515,6 +547,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'stable',
+    icon: '🐎',
     name: 'Scuderia',
     category: 'military',
     description: 'Addestra la cavalleria. I cavalli mangiano fieno.',
@@ -527,6 +560,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'siege_workshop',
+    icon: '🛠️',
     name: 'Officina d\'assedio',
     category: 'military',
     description: 'Costruisce arieti (dal 1000) e trabucchi (dal 1200) per assaltare i castelli nemici.',
@@ -541,6 +575,7 @@ export const BUILDINGS: BuildingDef[] = [
   // ───── Strade ─────
   {
     id: 'road',
+    icon: '🟫',
     name: 'Strada sterrata',
     category: 'infrastructure',
     description: 'Collega gli edifici al castello o al mercato: chi è collegato produce il 15% in più.',
@@ -554,6 +589,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'road_paved',
+    icon: '🛣️',
     name: 'Strada lastricata',
     category: 'infrastructure',
     description: 'Selciato in pietra: come la strada sterrata, ma i carri corrono di più (+25%).',
@@ -567,6 +603,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'bridge',
+    icon: '🌉',
     name: 'Ponte in legno',
     category: 'infrastructure',
     description: 'Attraversa il fiume e prosegue la rete stradale.',

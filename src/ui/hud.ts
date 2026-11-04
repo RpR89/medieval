@@ -10,7 +10,7 @@ import {
 import { formatDate } from '../game/data/calendar';
 import { eraForYear } from '../game/data/eras';
 import { canAfford, formatCost, RESOURCE_IDS, RESOURCES, TAX_LEVELS, type ResourceId } from '../game/data/resources';
-import { ENGINES, UNITS, type EngineType, type Stance } from '../game/data/units';
+import { BEHAVIORS, ENGINES, FORMATIONS, UNITS, type Behavior, type EngineType, type Formation, type Stance } from '../game/data/units';
 import type { Force } from '../game/sim/state';
 import type { Game } from '../game/sim/game';
 import type { PlacedBuilding } from '../game/sim/state';
@@ -181,12 +181,20 @@ export class Hud {
     const year = this.game.date.year;
     for (const def of BUILDINGS.filter((b) => b.category === this.category)) {
       if (def.maxYear !== undefined && year >= def.maxYear) continue;
+      const thumb = el('span', { class: 'thumb', 'data-id': def.id }, el('span', { class: 'emoji', text: def.icon }));
+      const url = this.thumbs.get(def.id);
+      if (url) thumb.append(el('img', { src: url, alt: '' }));
       const btn = el(
         'button',
         { class: 'build-item', title: def.description },
-        el('span', { class: 'name', text: def.name }),
-        el('span', { class: 'cost', text: formatCost(def.cost) }),
-        el('span', { class: 'meta', text: this.metaFor(def.id) }),
+        thumb,
+        el(
+          'span',
+          { class: 'text' },
+          el('span', { class: 'name', text: def.name }),
+          el('span', { class: 'cost', text: formatCost(def.cost) }),
+          el('span', { class: 'meta', text: this.metaFor(def.id) }),
+        ),
       );
       btn.onclick = () => {
         if (btn.classList.contains('locked')) return;
@@ -221,6 +229,16 @@ export class Hud {
       const meta = btn.querySelector('.meta')!;
       const text = locked ? `🔒 Dal ${def.minYear}` : this.metaFor(id);
       if (meta.textContent !== text) meta.textContent = text;
+    }
+  }
+
+  private thumbs = new Map<string, string>();
+
+  /** Miniatura 3D pronta: la mostra accanto all'edificio nel menu. */
+  setThumbnail(id: string, url: string) {
+    this.thumbs.set(id, url);
+    for (const t of this.buildList.querySelectorAll<HTMLElement>(`.thumb[data-id="${id}"]`)) {
+      if (!t.querySelector('img')) t.append(el('img', { src: url, alt: '' }));
     }
   }
 
@@ -372,7 +390,7 @@ export class Hud {
     const comps = (g.state.companies ?? []).filter((c) => this.compIds.includes(c.id));
     this.compPanel.classList.toggle('hidden', !comps.length);
     if (!comps.length) return;
-    const key = JSON.stringify(comps.map((c) => [c.id, c.troops, c.order, c.engaged, c.cargo]));
+    const key = JSON.stringify(comps.map((c) => [c.id, c.troops, c.order, c.engaged, c.cargo, c.formation, c.behavior]));
     if (key === this.compKey) return;
     this.compKey = key;
     const t = { infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0 };
@@ -405,14 +423,46 @@ export class Hud {
       );
     }
     buttons.push(btn('✕', () => this.cb.selectCompanies?.([])));
+    const curF = comps[0].formation ?? 'line';
+    const sameF = comps.every((c) => (c.formation ?? 'line') === curF);
+    const formRow = el(
+      'div',
+      { class: 'row formations' },
+      ...(Object.keys(FORMATIONS) as Formation[]).map((f) => {
+        const d = FORMATIONS[f];
+        const b = btn(`${d.icon} ${d.name}`, () => g.setFormation(ids, f), `${d.description} (velocità ×${d.speed}, attacco ×${d.attack}, difesa ×${d.defense})`);
+        if (sameF && f === curF) b.classList.add('active');
+        return b;
+      }),
+    );
+    const curB = comps[0].behavior ?? 'defensive';
+    const sameB = comps.every((c) => (c.behavior ?? 'defensive') === curB);
+    const behRow = el(
+      'div',
+      { class: 'row formations' },
+      ...(Object.keys(BEHAVIORS) as Behavior[]).map((k) => {
+        const d = BEHAVIORS[k];
+        const b = btn(`${d.icon} ${d.name}`, () => g.setBehavior(ids, k), d.description);
+        if (sameB && k === curB) b.classList.add('active');
+        return b;
+      }),
+    );
     this.compPanel.replaceChildren(
       el('div', { class: 'row' }, el('strong', { text: comps.length === 1 ? '🚩 Reparto' : `🚩 ${comps.length} reparti` }), el('span', { class: 'spacer' })),
       el('p', {
         class: 'small',
         text: `${t.infantry} 🛡️ fanti · ${t.archers} 🏹 arcieri · ${t.cavalry} 🐎 cavalieri${t.rams ? ` · ${t.rams} 🪵 arieti` : ''}${t.trebuchets ? ` · ${t.trebuchets} 🎯 trabucchi` : ''}${cargo ? ` · 💰 bottino ${Math.round(cargo)}` : ''}`,
       }),
-      el('p', { class: 'small muted', text: comps.some((c) => c.engaged) ? 'In battaglia…' : 'Tasto destro sulla mappa: muovi · su un edificio nemico: attacca' }),
+      el('p', { class: 'small muted', text: comps.some((c) => c.engaged) ? 'In battaglia…' : `${FORMATIONS[curF].description}` }),
+      el('div', { class: 'small strong', text: 'Formazione (F)' }),
+      formRow,
+      el('div', { class: 'small strong', text: 'Comportamento' }),
+      behRow,
       el('div', { class: 'row' }, ...buttons),
+      el('p', {
+        class: 'small muted',
+        text: 'Tasto destro: muovi · Maiusc+destro: aggiungi tappa · destro su nemico: attacca · Maiusc+trascina: seleziona a riquadro · Ctrl+A: tutti · Ctrl+1…5: gruppo · H: rientra',
+      }),
     );
   }
 

@@ -4,6 +4,7 @@ import type { Season, SeasonMix } from '../game/data/calendar';
 import type { BuildingDef, Species } from '../game/data/buildings';
 import { mulberry32 } from '../game/world/terrain';
 import {
+  archWindow,
   bake,
   box,
   cone,
@@ -245,32 +246,69 @@ export function updateHerd(obj: THREE.Object3D, def: BuildingDef, count: number)
 
 // ───────────── Edifici ─────────────
 
-function hut(g: G, x: number, z: number, s = 1, chimneySmoke = true) {
+function hut(g: G, x: number, z: number, s = 1, chimneySmoke = true, seed = 0) {
   const k = mats();
+  const rand = mulberry32(seed * 977 + 13);
+  // Varianti stabili per edificio: pareti, tetto e piccoli dettagli
+  const walls = seed ? [k.wattle, k.wattle, k.planks, k.logWall][Math.floor(rand() * 4)] : k.wattle;
+  const roof = seed ? [k.thatch, k.thatch, k.shingle][Math.floor(rand() * 3)] : k.thatch;
+  const tall = seed ? 0.95 + rand() * 0.15 : 1;
   g.add(box(0.72 * s, 0.06, 0.62 * s, k.stoneDark, x, 0, z));
-  g.add(box(0.66 * s, 0.42 * s, 0.56 * s, k.wattle, x, 0.04, z));
+  g.add(box(0.66 * s, 0.42 * s * tall, 0.56 * s, walls, x, 0.04, z));
   for (const [cx, cz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-    g.add(box(0.05, 0.44 * s, 0.05, k.beam, x + cx * 0.33 * s, 0.04, z + cz * 0.28 * s));
+    g.add(box(0.05, 0.44 * s * tall, 0.05, k.beam, x + cx * 0.33 * s, 0.04, z + cz * 0.28 * s));
   }
-  g.add(gableRoof(0.75 * s, 0.62 * s, 0.42 * s, k.thatch, k.wattle, x, 0.46 * s, z, 0.1 * s));
-  door(g, x + 0.1 * s, z + 0.285 * s, 0, 0.14 * s, 0.28 * s);
-  windowShutters(g, x - 0.18 * s, 0.22 * s, z + 0.285 * s, 0, 0.08 * s, 0.08 * s);
-  if (chimneySmoke) g.add(smoke(x - 0.15 * s, 0.85 * s, z, 3, 0.6));
+  g.add(gableRoof(0.75 * s, 0.62 * s, 0.42 * s, roof, walls, x, 0.46 * s * tall, z, 0.1 * s));
+  const doorX = seed && rand() < 0.5 ? -0.1 : 0.1;
+  door(g, x + doorX * s, z + 0.285 * s, 0, 0.14 * s, 0.28 * s);
+  windowShutters(g, x - doorX * 1.8 * s, 0.22 * s, z + 0.285 * s, 0, 0.08 * s, 0.08 * s);
+  if (chimneySmoke) g.add(smoke(x + (doorX > 0 ? -0.15 : 0.15) * s, 0.85 * s * tall, z, 3, 0.6));
+  if (!seed) return;
+  // Dettagli: legnaia, botte, orticello recintato o panca
+  const extra = Math.floor(rand() * 4);
+  if (extra === 0) logPile(g, x + 0.34 * s, z - 0.05, 0, 2);
+  else if (extra === 1) barrel(g, x - 0.38 * s, z + 0.3 * s, 0.8);
+  else if (extra === 2) {
+    for (let i = 0; i < 4; i++) g.add(box(0.025, 0.1, 0.025, k.beam, x - 0.42 * s, 0, z - 0.25 + i * 0.12));
+    g.add(sphere(0.045, k.leafGreen, x - 0.38 * s, 0.03, z - 0.05, 0));
+  } else g.add(box(0.22, 0.05, 0.06, k.planks, x - 0.15 * s, 0.08, z + 0.36 * s));
 }
 
-function house(g: G) {
+function house(g: G, seed = 0) {
   const k = mats();
-  // Piano terra in pietra, primo piano a graticcio in aggetto
+  const rand = mulberry32(seed * 131 + 7);
+  const roof = [k.roofTile, k.roofTile, k.slate, k.shingle][Math.floor(rand() * 4)];
+  const stoneHouse = rand() < 0.3;
+  // Piano terra in pietra; sopra graticcio in aggetto oppure tutta in pietra
   g.add(box(1.7, 0.45, 0.72, k.stone, 0, 0, 0));
-  timberFrame(g, 1.8, 0.45, 0.82, 0, 0.45, 0);
-  g.add(box(1.86, 0.04, 0.88, k.beam, 0, 0.44, 0));
-  g.add(gableRoof(1.8, 0.82, 0.55, k.roofTile, k.plaster, 0, 0.9, 0, 0.12));
-  door(g, -0.45, 0.365, 0, 0.18, 0.34);
-  for (const wx of [0.1, 0.55]) windowShutters(g, wx, 0.22, 0.37, 0, 0.12, 0.12);
-  for (const wx of [-0.55, 0, 0.55]) windowShutters(g, wx, 0.65, 0.42, 0, 0.12, 0.13);
-  for (const wx of [-0.4, 0.4]) windowShutters(g, wx, 0.65, -0.42, PI, 0.12, 0.13);
-  chimney(g, 0.6, 1.1, -0.15, 0.45);
-  barrel(g, 0.8, 0.5);
+  if (stoneHouse) {
+    g.add(box(1.72, 0.45, 0.74, k.stoneLight, 0, 0.45, 0));
+    g.add(box(1.78, 0.05, 0.8, k.stoneDark, 0, 0.44, 0));
+    g.add(gableRoof(1.76, 0.74, 0.5, roof, k.stoneLight, 0, 0.9, 0, 0.1));
+  } else {
+    timberFrame(g, 1.8, 0.45, 0.82, 0, 0.45, 0);
+    g.add(box(1.86, 0.04, 0.88, k.beam, 0, 0.44, 0));
+    g.add(gableRoof(1.8, 0.82, 0.55, roof, k.plaster, 0, 0.9, 0, 0.12));
+  }
+  const left = rand() < 0.5;
+  door(g, left ? -0.45 : 0.45, 0.365, 0, 0.18, 0.34);
+  for (const wx of left ? [0.1, 0.55] : [-0.1, -0.55]) windowShutters(g, wx, 0.22, 0.37, 0, 0.12, 0.12);
+  const fz = stoneHouse ? 0.38 : 0.42;
+  for (const wx of [-0.55, 0, 0.55]) {
+    windowShutters(g, wx, 0.65, fz, 0, 0.12, 0.13);
+    // Fioriere sotto alcune finestre
+    if (rand() < 0.45) g.add(box(0.14, 0.04, 0.05, k.leafGreen, wx, 0.57, fz + 0.03));
+  }
+  for (const wx of [-0.4, 0.4]) windowShutters(g, wx, 0.65, -fz, PI, 0.12, 0.13);
+  chimney(g, left ? 0.6 : -0.6, 1.1, -0.15, 0.45);
+  // Abbaino su alcune case
+  if (rand() < 0.4) {
+    g.add(box(0.22, 0.18, 0.2, stoneHouse ? k.stoneLight : k.plaster, 0, 1.0, 0.2));
+    g.add(gableRoof(0.26, 0.24, 0.12, roof, null, 0, 1.18, 0.2, 0.03));
+    windowShutters(g, 0, 1.06, 0.31, 0, 0.08, 0.08);
+  }
+  if (rand() < 0.6) barrel(g, left ? 0.8 : -0.8, 0.5);
+  else crate(g, left ? 0.78 : -0.78, 0.48);
 }
 
 
@@ -425,6 +463,14 @@ function barracks(g: G) {
   }
   chimney(g, 0.6, 1.0, -0.2, 0.35);
   g.add(flag(k.flag, -0.85, 0.2, 0.75, 0.3));
+  // Manichini da addestramento
+  for (const x of [0.15, 0.85]) {
+    g.add(box(0.03, 0.34, 0.03, k.beam, x, 0, 0.85));
+    g.add(box(0.2, 0.025, 0.025, k.beam, x, 0.26, 0.85));
+    const sack = sphere(0.06, k.rope, x, 0.3, 0.85, 0);
+    sack.scale.set(1, 1.3, 1);
+    g.add(sack);
+  }
 }
 
 function archery(g: G) {
@@ -471,23 +517,47 @@ function stable(g: G) {
 
 function dairy(g: G) {
   const k = mats();
-  g.add(box(0.85, 0.12, 0.7, k.stone, 0, 0, 0));
-  timberFrame(g, 0.8, 0.45, 0.65, 0, 0.12, 0);
-  g.add(gableRoof(0.85, 0.65, 0.35, k.roofTile, k.plaster, 0, 0.57, 0, 0.08));
-  door(g, -0.15, 0.33, 0, 0.14, 0.28);
-  g.children.at(-2)!.position.y = 0.12;
-  g.children.at(-1)!.position.y = 0.4;
-  for (const x of [0.25, 0.38]) {
-    g.add(cyl(0.05, 0.06, 0.18, k.planks, x, 0, 0.42, 8));
-    g.add(cyl(0.035, 0.035, 0.04, k.planks, x, 0.18, 0.42, 8));
+  // Casera in pietra con tetto di ardesia, scaffale delle forme e zangole
+  g.add(box(0.85, 0.5, 0.7, k.stone, 0, 0, 0));
+  g.add(gableRoof(0.88, 0.7, 0.32, k.slate, k.stone, 0, 0.5, 0, 0.08));
+  g.add(archWindow(-0.15, 0, 0.36, 0.16, 0.32, 0));
+  windowShutters(g, 0.22, 0.28, 0.36, 0, 0.1, 0.1);
+  // Scaffale con forme di formaggio
+  g.add(box(0.06, 0.32, 0.3, k.planks, 0.46, 0, -0.05));
+  for (const y of [0.08, 0.2]) {
+    g.add(box(0.12, 0.015, 0.3, k.planks, 0.5, y, -0.05));
+    for (const zz of [-0.12, 0, 0.12]) {
+      const w = cyl(0.045, 0.045, 0.04, k.straw, 0.5, y + 0.015, -0.05 + zz, 10);
+      g.add(w);
+    }
   }
-  g.add(smoke(0.2, 0.95, -0.1, 3, 0.6));
+  for (const x of [-0.32, -0.2]) {
+    g.add(cyl(0.05, 0.06, 0.18, k.planks, x, 0, 0.45, 8));
+    g.add(cyl(0.035, 0.035, 0.04, k.planks, x, 0.18, 0.45, 8));
+    g.add(cyl(0.01, 0.01, 0.12, k.beam, x, 0.18, 0.45, 4));
+  }
+  g.add(smoke(0.2, 0.9, -0.15, 3, 0.6));
 }
 
 function woodcutter(g: G) {
   const k = mats();
-  workshopHut(g, -0.12, -0.15, 0.75);
-  logPile(g, 0.25, 0.3, PI / 2, 3);
+  // Tettoia aperta con tetto di scandole, cataste e cavalletto per segare
+  for (const [x, z] of [[-0.4, -0.35], [0.05, -0.35], [-0.4, 0.05], [0.05, 0.05]]) g.add(box(0.05, 0.42, 0.05, k.log, x, 0, z));
+  g.add(box(0.5, 0.36, 0.04, k.planks, -0.175, 0, -0.37));
+  g.add(gableRoof(0.6, 0.5, 0.2, k.shingle, null, -0.175, 0.42, -0.15, 0.06));
+  logPile(g, -0.18, -0.15, PI / 2, 3);
+  logPile(g, 0.3, 0.25, 0, 4);
+  // Cavalletto con un tronco
+  for (const s of [-1, 1]) {
+    const leg = box(0.02, 0.2, 0.02, k.beam, 0.32 + s * 0.05, 0, -0.25);
+    leg.rotation.x = s * 0.4;
+    g.add(leg);
+  }
+  const log = cyl(0.04, 0.04, 0.35, k.log, 0.32, 0, -0.25, 7);
+  log.rotation.z = PI / 2;
+  log.position.set(0.32, 0.19, -0.25);
+  log.geometry.translate(0, -0.175, 0);
+  g.add(log);
   g.add(cyl(0.1, 0.12, 0.14, k.log, -0.3, 0, 0.33, 8));
   const axe = box(0.015, 0.2, 0.015, k.planks, -0.3, 0.14, 0.33);
   axe.rotation.z = 0.4;
@@ -497,15 +567,29 @@ function woodcutter(g: G) {
 
 function hunter(g: G) {
   const k = mats();
-  workshopHut(g, 0, -0.15, 0.8);
-  // Rastrelliera con pelli ad asciugare
+  // Capanna di pelli a cono con fuoco per affumicare la carne
+  g.add(cone(0.32, 0.7, k.cowBrown, -0.12, 0, -0.12, 8));
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * PI * 2;
+    const p = cyl(0.01, 0.012, 0.85, k.beam, -0.12 + Math.cos(a) * 0.05, 0, -0.12 + Math.sin(a) * 0.05, 4);
+    p.rotation.set(Math.sin(a) * 0.28, 0, -Math.cos(a) * 0.28);
+    g.add(p);
+  }
+  g.add(box(0.12, 0.2, 0.02, k.dark, -0.12, 0, 0.18));
+  // Rastrelliera con pelli e carne appesa
   for (const x of [0.1, 0.42]) g.add(box(0.03, 0.4, 0.03, k.beam, x, 0, 0.35));
   g.add(box(0.36, 0.03, 0.03, k.beam, 0.26, 0.38, 0.35));
-  const hide = box(0.24, 0.2, 0.01, k.cowBrown, 0.26, 0.16, 0.35);
-  g.add(hide);
-  // Palchi di cervo sopra la porta
+  g.add(box(0.12, 0.18, 0.01, k.cowBrown, 0.18, 0.18, 0.35));
+  g.add(box(0.06, 0.12, 0.04, k.cowBrown, 0.34, 0.24, 0.35));
+  // Fuoco e trofeo di palchi
+  g.add(cyl(0.08, 0.09, 0.03, k.stoneDark, 0.3, 0, -0.25, 8));
+  const fire = box(0.06, 0.05, 0.06, k.fire, 0.3, 0.03, -0.25);
+  fire.castShadow = false;
+  g.add(fire);
+  g.add(smoke(0.3, 0.1, -0.25, 3, 0.5));
+  g.add(box(0.03, 0.5, 0.03, k.beam, -0.42, 0, 0.32));
   for (const s of [-1, 1]) {
-    const a = box(0.012, 0.09, 0.012, k.horn, 0.08 + s * 0.03, 0.42, 0.08);
+    const a = box(0.012, 0.12, 0.012, k.horn, -0.42 + s * 0.04, 0.5, 0.32);
     a.rotation.z = s * 0.5;
     g.add(a);
   }
@@ -573,8 +657,8 @@ export function buildModel(def: BuildingDef, ctx: ModelCtx = {}): THREE.Group {
     case 'road': road(g, ctx, false); break;
     case 'road_paved': road(g, ctx, true); break;
     case 'bridge': bridge(g, ctx); break;
-    case 'hut': hut(g, 0, -0.05, 1); break;
-    case 'house': house(g); break;
+    case 'hut': hut(g, 0, -0.05, 1, true, seed); break;
+    case 'house': house(g, seed); break;
     case 'field_grain':
     case 'field_vegetables':
     case 'hay_meadow': field(g, def, seed); break;

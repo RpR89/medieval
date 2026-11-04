@@ -7,6 +7,7 @@ import type { GameState } from './game/sim/state';
 import { SupabaseRealm, type RealmPlayer } from './net/realm';
 import { MatchSession } from './net/matchSession';
 import { moodFor, Music } from './audio/music';
+import { makeThumbnails } from './render/thumbs';
 import { WorldRenderer, type PointerTile, type Quality } from './render/scene';
 import { el } from './ui/dom';
 import { Hud } from './ui/hud';
@@ -139,6 +140,8 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
     match ? `⚔️ ${match.info.name} · 👤 ${session.name}` : session.userId ? `👤 ${session.name}` : '👤 Ospite',
   );
   hud.myId = session.userId;
+  // Miniature 3D degli edifici nel menu di costruzione (generate in sottofondo)
+  makeThumbnails((id, url) => hud.setThumbnail(id, url));
   if (realm) {
     realm.onPlayers((p) => hud.setPlayers(p));
     realm.onChat((m) => hud.addChat(m));
@@ -211,8 +214,16 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
     );
   }
 
+  // Selezione a riquadro: Maiusc + trascina col tasto sinistro
+  let boxStart: { x: number; y: number } | null = null;
+  const boxEl = el('div', { class: 'select-box hidden' });
+  app.append(boxEl);
   canvas.addEventListener('pointerdown', (e) => {
     down = { x: e.clientX, y: e.clientY, button: e.button };
+    if (e.button === 0 && e.shiftKey && !tool) {
+      boxStart = { x: e.clientX, y: e.clientY };
+      view.controls.enabled = false;
+    }
     const t = view.pick(e.clientX, e.clientY);
     if (tool && e.button === 0 && t) {
       if (getBuilding(tool).draggable) {
@@ -223,6 +234,12 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
   });
   canvas.addEventListener('pointermove', (e) => {
     hover = view.pick(e.clientX, e.clientY);
+    if (boxStart) {
+      const x0 = Math.min(boxStart.x, e.clientX);
+      const y0 = Math.min(boxStart.y, e.clientY);
+      Object.assign(boxEl.style, { left: `${x0}px`, top: `${y0}px`, width: `${Math.abs(e.clientX - boxStart.x)}px`, height: `${Math.abs(e.clientY - boxStart.y)}px` });
+      boxEl.classList.toggle('hidden', Math.hypot(e.clientX - boxStart.x, e.clientY - boxStart.y) < 6);
+    }
     if (lineStart) updateLinePreview();
     updateGhost();
   });
@@ -231,6 +248,26 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
     updateGhost();
   });
   window.addEventListener('pointerup', (e) => {
+    if (boxStart) {
+      const big = Math.hypot(e.clientX - boxStart.x, e.clientY - boxStart.y) >= 6;
+      if (big) {
+        const x0 = Math.min(boxStart.x, e.clientX);
+        const x1 = Math.max(boxStart.x, e.clientX);
+        const y0 = Math.min(boxStart.y, e.clientY);
+        const y1 = Math.max(boxStart.y, e.clientY);
+        const inside = (game.state.companies ?? []).filter((c) => {
+          const p = view.toScreen(c.x, c.z);
+          return p.visible && p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
+        });
+        selectCompanies([...new Set([...selectedCompanies, ...inside.map((c) => c.id)])]);
+        select(null);
+        down = null;
+      }
+      boxStart = null;
+      boxEl.classList.add('hidden');
+      view.controls.enabled = true;
+      if (big) return;
+    }
     if (lineStart && tool) {
       const end = view.pick(e.clientX, e.clientY) ?? hover ?? lineStart;
       const r = game.placeLine(tool, lineFrom(end));
@@ -247,10 +284,16 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
         const p = view.pickPoint(e.clientX, e.clientY);
         if (t && p) {
           const b = game.buildingAt(t.x, t.z);
+          const foe = game.enemyCompanies.find((c) => Math.hypot(c.x - p.x, c.z - p.z) < 1);
           if (b && game.isForeign(b)) {
             const r = game.orderAttack(selectedCompanies, t.x + 0.5, t.z + 0.5);
             hud.toast(r.ok ? '⚔️ All\'attacco!' : r.reason ?? '', r.ok ? 'good' : 'bad');
-          } else game.orderMove(selectedCompanies, p.x, p.z);
+          } else if (foe) {
+            // Contro un reparto nemico: lo si va a ingaggiare
+            game.orderMove(selectedCompanies, foe.x, foe.z);
+            game.setBehavior(selectedCompanies, 'aggressive');
+            hud.toast('⚔️ Ingaggiate il nemico!', 'good');
+          } else game.orderMove(selectedCompanies, p.x, p.z, e.shiftKey); // Maiusc: aggiunge una tappa
         }
       } else if (down.button === 0 && !tool) {
         const p = view.pickPoint(e.clientX, e.clientY);
@@ -272,8 +315,48 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
     updateGhost();
   });
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  // Gruppi rapidi: Ctrl+1…5 assegna, 1…5 richiama (due volte: centra la telecamera)
+  const groups = new Map<string, string[]>();
+  let lastGroupKey = { key: '', at: 0 };
   window.addEventListener('keydown', (e) => {
     if (hud.isTyping) return;
+    const comps = game.state.companies ?? [];
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && comps.length) {
+      e.preventDefault();
+      selectCompanies(comps.map((c) => c.id));
+      return;
+    }
+    if (/^[1-5]$/.test(e.key)) {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        groups.set(e.key, [...selectedCompanies]);
+        hud.toast(`Gruppo ${e.key}: ${selectedCompanies.length} reparti.`, 'info');
+      } else {
+        const ids = (groups.get(e.key) ?? []).filter((id) => comps.some((c) => c.id === id));
+        if (ids.length) {
+          selectCompanies(ids);
+          const now = performance.now();
+          if (lastGroupKey.key === e.key && now - lastGroupKey.at < 450) {
+            const cs = comps.filter((c) => ids.includes(c.id));
+            view.focus(cs.reduce((s, c) => s + c.x, 0) / cs.length, cs.reduce((s, c) => s + c.z, 0) / cs.length);
+          }
+          lastGroupKey = { key: e.key, at: now };
+        }
+      }
+      return;
+    }
+    if (selectedCompanies.length && !e.ctrlKey) {
+      const order: Array<'line' | 'column' | 'wedge' | 'square' | 'shields'> = ['line', 'column', 'wedge', 'square', 'shields'];
+      if (e.key.toLowerCase() === 'f') {
+        const cur = comps.find((c) => c.id === selectedCompanies[0])?.formation ?? 'line';
+        game.setFormation(selectedCompanies, order[(order.indexOf(cur) + 1) % order.length]);
+        return;
+      }
+      if (e.key.toLowerCase() === 'h') {
+        game.orderHome(selectedCompanies);
+        return;
+      }
+    }
     if (e.key === 'Escape') {
       lineStart = null;
       view.setLinePreview(null);

@@ -19,7 +19,7 @@ import {
   type Cost,
   type ResourceId,
 } from '../data/resources';
-import { CARRY, ENGINES, MARCH_SPEED, SOLDIER_FOOD, STANCES, UNITS, type EngineType, type Stance } from '../data/units';
+import { CARRY, ENGINES, FORMATIONS, MARCH_SPEED, SOLDIER_FOOD, STANCES, UNITS, type Behavior, type EngineType, type Formation, type Stance } from '../data/units';
 import { UPGRADE_BY_ID, upgradesFor, type UpgradeDef } from '../data/upgrades';
 import {
   generateTerrain,
@@ -1194,6 +1194,8 @@ export class Game {
       rams: a.troops.rams,
       trebuchets: a.troops.trebuchets,
       morale: STANCES[a.stance]?.morale ?? 0.5,
+      arrows: a.tactics?.arrows,
+      melee: a.tactics?.melee,
     };
     const res = this.besiege(army);
     const lost = res.attackerLosses;
@@ -1442,7 +1444,8 @@ export class Game {
     let v = Infinity;
     for (const k of ['infantry', 'archers', 'cavalry'] as const) if (c.troops[k] > 0) v = Math.min(v, MARCH_SPEED[k]);
     for (const k of ['rams', 'trebuchets'] as const) if (c.troops[k] > 0) v = Math.min(v, ENGINES[k].speed);
-    return isFinite(v) ? v : 4;
+    v = (isFinite(v) ? v : 4) * FORMATIONS[c.formation ?? 'line'].speed;
+    return c.groupSpeed ? Math.min(v, c.groupSpeed) : v;
   }
 
   private spawnPoint(): [number, number] {
@@ -1480,7 +1483,7 @@ export class Game {
     for (const k of ['rams', 'trebuchets'] as const) this.engines()[k] -= f[k];
     const [x, z] = this.spawnPoint();
     const slot = this.state.match?.slot ?? 0;
-    const c: Company = { id: `c${slot}-${this.state.nextUid++}`, troops: { ...f }, x, z, order: 'idle' };
+    const c: Company = { id: `c${slot}-${this.state.nextUid++}`, troops: { ...f }, x, z, order: 'idle', formation: 'line', behavior: 'defensive' };
     this.companies().push(c);
     this.emit();
     return c;
@@ -1490,33 +1493,81 @@ export class Game {
     return this.companies().filter((c) => ids.includes(c.id) && !c.engaged);
   }
 
-  private route(c: Company, tx: number, tz: number) {
+  private route(c: Company, tx: number, tz: number, append = false) {
     const size = this.terrain.size;
     const gx = Math.max(0, Math.min(size - 1, Math.floor(tx)));
     const gz = Math.max(0, Math.min(size - 1, Math.floor(tz)));
-    c.path = findPath(size, [Math.floor(c.x), Math.floor(c.z)], [gx, gz], (x, z) => this.moveCost(x, z));
+    const last = append && c.path?.length ? c.path[c.path.length - 1] : null;
+    const from: [number, number] = last ? [last[0], last[1]] : [Math.floor(c.x), Math.floor(c.z)];
+    const seg = findPath(size, from, [gx, gz], (x, z) => this.moveCost(x, z));
+    c.path = last ? [...c.path!, ...seg] : seg;
+  }
+
+  /**
+   * Punti di arrivo per un gruppo: in fila perpendicolare alla direzione di marcia,
+   * centrata sul punto scelto (fanti al centro, arcieri e cavalieri ai lati).
+   */
+  private spread(list: Company[], tx: number, tz: number): Array<[number, number]> {
+    if (list.length === 1) return [[tx, tz]];
+    const cx = list.reduce((s, c) => s + c.x, 0) / list.length;
+    const cz = list.reduce((s, c) => s + c.z, 0) / list.length;
+    let dx = tx - cx;
+    let dz = tz - cz;
+    const d = Math.hypot(dx, dz) || 1;
+    dx /= d;
+    dz /= d;
+    const px = -dz;
+    const pz = dx;
+    const gap = 1.5;
+    return list.map((_, i) => {
+      const k = (i % 2 ? 1 : -1) * Math.ceil(i / 2);
+      return [tx + px * k * gap, tz + pz * k * gap];
+    });
+  }
+
+  private orderGroup(list: Company[], tx: number, tz: number, order: Company['order'], append: boolean) {
+    // Fanti al centro della fila
+    const sorted = [...list].sort((a, b) => b.troops.infantry - a.troops.infantry);
+    const pts = this.spread(sorted, tx, tz);
+    const slowest = Math.min(...sorted.map((c) => {
+      const g = c.groupSpeed;
+      c.groupSpeed = undefined;
+      const v = this.companySpeed(c);
+      c.groupSpeed = g;
+      return v;
+    }));
+    sorted.forEach((c, i) => {
+      this.route(c, pts[i][0], pts[i][1], append && c.order === order);
+      c.order = order;
+      c.groupSpeed = sorted.length > 1 ? slowest : undefined;
+    });
   }
 
   /** Ordine di movimento verso una casella. Con più reparti si dispongono in formazione attorno al punto. */
-  orderMove(ids: string[], tx: number, tz: number) {
+  /** Ordine di movimento. Con `append` (Maiusc) aggiunge una tappa al percorso già assegnato. */
+  orderMove(ids: string[], tx: number, tz: number, append = false) {
     const list = this.own(ids);
-    list.forEach((c, i) => {
-      const off = i === 0 ? [0, 0] : [Math.cos(i * 2.4) * 1.2, Math.sin(i * 2.4) * 1.2];
-      this.route(c, tx + off[0], tz + off[1]);
-      c.order = 'move';
-      c.target = undefined;
-    });
+    for (const c of list) c.target = undefined;
+    this.orderGroup(list, tx, tz, 'move', append);
+    this.emit();
+  }
+
+  setFormation(ids: string[], f: Formation) {
+    for (const c of this.companies()) if (ids.includes(c.id)) c.formation = f;
+    this.emit();
+  }
+
+  setBehavior(ids: string[], b: Behavior) {
+    for (const c of this.companies()) if (ids.includes(c.id)) c.behavior = b;
     this.emit();
   }
 
   /** Ordine d'attacco: marciare contro un edificio dell'avversario e assaltare il castello. */
   orderAttack(ids: string[], tx: number, tz: number): PlaceCheck {
     if (!this.state.match || !this.others.length) return { ok: false, reason: 'Nessun castello nemico da attaccare' };
-    for (const c of this.own(ids)) {
-      this.route(c, tx, tz);
-      c.order = 'attack';
-      c.target = [tx, tz];
-    }
+    const list = this.own(ids);
+    this.orderGroup(list, tx, tz, 'attack', false);
+    for (const c of list) c.target = [tx, tz];
     this.emit();
     return { ok: true };
   }
@@ -1657,6 +1708,24 @@ export class Game {
         if (d > 1e-6) c.heading = Math.atan2(-dz, dx);
       }
       const arrived = !c.path?.length;
+      if (arrived) c.groupSpeed = undefined;
+      // Comportamento aggressivo: da fermo insegue il nemico più vicino entro 6 caselle
+      if (c.order === 'idle' && c.behavior === 'aggressive' && this.enemyCompanies.length) {
+        let best: Company | null = null;
+        let bd = 6;
+        for (const e of this.enemyCompanies) {
+          const d = Math.hypot(e.x - c.x, e.z - c.z);
+          if (d < bd) {
+            bd = d;
+            best = e;
+          }
+        }
+        if (best && bd > 1) {
+          this.route(c, best.x, best.z);
+          c.order = 'move';
+          continue;
+        }
+      }
       if (c.order === 'home' && this.nearHome(c, 3.2)) {
         this.mergeHome(c);
         continue;
@@ -1705,7 +1774,20 @@ export class Game {
       c.engaged = id;
       c.path = [];
     }
-    const a: IncomingAttack = { id, from: this.state.castleName, troops, stance: 'resolute', departDay: this.state.day, arriveDay: this.state.day };
+    const soldiers = Math.max(1, group.reduce((s, c) => s + c.troops.infantry + c.troops.archers + c.troops.cavalry, 0));
+    const share = (fn: (c: Company) => number) => group.reduce((s, c) => s + fn(c) * (c.troops.infantry + c.troops.archers + c.troops.cavalry), 0) / soldiers;
+    const a: IncomingAttack = {
+      id,
+      from: this.state.castleName,
+      troops,
+      stance: 'resolute',
+      departDay: this.state.day,
+      arriveDay: this.state.day,
+      tactics: {
+        arrows: share((c) => FORMATIONS[c.formation ?? 'line'].arrows),
+        melee: share((c) => FORMATIONS[c.formation ?? 'line'].attack),
+      },
+    };
     this.log(`All'assalto! ${troops.infantry + troops.archers + troops.cavalry} soldati attaccano le mura nemiche.`, 'info');
     for (const fn of this.assaultListeners) fn(a);
     this.emit();
@@ -1760,9 +1842,8 @@ export class Game {
       const a = mine.filter((x) => !used.has(x.id) && Math.hypot(x.x - c.x, x.z - c.z) < 2.2);
       const b = theirs.filter((x) => !used.has(x.id) && Math.hypot(x.x - foe.x, x.z - foe.z) < 2.2);
       for (const x of [...a, ...b]) used.add(x.id);
-      const power = (g: Company[]) => g.reduce((s, x) => s + x.troops.infantry * 3 + x.troops.archers * 2.5 + x.troops.cavalry * 7, 0);
-      const pa = power(a);
-      const pb = power(b);
+      const pa = this.fieldStrength(a, b);
+      const pb = this.fieldStrength(b, a);
       if (pa <= 0 || pb <= 0) continue;
       const winA = pa >= pb;
       const surv = Math.sqrt(Math.abs(pa * pa - pb * pb)) / Math.max(pa, pb);
@@ -1787,6 +1868,27 @@ export class Game {
       out.push({ enemyLosses: theirLoss, text: winA ? 'Sconfitta in campo aperto: i nostri ripiegano.' : 'Vittoria in campo aperto!' });
     }
     return out;
+  }
+
+  /**
+   * Forza di un gruppo in campo aperto contro un altro: formazione (attacco e tenuta), frecce
+   * subite secondo la formazione nemica, cariche di cavalleria contro i quadrati, comportamento.
+   */
+  fieldStrength(g: Company[], foes: Company[]): number {
+    const foeSoldiers = Math.max(1, foes.reduce((s, x) => s + x.troops.infantry + x.troops.archers + x.troops.cavalry, 0));
+    const avg = (fn: (f: (typeof FORMATIONS)[Formation]) => number) =>
+      foes.reduce((s, x) => s + fn(FORMATIONS[x.formation ?? 'line']) * (x.troops.infantry + x.troops.archers + x.troops.cavalry), 0) / foeSoldiers;
+    const foeArrows = avg((f) => f.arrows);
+    const foeVsCav = avg((f) => f.vsCavalry);
+    let total = 0;
+    for (const x of g) {
+      const f = FORMATIONS[x.formation ?? 'line'];
+      const atk = (x.troops.infantry * 3 + x.troops.archers * 2.5 * foeArrows + (x.troops.cavalry * 7) / foeVsCav) * f.attack;
+      const still = !x.path?.length;
+      const stance = still && x.behavior === 'hold' ? 1.35 : still && x.behavior === 'defensive' ? 1.2 : 1;
+      total += atk * f.defense * stance;
+    }
+    return total;
   }
 
   /** Applica perdite ai propri reparti (scontro in campo calcolato da questo o dall'altro giocatore). */
