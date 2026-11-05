@@ -1,5 +1,6 @@
 /** Calendario di gioco: a velocità 1× un giorno dura SECONDS_PER_DAY secondi reali. */
-export const SECONDS_PER_DAY = 4;
+/** Una stagione (90 giorni) dura 2,5 minuti a velocità 1×. */
+export const SECONDS_PER_DAY = 150 / 90;
 export const DAYS_PER_SEASON = 90;
 export const DAYS_PER_YEAR = DAYS_PER_SEASON * 4;
 export const START_YEAR = 900;
@@ -37,8 +38,24 @@ export function dateFromDays(totalDays: number): GameDate {
   return { year, season, dayOfSeason: dayOfYear % DAYS_PER_SEASON, dayOfYear };
 }
 
+/** L'anno di gioco comincia in primavera: marzo è il primo mese. */
+export const MONTHS = ['Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre', 'Gennaio', 'Febbraio'];
+
+export function monthName(date: GameDate): string {
+  return MONTHS[Math.min(11, Math.floor(date.dayOfYear / 30))];
+}
+
 export function formatDate(date: GameDate): string {
-  return `${SEASON_ICONS[date.season]} ${SEASON_NAMES[date.season]}, giorno ${date.dayOfSeason + 1} — Anno ${date.year}`;
+  return `${SEASON_ICONS[date.season]} ${SEASON_NAMES[date.season]} · ${monthName(date)} ${date.year}`;
+}
+
+/** Durata leggibile: giorni se brevissima, poi settimane, poi mesi. */
+export function formatDuration(days: number): string {
+  const d = Math.max(0, days);
+  if (d < 10) return `${Math.max(1, Math.round(d))} ${Math.round(d) === 1 ? 'giorno' : 'giorni'}`;
+  if (d < 45) return `${Math.round(d / 7)} settimane`;
+  const m = Math.round(d / 30);
+  return `${m} ${m === 1 ? 'mese' : 'mesi'}`;
 }
 
 /** Giorni finali di ogni stagione in cui si sfuma nella successiva. */

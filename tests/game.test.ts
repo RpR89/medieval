@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Game } from '../src/game/sim/game';
 import { createInitialState, migrateState } from '../src/game/sim/state';
-import { dateFromDays, DAYS_PER_YEAR } from '../src/game/data/calendar';
+import { dateFromDays, DAYS_PER_YEAR, formatDate, formatDuration } from '../src/game/data/calendar';
 import { generateTerrain, isBuildableLand, MAP_SIZE, Tile, tileAt } from '../src/game/world/terrain';
 import { getBuilding } from '../src/game/data/buildings';
 
@@ -181,5 +181,44 @@ describe('fiume', () => {
 describe('risorse della mappa', () => {
   it('ogni mappa ha almeno una vena d\'oro raggiungibile', () => {
     for (let seed = 0; seed < 200; seed++) expect(generateTerrain(seed).tiles.includes(Tile.Gold)).toBe(true);
+  });
+});
+
+describe('tempo, epoche e bilancio', () => {
+  it('si può cominciare da un\'epoca successiva, con più risorse', () => {
+    const a = createInitialState(1);
+    const b = createInitialState(1, 'X', { startYear: 1250 });
+    expect(dateFromDays(b.day).year).toBe(1250);
+    expect(b.resources.stone).toBeGreaterThan(a.resources.stone * 5);
+    expect(b.population).toBeGreaterThan(a.population);
+    expect(b.nextRaidDay).toBeGreaterThan(b.day);
+    // Nel 1250 la motta non c'è più: si parte direttamente dal mastio in pietra
+    const g = new Game(b);
+    g.terrain.tiles.fill(Tile.Grass);
+    const [x, z] = g.homeSite();
+    expect(g.canPlace('keep_wood', x - 1, z - 1).ok).toBe(false);
+    expect(g.place('keep_stone', x - 1, z - 1)).not.toBeNull();
+    expect(g.castleLevel()).toBe(3);
+  });
+
+  it('la data mostra il mese e le durate si leggono in settimane e mesi', () => {
+    expect(formatDate(dateFromDays(0))).toMatch(/Marzo 900/);
+    expect(formatDate(dateFromDays(100))).toMatch(/Giugno 900/);
+    expect(formatDate(dateFromDays(300))).toMatch(/Gennaio 900/);
+    expect(formatDuration(3)).toBe('3 giorni');
+    expect(formatDuration(21)).toBe('3 settimane');
+    expect(formatDuration(180)).toBe('6 mesi');
+  });
+
+  it('il bilancio mensile mette a confronto tasse e paga dei soldati', () => {
+    const g = new Game(createInitialState(1));
+    g.state.population = 40;
+    const b0 = g.budget();
+    expect(b0.taxes).toBeCloseTo(40 * 0.05 * 30);
+    expect(b0.perPerson).toBeCloseTo(1.5);
+    g.state.army.infantry = 20;
+    const b1 = g.budget();
+    expect(b1.army).toBeCloseTo(20 * 0.15 * 30);
+    expect(b1.net).toBeLessThan(0);
   });
 });

@@ -47,9 +47,11 @@ export class WorldRenderer {
   /** Edifici con parti animate (bandiere, fumo, animali, colture). */
   private animated: Array<{ b: PlacedBuilding; obj: THREE.Object3D; herd: boolean }> = [];
   private batches = new StaticBatches();
+  private frustum = new THREE.Frustum();
+  private tmpMat = new THREE.Matrix4();
+  private tmpSphere = new THREE.Sphere();
   private armyView!: ArmyView;
   private shadowDirty = true;
-  private shadowFrame = 0;
   private shadowCenter = new THREE.Vector3(1e9, 0, 0);
   private shadowHalf = 0;
   private linePreview: THREE.InstancedMesh;
@@ -646,10 +648,8 @@ export class WorldRenderer {
       this.structureVersion = this.game.structureVersion;
       this.syncBuildings();
     }
-    const frustum = new THREE.Frustum().setFromProjectionMatrix(
-      new THREE.Matrix4().multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse),
-    );
-    const sphere = new THREE.Sphere();
+    const frustum = this.frustum.setFromProjectionMatrix(this.tmpMat.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
+    const sphere = this.tmpSphere;
     for (const { b, obj, herd } of this.animated) {
       const def = getBuilding(b.defId);
       if (herd) updateHerd(obj, def, Math.round(b.herd ?? 0));
@@ -668,12 +668,11 @@ export class WorldRenderer {
     tg.z = THREE.MathUtils.clamp(tg.z, 0, lim);
     this.controls.update();
     this.updateSunShadow();
-    // Mappa delle ombre: subito se è cambiato qualcosa, altrimenti a un terzo dei fotogrammi
-    // (si muovono solo animali e bandiere). Il vento non sposta le ombre.
-    if (this.shadowDirty || ++this.shadowFrame >= 3) {
+    // Mappa delle ombre: solo quando cambia qualcosa (costruzioni, stagione, inquadratura).
+    // Ciò che si muove di continuo non proietta ombre: così il ritmo dei fotogrammi resta regolare.
+    if (this.shadowDirty) {
       this.renderer.shadowMap.needsUpdate = true;
       this.shadowDirty = false;
-      this.shadowFrame = 0;
     }
     if (this.aoPass.enabled) this.composer.render(dt);
     else {

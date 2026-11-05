@@ -7,7 +7,7 @@ import {
   type BuildingCategory,
   type UnitType,
 } from '../game/data/buildings';
-import { formatDate } from '../game/data/calendar';
+import { formatDate, formatDuration } from '../game/data/calendar';
 import { eraForYear } from '../game/data/eras';
 import { canAfford, formatCost, RESOURCE_IDS, RESOURCES, TAX_LEVELS, type ResourceId } from '../game/data/resources';
 import { BEHAVIORS, ENGINES, FORMATIONS, UNITS, type Behavior, type EngineType, type Formation, type Stance } from '../game/data/units';
@@ -19,6 +19,15 @@ import { SIDE_COLORS } from '../render/armies';
 import type { PlacedBuilding } from '../game/sim/state';
 import type { ChatMessage, RealmPlayer } from '../net/realm';
 import { el, escapeHtml, fmt } from './dom';
+
+/** Aggiorna l'HTML solo se è cambiato (evita di ricalcolare l'impaginazione per nulla). */
+function setHtml(e: HTMLElement, html: string) {
+  // Si confronta con l'ultimo testo impostato (l'innerHTML del browser è normalizzato e differirebbe)
+  if (e.dataset.html !== html) {
+    e.innerHTML = html;
+    e.dataset.html = html;
+  }
+}
 
 export interface HudCallbacks {
   onTool(defId: string | null): void;
@@ -502,7 +511,7 @@ export class Hud {
       return b;
     });
     const moodBar = el('div', { class: 'hp-bar' });
-    const moodText = el('p', { class: 'small' });
+    const moodText = el('div', { class: 'small' });
     const moodParts = el('p', { class: 'small muted' });
     const tax = el(
       'div',
@@ -554,10 +563,23 @@ export class Hud {
       moodBar.style.width = `${Math.round(h)}%`;
       moodBar.className = `hp-bar ${h < 30 ? 'ruin' : h < 50 ? 'damaged' : ''}`;
       const trend = mood.total > h + 1 ? '↗' : mood.total < h - 1 ? '↘' : '→';
-      moodText.innerHTML = `Contento <strong>${Math.round(h)}</strong>/100 ${trend} ${Math.round(mood.total)} · gettito <strong>${fmt(g.taxPerDay())}</strong> 🪙/giorno · produzione ×${g.productivity().toFixed(2)}${h < 30 ? ' · <span class="bad">la gente se ne va!</span>' : ''}${h < 20 ? ' <span class="bad">Rischio di tumulti!</span>' : ''}`;
+      const bud = g.budget();
+      const money = (n: number) => `${n >= 0 ? '' : '−'}${fmt(Math.abs(n))}`;
+      setHtml(
+        moodText,
+        `Contento <strong>${Math.round(h)}</strong>/100 ${trend} ${Math.round(mood.total)} · produzione ×${g.productivity().toFixed(2)}${h < 30 ? ' · <span class="bad">la gente se ne va!</span>' : ''}${h < 20 ? ' <span class="bad">Rischio di tumulti!</span>' : ''}
+        <table class="budget">
+          <tr><td>🪙 Tasse (${Math.floor(g.state.population)} abitanti × ${bud.perPerson.toFixed(1)})</td><td>+${fmt(bud.taxes)}/mese</td></tr>
+          ${bud.tribute ? `<tr><td>👑 Tributi dei vassalli</td><td>+${fmt(bud.tribute)}/mese</td></tr>` : ''}
+          <tr><td>⚔️ Paga dei soldati</td><td>−${fmt(bud.army)}/mese</td></tr>
+          ${bud.engines ? `<tr><td>🪵 Macchine d'assedio</td><td>−${fmt(bud.engines)}/mese</td></tr>` : ''}
+          <tr class="${bud.net < 0 ? 'bad' : 'good'}"><td><strong>Saldo</strong></td><td><strong>${money(bud.net)}/mese</strong></td></tr>
+        </table>
+        ${bud.net < 0 ? `<p class="small bad">Le spese superano le entrate: con ${fmt(g.state.resources.coins)} monete resisti circa ${Math.max(0, Math.floor(g.state.resources.coins / -bud.net))} mesi, poi i soldati diserteranno.</p>` : ''}`,
+      );
       moodParts.textContent = mood.parts.map(([n, v]) => `${n} ${v >= 0 ? '+' : ''}${v}`).join(' · ');
       const era = eraForYear(s.date.year);
-      defense.innerHTML = `
+      setHtml(defense, `
         <h4>🏰 Difese</h4>
         <p class="${d.closed ? 'good' : 'bad'}">${d.closed
           ? '✓ Cinta muraria chiusa attorno al mastio'
@@ -570,7 +592,7 @@ export class Hud {
           <tr><td>Mastio</td><td>${fmt(d.keep)}</td></tr>
           <tr><td>⚔️ Guarnigione</td><td>${fmt(d.army)} (${s.soldiers} soldati)</td></tr>
         </table>
-        ${d.damaged || d.ruined ? `<p class="bad small">Danneggiate: ${d.damaged} · In rovina: ${d.ruined}</p>` : ''}`;
+        ${d.damaged || d.ruined ? `<p class="bad small">Danneggiate: ${d.damaged} · In rovina: ${d.ruined}</p>` : ''}`);
       repairAll.classList.toggle('hidden', !d.damaged && !d.ruined && !g.state.buildings.some((b) => (b.hp ?? 0) < g.maxHp(b)));
       const ls = g.state.lastSiege;
       if (ls && ls.day !== lastSiege) {
@@ -580,7 +602,7 @@ export class Hud {
           <p class="${ls.outcome === 'repelled' ? 'good' : 'bad'}">${title} · caduti nemici ${ls.attackerLosses}, nostri ${ls.defenderLosses}${ls.loot ? ` · bottino ${ls.loot} 🪙` : ''}</p>
           <ol class="small siege-log">${ls.log.map((l) => `<li>${escapeHtml(l)}</li>`).join('')}</ol>`;
       }
-      body.innerHTML = `
+      setHtml(body, `
         <h4>${escapeHtml(era.name)}</h4>
         <p class="muted small">${escapeHtml(era.description)}</p>
         <table>
@@ -589,7 +611,7 @@ export class Hud {
           <tr><td>🍞 Cibo al giorno</td><td>${fmt(s.foodPerDay)}</td></tr>
           <tr><td>📦 Magazzini</td><td>${s.storage} per risorsa</td></tr>
         </table>
-        <p class="small muted">Il cibo si consuma partendo da quello più deperibile. Una dieta varia fa crescere la popolazione più in fretta.</p>`;
+        <p class="small muted">Il cibo si consuma partendo da quello più deperibile. Una dieta varia fa crescere la popolazione più in fretta.</p>`);
     };
   }
 
@@ -636,7 +658,7 @@ export class Hud {
         reasons.get(u)!.textContent = c.ok ? '' : c.reason ?? '';
       }
       const d = Math.ceil(this.game.daysToRaid());
-      info.textContent = `Difesa totale: ${fmt(this.game.fortDefense() * 0.8 + this.game.armyPower())}. Gli arcieri rendono di più con le torri. Le spie segnalano movimenti di predoni tra circa ${d} giorni.`;
+      info.textContent = `Difesa totale: ${fmt(this.game.fortDefense() * 0.8 + this.game.armyPower())}. Gli arcieri rendono di più con le torri. Le spie segnalano movimenti di predoni tra circa ${formatDuration(d)}.`;
       refreshEngines();
       refreshWar();
     };
@@ -996,9 +1018,9 @@ export class Hud {
     this.raidEl.textContent = invaders
       ? `⚔️ ${invaders} soldati nemici nel tuo territorio!`
       : incoming
-      ? `⚔️ ${incoming.from} in arrivo (${Math.max(0, Math.ceil(incoming.arriveDay - g.state.day))} gg)`
+      ? `⚔️ ${incoming.from} in arrivo (${formatDuration(incoming.arriveDay - g.state.day)})`
       : days < 60
-        ? `⚠️ Predoni in avvicinamento (${Math.ceil(days)} gg)`
+        ? `⚠️ Predoni in avvicinamento (${formatDuration(days)})`
         : '';
     this.speedBtns.forEach((b, i) => b.classList.toggle('active', SPEEDS[i] === speed));
     const cap = g.storageCap();

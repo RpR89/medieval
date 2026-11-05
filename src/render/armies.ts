@@ -299,6 +299,9 @@ export class ArmyView {
         const root = new THREE.Group();
         const body = envoy ? envoyModel(color ?? 0xffffff) : buildArmy(f, enemy, formation, color);
         body.userData.body = true;
+        body.traverse((o) => {
+          if (o instanceof THREE.Mesh) o.castShadow = false;
+        });
         root.add(body);
         const ring = new THREE.Mesh(ringGeo, ringMat);
         ring.userData.ring = true;

@@ -234,6 +234,9 @@ export function updateHerd(obj: THREE.Object3D, def: BuildingDef, count: number)
     a.position.set(x, 0.02, z);
     a.rotation.y = rand() * PI * 2;
     a.userData.wander = { x, z, phase: rand() * 10, speed: 0.15 + rand() * 0.2, r: 0.1 + rand() * 0.15 };
+    a.traverse((o) => {
+      if (o instanceof THREE.Mesh) o.castShadow = false;
+    });
     holder.add(a);
   }
 }

@@ -25,6 +25,8 @@ export interface MatchInfo {
   status: 'waiting' | 'active';
   day: number;
   updatedAt: string;
+  /** Anno da cui comincia la partita. */
+  startYear?: number;
 }
 
 export interface Me {
@@ -58,7 +60,7 @@ export interface MatchService {
   readonly me: Me;
   listMine(): Promise<MatchInfo[]>;
   listOpen(): Promise<MatchInfo[]>;
-  create(name: string, preset: PresetId): Promise<MatchInfo>;
+  create(name: string, preset: PresetId, startYear?: number): Promise<MatchInfo>;
   join(id: string): Promise<MatchInfo>;
   get(id: string): Promise<MatchInfo | null>;
   loadState(matchId: string): Promise<GameState | null>;
@@ -95,6 +97,7 @@ interface MatchRow {
   status: 'waiting' | 'active';
   day: number;
   updated_at: string;
+  start_year?: number;
 }
 
 const fromRow = (r: MatchRow): MatchInfo => ({
@@ -109,6 +112,7 @@ const fromRow = (r: MatchRow): MatchInfo => ({
   status: r.status,
   day: r.day,
   updatedAt: r.updated_at,
+  startYear: r.start_year ?? 900,
 });
 
 export class SupabaseMatchService implements MatchService {
@@ -140,14 +144,13 @@ export class SupabaseMatchService implements MatchService {
     return (data as MatchRow[]).map(fromRow);
   }
 
-  async create(name: string, preset: PresetId) {
-    const { data, error } = await this.db
-      .from('matches')
-      .insert({ name, preset, seed: randomSeed(), host_id: this.me.id, host_name: this.me.name, status: 'waiting' })
-      .select()
-      .single();
-    if (error) throw error;
-    return fromRow(data as MatchRow);
+  async create(name: string, preset: PresetId, startYear = 900) {
+    const row = { name, preset, seed: randomSeed(), host_id: this.me.id, host_name: this.me.name, status: 'waiting', day: (startYear - 900) * 360 };
+    let res = await this.db.from('matches').insert({ ...row, start_year: startYear }).select().single();
+    // Se la colonna start_year non esiste ancora (migrazione non applicata) si crea senza
+    if (res.error && /start_year/.test(res.error.message)) res = await this.db.from('matches').insert(row).select().single();
+    if (res.error) throw res.error;
+    return { ...fromRow(res.data as MatchRow), startYear };
   }
 
   async join(id: string) {
@@ -335,8 +338,9 @@ export class LocalMatchService implements MatchService {
     return readMatches().filter((m) => m.status === 'waiting' && !m.guestId && m.hostId !== this.me.id);
   }
 
-  async create(name: string, preset: PresetId) {
+  async create(name: string, preset: PresetId, startYear = 900) {
     const m: MatchInfo = {
+      startYear,
       id: `m-${Math.random().toString(36).slice(2, 10)}`,
       name,
       preset,
@@ -346,7 +350,7 @@ export class LocalMatchService implements MatchService {
       guestId: null,
       guestName: null,
       status: 'waiting',
-      day: 0,
+      day: (startYear - 900) * 360,
       updatedAt: new Date().toISOString(),
     };
     writeMatches([...readMatches(), m]);

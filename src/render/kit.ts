@@ -200,7 +200,7 @@ export function flag(m: THREE.Material, x: number, y: number, z: number, size = 
   geo.translate(size / 2, 0, 0);
   const cloth = new THREE.Mesh(geo, m);
   cloth.position.y = 0.75 - size * 0.32;
-  cloth.castShadow = true;
+  cloth.castShadow = false; // si muove: niente ombra (la mappa delle ombre non si ricalcola a ogni fotogramma)
   cloth.userData.flag = geo.getAttribute('position').array.slice();
   g.add(cloth);
   g.userData.keep = true;

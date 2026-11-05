@@ -1,5 +1,5 @@
 import { supabase } from '../config/supabase';
-import { createInitialState, type GameState } from '../game/sim/state';
+import { createInitialState, START_ERAS, type GameState } from '../game/sim/state';
 import { PRESET_LIST, type PresetId } from '../game/world/presets';
 import { localIdentity, LocalMatchService, SupabaseMatchService, type MatchInfo, type MatchService } from '../net/match';
 import { CloudSaveStore, LocalSaveStore, type SaveStore } from '../save/store';
@@ -96,13 +96,15 @@ export function showStartScreen(root: HTMLElement): Promise<StartResult> {
         lordsSelect.append(el('option', { value: String(n), text: t }));
       }
       lordsSelect.value = '2';
+      const eraSelect = el('select');
+      for (const e of START_ERAS) eraSelect.append(el('option', { value: String(e.year), text: `${e.year} — ${e.name}` }));
       const newBtn = el('button', { class: 'primary', text: 'Nuova partita in solitario' });
       newBtn.onclick = () => {
         if (existing && !confirm('Iniziare una nuova partita sovrascriverà il salvataggio attuale. Continuare?')) return;
         const seed = Math.floor(Math.random() * 2 ** 31);
         finish({
           session,
-          state: createInitialState(seed, nameInput.value.trim() || 'Castello senza nome', { preset: mapSelect.value as PresetId, lords: Number(lordsSelect.value) }),
+          state: createInitialState(seed, nameInput.value.trim() || 'Castello senza nome', { preset: mapSelect.value as PresetId, lords: Number(lordsSelect.value), startYear: Number(eraSelect.value) }),
         });
       };
       const back = el('button', { class: 'link', text: '← Indietro' });
@@ -124,6 +126,8 @@ export function showStartScreen(root: HTMLElement): Promise<StartResult> {
         mapSelect,
         el('label', { text: 'Signori rivali (con castelli, eserciti e diplomazia)' }),
         lordsSelect,
+        el('label', { text: 'Epoca di partenza' }),
+        eraSelect,
         newBtn,
       );
       card.replaceChildren(...items);
@@ -145,7 +149,7 @@ export function showStartScreen(root: HTMLElement): Promise<StartResult> {
         return;
       }
       const slot: 0 | 1 = info.hostId === service.me.id ? 0 : 1;
-      state ??= createInitialState(info.seed, choice.castleName, { preset: info.preset, match: { id: info.id, slot } });
+      state ??= createInitialState(info.seed, choice.castleName, { preset: info.preset, match: { id: info.id, slot }, startYear: info.startYear });
       // Chi si unisce più tardi parte dal giorno della partita
       if (slot === 1 && state.day < info.day) state.day = info.day;
       finish({ session: { ...session, name: service.me.name }, state, match: { info, service } });

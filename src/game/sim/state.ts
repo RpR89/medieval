@@ -156,43 +156,57 @@ export interface StateOptions {
   match?: { id: string; slot: 0 | 1 };
   /** Numero di signori rivali (0-4), solo in giocatore singolo. */
   lords?: number;
+  /** Anno di partenza (vedi START_ERAS). */
+  startYear?: number;
 }
 
 export const BASE_HOUSING = 10;
 export const BASE_STORAGE = 500;
 export const FOOD_PER_PERSON = 0.1;
-export const TAX_PER_PERSON = 0.04;
+/** Tassa giornaliera per abitante a livello normale (1,5 monete al mese). */
+export const TAX_PER_PERSON = 0.05;
+
+/** Epoche da cui si può cominciare, con le risorse di partenza. */
+export const START_ERAS = [
+  { year: 900, name: 'Motte e palizzate', pop: 20, res: { coins: 300, wood: 220, stone: 60 }, intro: 'costruisci una motta e proteggi la gente' },
+  { year: 1050, name: 'Mastio in pietra', pop: 30, res: { coins: 600, wood: 320, stone: 260 }, intro: 'erigi un mastio in pietra' },
+  { year: 1150, name: 'Cinte murarie', pop: 40, res: { coins: 900, wood: 420, stone: 450 }, intro: 'erigi il mastio e una cinta di mura in pietra' },
+  { year: 1250, name: 'Castello concentrico', pop: 50, res: { coins: 1300, wood: 520, stone: 650, gold: 20 }, intro: 'costruisci una rocca con torri circolari' },
+  { year: 1350, name: 'Tardo Medioevo', pop: 60, res: { coins: 1600, wood: 600, stone: 850, gold: 40 }, intro: 'fortifica la rocca contro eserciti sempre più grandi' },
+] as const;
 
 export function createInitialState(seed: number, castleName = 'Castello senza nome', opts: StateOptions = {}): GameState {
+  const era = START_ERAS.find((e) => e.year === opts.startYear) ?? START_ERAS[0];
+  const day = (era.year - 900) * DAYS_PER_YEAR;
   const resources = emptyResources();
   Object.assign(resources, {
-    coins: 300,
-    wood: 220,
-    stone: 60,
-    grain: 150,
+    grain: 150 + (era.pop - 20) * 4,
     vegetables: 40,
     meat: 30,
     hay: 80,
+    ...era.res,
   });
+  const lords = !opts.match && opts.lords ? createLords(Math.min(4, opts.lords), seed) : undefined;
+  for (const l of lords ?? []) l.nextAction += day;
   return {
     version: 1,
     seed,
     castleName,
-    day: 0,
+    day,
     resources,
-    population: 20,
+    population: era.pop,
     buildings: [],
     army: { infantry: 0, archers: 0, cavalry: 0 },
     nextUid: 1,
-    nextRaidDay: DAYS_PER_YEAR * 2 + 120,
+    nextRaidDay: day + DAYS_PER_YEAR * 2 + 120,
     preset: opts.preset,
     match: opts.match,
-    lords: !opts.match && opts.lords ? createLords(Math.min(4, opts.lords), seed) : undefined,
+    lords,
     log: [
       {
-        day: 0,
+        day,
         kind: 'info',
-        text: 'Anno 900. Il tuo signore ti affida queste terre: costruisci una motta e proteggi la gente.',
+        text: `Anno ${era.year}. Il tuo signore ti affida queste terre: ${era.intro}.`,
       },
     ],
   };

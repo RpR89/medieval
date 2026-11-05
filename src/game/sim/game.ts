@@ -7,7 +7,7 @@ import {
   type BuildingDef,
   type UnitType,
 } from '../data/buildings';
-import { dateFromDays, DAYS_PER_SEASON, SEASON_NAMES, type GameDate } from '../data/calendar';
+import { dateFromDays, DAYS_PER_SEASON, formatDuration, SEASON_NAMES, type GameDate } from '../data/calendar';
 import { eraForYear } from '../data/eras';
 import {
   canAfford,
@@ -1136,7 +1136,7 @@ export class Game {
       status: 'marching',
     };
     (this.state.expeditions ??= []).push(e);
-    this.log(`La spedizione è partita: arriverà al castello nemico tra ${Math.round(e.arriveDay - e.departDay)} giorni.`, 'info');
+    this.log(`La spedizione è partita: arriverà al castello nemico tra ${formatDuration(e.arriveDay - e.departDay)}.`, 'info');
     this.emit();
     return e;
   }
@@ -1149,7 +1149,7 @@ export class Game {
     const days = Math.max(0, Math.ceil(a.arriveDay - this.state.day));
     const n = a.troops.infantry + a.troops.archers + a.troops.cavalry;
     const engines = a.troops.rams + a.troops.trebuchets;
-    this.log(`⚠️ ${a.from} marcia contro di noi con circa ${n} soldati${engines ? ` e ${engines} macchine d'assedio` : ''}: arriverà tra ${days} giorni!`, 'bad');
+    this.log(`⚠️ ${a.from} marcia contro di noi con circa ${n} soldati${engines ? ` e ${engines} macchine d'assedio` : ''}: arriverà tra ${formatDuration(days)}!`, 'bad');
     this.emit();
   }
 
@@ -1169,7 +1169,7 @@ export class Game {
     const names = { repelled: 'respinta', held: 'ha saccheggiato il borgo nemico (il mastio ha resistito)', sacked: 'ha espugnato il castello nemico' };
     const lootN = Object.values(r.loot).reduce((a, b) => a + (b ?? 0), 0);
     this.log(
-      `La spedizione ${names[r.outcome]}! Caduti: ${r.attackerLosses}, nemici caduti: ${r.defenderLosses}${lootN ? `, bottino di ${Math.round(lootN)} unità di merci` : ''}. Rientro tra ${Math.ceil(e.returnDay - this.state.day)} giorni.`,
+      `La spedizione ${names[r.outcome]}! Caduti: ${r.attackerLosses}, nemici caduti: ${r.defenderLosses}${lootN ? `, bottino di ${Math.round(lootN)} unità di merci` : ''}. Rientro tra ${formatDuration(e.returnDay - this.state.day)}.`,
       r.outcome === 'repelled' ? 'bad' : 'good',
     );
     (this.state.campaignLog ??= []).push({ day: this.state.day, text: `Attacco: ${names[r.outcome]}`, outcome: r.outcome, log: r.log });
@@ -2439,6 +2439,20 @@ export class Game {
   /** Gettito giornaliero delle tasse. */
   taxPerDay(): number {
     return this.state.population * TAX_PER_PERSON * this.analysis().taxMul * TAX_LEVELS[this.taxLevel()].mul;
+  }
+
+  /** Bilancio mensile delle monete: entrate, uscite, saldo e resa per abitante. */
+  budget(): { taxes: number; tribute: number; army: number; engines: number; net: number; perPerson: number } {
+    const month = 30;
+    const taxes = this.taxPerDay() * month;
+    const tribute = this.lords().filter((l) => l.status === 'vassal').reduce((s, l) => s + (1 + l.level), 0) * month;
+    const away = this.troopsAway();
+    let army = 0;
+    for (const id of Object.keys(UNITS) as UnitType[]) army += (UNITS[id].upkeep.coins ?? 0) * (this.state.army[id] + away[id]) * month;
+    let engines = 0;
+    for (const id of Object.keys(ENGINES) as EngineType[]) engines += (ENGINES[id].upkeep.coins ?? 0) * ((this.state.engines?.[id] ?? 0) + away[id]) * month;
+    const perPerson = this.state.population > 0 ? taxes / this.state.population : TAX_PER_PERSON * TAX_LEVELS[this.taxLevel()].mul * month;
+    return { taxes, tribute, army, engines, net: taxes + tribute - army - engines, perPerson };
   }
 
   happiness(): number {

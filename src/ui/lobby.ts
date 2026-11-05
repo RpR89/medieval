@@ -1,4 +1,5 @@
 import { PRESET_LIST, PRESETS, type PresetId } from '../game/world/presets';
+import { START_ERAS } from '../game/sim/state';
 import type { MatchInfo, MatchService } from '../net/match';
 import { el } from './dom';
 
@@ -46,12 +47,14 @@ export function showLobby(card: HTMLElement, service: MatchService, onBack: () =
     };
     renderPresets();
 
+    const eraSelect = el('select');
+    for (const e of START_ERAS) eraSelect.append(el('option', { value: String(e.year), text: `${e.year} — ${e.name}` }));
     const create = el('button', { class: 'primary', text: 'Crea la partita e aspetta l\'avversario' });
     create.onclick = async () => {
       create.disabled = true;
       error.textContent = '';
       try {
-        const m = await service.create(matchName.value.trim() || 'Partita', preset);
+        const m = await service.create(matchName.value.trim() || 'Partita', preset, Number(eraSelect.value));
         done({ match: m, castleName: castle.value.trim() || 'Castello' });
       } catch (e) {
         error.textContent = (e as Error).message;
@@ -63,7 +66,7 @@ export function showLobby(card: HTMLElement, service: MatchService, onBack: () =
       const p = PRESETS[m.preset] ?? PRESETS.classica;
       const isHost = m.hostId === service.me.id;
       const opponent = isHost ? m.guestName : m.hostName;
-      const year = 900 + Math.floor(m.day / 360);
+      const year = 900 + Math.floor(Math.max(m.day, ((m.startYear ?? 900) - 900) * 360) / 360);
       const btn = el('button', { class: action === 'join' ? 'primary' : '', text: action === 'join' ? 'Unisciti' : 'Riprendi' });
       btn.onclick = async () => {
         btn.disabled = true;
@@ -139,6 +142,8 @@ export function showLobby(card: HTMLElement, service: MatchService, onBack: () =
       matchName,
       el('label', { text: 'Mappa' }),
       presets,
+      el('label', { text: 'Epoca di partenza' }),
+      eraSelect,
       create,
       error,
     );

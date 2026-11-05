@@ -406,56 +406,92 @@ export class TerrainView {
     this.skirtMat.color.setRGB(...mixPalette(m).grass);
   }
 
-  private paint() {
-    const p = mixPalette(this.mix);
-    const col = this.geo.getAttribute('color') as THREE.BufferAttribute;
-    const tileCol = (x: number, z: number): Rgb => {
-      if ((this.terrain.sea === 'east' && x >= this.size) || (this.terrain.sea === 'south' && z >= this.size)) return p.bed;
+  /** Pesi di ogni vertice tra i 6 tipi di suolo (calcolati una volta: la pittura diventa una somma pesata). */
+  private weights: Float32Array | null = null;
+
+  private computeWeights(): Float32Array {
+    const w = new Float32Array(this.n * this.n * 6);
+    const cat = (x: number, z: number): number => {
+      if ((this.terrain.sea === 'east' && x >= this.size) || (this.terrain.sea === 'south' && z >= this.size)) return 5;
       const t = tileAt(this.terrain, Math.min(this.size - 1, Math.max(0, x)), Math.min(this.size - 1, Math.max(0, z)));
       switch (t) {
-        case Tile.Forest: return p.forest;
-        case Tile.Rock: return p.rock;
-        case Tile.Gold: return [p.rock[0] * 1.05 + 0.06, p.rock[1] * 1.0 + 0.04, p.rock[2] * 0.8];
-        case Tile.Sand: return p.sand;
+        case Tile.Forest: return 1;
+        case Tile.Rock: return 2;
+        case Tile.Gold: return 3;
+        case Tile.Sand: return 4;
         case Tile.River:
-        case Tile.Sea: return p.bed;
-        default: return p.grass;
+        case Tile.Sea: return 5;
+        default: return 0;
       }
     };
-    const out: Rgb = [0, 0, 0];
     for (let j = 0; j < this.n; j++) {
       for (let i = 0; i < this.n; i++) {
-        const k = j * this.n + i;
+        const k = (j * this.n + i) * 6;
         const wx = i / this.res - 0.5;
         const wz = j / this.res - 0.5;
         const x0 = Math.floor(wx);
         const z0 = Math.floor(wz);
         const fx = wx - x0;
         const fz = wz - z0;
-        const c00 = tileCol(x0, z0);
-        const c10 = tileCol(x0 + 1, z0);
-        const c01 = tileCol(x0, z0 + 1);
-        const c11 = tileCol(x0 + 1, z0 + 1);
-        for (let c = 0; c < 3; c++) {
-          out[c] = (c00[c] * (1 - fx) + c10[c] * fx) * (1 - fz) + (c01[c] * (1 - fx) + c11[c] * fx) * fz;
-        }
-        const h = this.heights[k];
-        // Fondo dei fossati asciutti: terra; altrimenti rive bagnate e fondale
-        if (this.dryMask[k]) {
-          for (let c = 0; c < 3; c++) out[c] = out[c] * 0.3 + p.earth[c] * 0.7;
-        } else if (h < WATER_LEVEL + 0.06) {
-          const t = Math.min(1, (WATER_LEVEL + 0.06 - h) / 0.25);
-          for (let c = 0; c < 3; c++) out[c] = out[c] * (1 - t) + p.bed[c] * t;
-          if (h > WATER_LEVEL - 0.1) for (let c = 0; c < 3; c++) out[c] *= 0.85;
-        }
-        // Terra battuta attorno agli edifici
-        const e = this.earthMask[k];
-        if (e > 0) for (let c = 0; c < 3; c++) out[c] = out[c] * (1 - e) + p.earth[c] * e;
-        const v = 0.9 + this.noise[k] * 0.18;
-        col.setXYZ(k, out[0] * v, out[1] * v, out[2] * v);
+        w[k + cat(x0, z0)] += (1 - fx) * (1 - fz);
+        w[k + cat(x0 + 1, z0)] += fx * (1 - fz);
+        w[k + cat(x0, z0 + 1)] += (1 - fx) * fz;
+        w[k + cat(x0 + 1, z0 + 1)] += fx * fz;
       }
     }
-    col.needsUpdate = true;
+    return w;
+  }
+
+  private paint() {
+    const p = mixPalette(this.mix);
+    const w = (this.weights ??= this.computeWeights());
+    const gold: Rgb = [p.rock[0] * 1.05 + 0.06, p.rock[1] + 0.04, p.rock[2] * 0.8];
+    const pal = [p.grass, p.forest, p.rock, gold, p.sand, p.bed];
+    // Tavolozza appiattita per il ciclo veloce
+    const P = new Float32Array(18);
+    pal.forEach((c, i) => P.set(c, i * 3));
+    const arr = (this.geo.getAttribute('color') as THREE.BufferAttribute).array as Float32Array;
+    const [er, eg, eb] = p.earth;
+    const [br, bg, bb] = p.bed;
+    const N = this.n * this.n;
+    for (let k = 0; k < N; k++) {
+      const o = k * 6;
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      for (let c = 0; c < 6; c++) {
+        const ww = w[o + c];
+        if (ww === 0) continue;
+        r += P[c * 3] * ww;
+        g += P[c * 3 + 1] * ww;
+        b += P[c * 3 + 2] * ww;
+      }
+      const h = this.heights[k];
+      // Fondo dei fossati asciutti: terra; altrimenti rive bagnate e fondale
+      if (this.dryMask[k]) {
+        r = r * 0.3 + er * 0.7;
+        g = g * 0.3 + eg * 0.7;
+        b = b * 0.3 + eb * 0.7;
+      } else if (h < WATER_LEVEL + 0.06) {
+        const t = Math.min(1, (WATER_LEVEL + 0.06 - h) / 0.25);
+        const dim = h > WATER_LEVEL - 0.1 ? 0.85 : 1;
+        r = (r * (1 - t) + br * t) * dim;
+        g = (g * (1 - t) + bg * t) * dim;
+        b = (b * (1 - t) + bb * t) * dim;
+      }
+      // Terra battuta attorno agli edifici
+      const e = this.earthMask[k];
+      if (e > 0) {
+        r = r * (1 - e) + er * e;
+        g = g * (1 - e) + eg * e;
+        b = b * (1 - e) + eb * e;
+      }
+      const v = 0.9 + this.noise[k] * 0.18;
+      arr[k * 3] = r * v;
+      arr[k * 3 + 1] = g * v;
+      arr[k * 3 + 2] = b * v;
+    }
+    (this.geo.getAttribute('color') as THREE.BufferAttribute).needsUpdate = true;
   }
 
   // ───────────── Vegetazione ─────────────
