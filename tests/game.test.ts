@@ -34,9 +34,9 @@ describe('territorio', () => {
 
   it('lascia libero il centro per il castello', () => {
     const t = generateTerrain(7);
-    const c = MAP_SIZE / 2;
+    const [c, cz] = t.sites[0];
     let free = 0;
-    for (let z = c - 3; z < c + 3; z++) for (let x = c - 3; x < c + 3; x++) if (isBuildableLand(tileAt(t, x, z))) free++;
+    for (let z = cz - 3; z < cz + 3; z++) for (let x = c - 3; x < c + 3; x++) if (isBuildableLand(tileAt(t, x, z))) free++;
     expect(free).toBeGreaterThan(20);
   });
 });
@@ -170,8 +170,8 @@ describe('fiume', () => {
   it('non attraversa mai il centro della mappa', () => {
     for (let seed = 0; seed < 200; seed++) {
       const t = generateTerrain(seed);
-      const c = MAP_SIZE / 2;
-      for (let z = c - 4; z < c + 4; z++) {
+      const [c, cz] = t.sites[0];
+      for (let z = cz - 4; z < cz + 4; z++) {
         for (let x = c - 4; x < c + 4; x++) expect(tileAt(t, x, z)).not.toBe(Tile.River);
       }
     }

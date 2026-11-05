@@ -13,7 +13,9 @@ import { canAfford, formatCost, RESOURCE_IDS, RESOURCES, TAX_LEVELS, type Resour
 import { BEHAVIORS, ENGINES, FORMATIONS, UNITS, type Behavior, type EngineType, type Formation, type Stance } from '../game/data/units';
 import type { Force } from '../game/sim/state';
 import { CASTLE_LEVELS, KEEP_EVOLVE, UPGRADE_BY_ID } from '../game/data/upgrades';
-import type { Game } from '../game/sim/game';
+import { Game } from '../game/sim/game';
+import { PERSONALITIES } from '../game/sim/lords';
+import { SIDE_COLORS } from '../render/armies';
 import type { PlacedBuilding } from '../game/sim/state';
 import type { ChatMessage, RealmPlayer } from '../net/realm';
 import { el, escapeHtml, fmt } from './dom';
@@ -30,6 +32,8 @@ export interface HudCallbacks {
   /** Passa al livello di qualità grafica successivo e ne restituisce il nome. */
   onQuality(): string;
   qualityLabel: string;
+  /** Centra la telecamera su un punto della mappa. */
+  focus?(x: number, z: number): void;
   /** Seleziona reparti sulla mappa. */
   selectCompanies?(ids: string[]): void;
   /** Spedizioni contro l'altro giocatore (solo nelle partite multigiocatore). */
@@ -43,7 +47,7 @@ export interface HudCallbacks {
   };
 }
 
-type Tab = 'castle' | 'army' | 'market' | 'realm';
+type Tab = 'castle' | 'army' | 'market' | 'realm' | 'diplomacy';
 const SPEEDS = [0, 1, 2, 4, 8];
 
 export class Hud {
@@ -147,8 +151,10 @@ export class Hud {
 
     // ───── Pannello laterale ─────
     const tabs = el('div', { class: 'tabs' });
-    const tabNames: Record<Tab, string> = { castle: '🏰 Castello', army: '⚔️ Esercito', market: '⚖️ Mercato', realm: '👥 Regno' };
+    const tabNames: Record<Tab, string> = { castle: '🏰 Castello', army: '⚔️ Esercito', market: '⚖️ Mercato', diplomacy: '🤝 Diplomazia', realm: '👥 Regno' };
     for (const t of Object.keys(tabNames) as Tab[]) {
+      if (t === 'diplomacy' && !game.lords().length) continue;
+      if (t === 'realm' && game.lords().length) continue;
       const b = el('button', { text: tabNames[t] });
       b.onclick = () => this.setTab(t);
       this.tabBtns.set(t, b);
@@ -476,6 +482,7 @@ export class Hud {
     if (t === 'castle') this.buildCastleTab();
     else if (t === 'army') this.buildArmyTab();
     else if (t === 'market') this.buildMarketTab();
+    else if (t === 'diplomacy') this.buildDiplomacyTab();
     else this.buildRealmTab();
   }
 
@@ -784,6 +791,78 @@ export class Hud {
       for (const [id, c] of cells) {
         c.buy.textContent = `🪙${this.game.buyPrice(id)}`;
         c.sell.textContent = `🪙${this.game.sellPrice(id)}`;
+      }
+    };
+  }
+
+  private buildDiplomacyTab() {
+    const g = this.game;
+    const list = el('div');
+    const travel = el('div');
+    this.panelBody.append(
+      el('p', { class: 'small muted', text: 'Manda un diplomatico ai castelli dei signori vicini: viaggia sulla mappa e porta la tua proposta. Un dono rende tutto più facile.' }),
+      list,
+      el('h4', { text: '🕊️ Diplomatici in viaggio' }),
+      travel,
+    );
+    const rows = new Map<number, { info: HTMLElement; bar: HTMLElement }>();
+    for (const l of g.lords()) {
+      const info = el('div');
+      const bar = el('div', { class: 'hp-bar' });
+      const mission = el('select');
+      for (const [id, m] of Object.entries(Game.MISSIONS)) mission.append(el('option', { value: id, text: `${m.icon} ${m.name}` }));
+      const coins = el('input', { type: 'number', min: '0', value: '0', class: 'amount', title: 'Dono in monete' });
+      const grain = el('input', { type: 'number', min: '0', value: '0', class: 'amount', title: 'Dono in grano' });
+      const send = el('button', { class: 'primary', text: '🕊️ Invia diplomatico' });
+      const why = el('span', { class: 'small muted' });
+      send.onclick = () => {
+        const gift = { coins: Math.max(0, Math.floor(Number(coins.value) || 0)), grain: Math.max(0, Math.floor(Number(grain.value) || 0)) };
+        const c = g.sendDiplomat(l.id, mission.value as keyof typeof Game.MISSIONS, gift);
+        if (!c) this.toast(g.canSendDiplomat(l.id, gift).reason ?? 'Impossibile', 'bad');
+        else this.toast(`Il diplomatico parte verso ${l.castle}.`, 'good');
+      };
+      const show = el('button', { class: 'link', text: '📍 Mostra sulla mappa' });
+      show.onclick = () => this.cb.focus?.(...g.lordKeep(l));
+      rows.set(l.id, { info, bar });
+      list.append(
+        el(
+          'div',
+          { class: 'lord' },
+          info,
+          el('div', { class: 'hp' }, bar),
+          el('div', { class: 'row' }, mission, show),
+          el('div', { class: 'row small' }, el('span', { text: 'Dono: 🪙' }), coins, el('span', { text: '🌾' }), grain),
+          el('div', { class: 'row' }, send, why),
+        ),
+      );
+    }
+    let lastTravel = '';
+    this.refreshTab = () => {
+      for (const l of g.lords()) {
+        const r = rows.get(l.id);
+        if (!r) continue;
+        const soldiers = Math.round(l.army.infantry + l.army.archers + l.army.cavalry);
+        const html = `<div class="row"><span class="swatch" style="background:#${SIDE_COLORS[(l.id + 1) % SIDE_COLORS.length].toString(16).padStart(6, '0')}"></span>
+          <strong>${escapeHtml(l.name)}</strong></div>
+          <div class="small">${escapeHtml(l.castle)} · ${'★'.repeat(l.level)}${'☆'.repeat(5 - l.level)} · ${PERSONALITIES[l.personality].name}</div>
+          <div class="small ${l.status === 'war' ? 'bad' : l.status === 'alliance' || l.status === 'vassal' ? 'good' : ''}">${escapeHtml(g.lordStatusName(l))} · rapporto ${Math.round(l.relation)} · circa ${Math.round(soldiers / 5) * 5} soldati${l.companies.length ? ' · <span class="bad">esercito in marcia</span>' : ''}</div>`;
+        if (r.info.innerHTML !== html) r.info.innerHTML = html;
+        const v = (l.relation + 100) / 2;
+        r.bar.style.width = `${v}%`;
+        r.bar.className = `hp-bar ${l.relation < -30 ? 'ruin' : l.relation < 10 ? 'damaged' : ''}`;
+      }
+      const envoys = (g.state.companies ?? []).filter((c) => c.envoy);
+      const t = envoys.length
+        ? envoys
+            .map((c) => {
+              const l = g.lord(c.envoy!.lord);
+              return `<p class="small">🕊️ ${c.order === 'home' ? 'Di ritorno da' : 'Verso'} ${escapeHtml(l?.castle ?? '?')} · ${Game.MISSIONS[c.envoy!.mission].name}</p>`;
+            })
+            .join('')
+        : '<p class="small muted">Nessuno.</p>';
+      if (t !== lastTravel) {
+        lastTravel = t;
+        travel.innerHTML = t;
       }
     };
   }

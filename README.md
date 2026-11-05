@@ -37,6 +37,14 @@ attraverso cinque secoli: dalle motte con palizzate in legno ai castelli concent
   - senza account c'è una **modalità locale di prova**, tra due schede dello stesso browser.
 - **Regno** (solo in solitario, Supabase Realtime): vedi chi è online, chat, classifica e carovane di merci.
 
+## Novità: signori rivali, diplomazia e livelli del castello
+
+- **Giocatore singolo contro 0–4 signori rivali**: ognuno ha un carattere (bellicoso, avido, pacifico, leale), un castello vero sulla mappa che cresce con le epoche, un esercito e un tesoro. In guerra manda eserciti contro di te; da alleato manda doni e rinforzi; se espugni il suo castello diventa tuo vassallo e paga un tributo.
+- **Diplomatici**: dalla scheda 🤝 Diplomazia mandi un cavaliere col drappo bianco al castello di un signore (dono, patto, alleanza, pace, tributo, guerra). Viaggia davvero sulla mappa e porta indietro la risposta.
+- **Cinque livelli del castello**: motta → cortile → mastio in pietra (la motta si trasforma sul posto) → sala grande → rocca signorile. Danno vantaggi e sbloccano le costruzioni più avanzate.
+- **Mappe più grandi** (da 96 a 128 caselle), territori divisi in base al castello più vicino; i fiumi si guadano a fatica, i ponti fanno risparmiare tempo.
+- Porte orientabili a 45° e fossati che seguono le mura in diagonale; etichette sopra i reparti; il tempo scorre più lento (4 secondi per giorno a 1×).
+
 ## Comandi
 
 ```bash

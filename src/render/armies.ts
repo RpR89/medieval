@@ -62,8 +62,9 @@ function label(f: Force, color: number, formation: Formation, envoy: boolean): T
   ctx.fillText(parts.join(' '), 32, 38);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
-  sp.scale.set(1.5, 0.34, 1);
+  // Dimensione costante sullo schermo, a qualsiasi zoom
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, sizeAttenuation: false }));
+  sp.scale.set(0.14, 0.032, 1);
   sp.renderOrder = 10;
   sp.userData.label = true;
   return sp;

@@ -67,7 +67,8 @@ function makeNoise(seed: number, cell: number) {
 
 export interface TerrainOptions {
   preset?: PresetId;
-  players?: 1 | 2;
+  /** Numero di siti di castelli (giocatori e signori). */
+  players?: number;
 }
 
 export function generateTerrain(seed: number, opts: TerrainOptions | number = {}): Terrain {
@@ -137,7 +138,7 @@ export function generateTerrain(seed: number, opts: TerrainOptions | number = {}
     }
   }
 
-  // Fiume da nord a sud
+  // Fiume da nord a sud, che gira attorno ai siti dei castelli
   if (preset.river !== 'none') {
     const width = preset.river === 'wide' ? 4 : 2;
     let rx: number;
@@ -158,7 +159,11 @@ export function generateTerrain(seed: number, opts: TerrainOptions | number = {}
       rx += Math.round((n2(z, 7) - 0.5) * 2.2);
       if (preset.sea === 'east' && z > size * 0.7) rx += 1; // piega verso il mare
       rx = Math.max(lo, Math.min(hi, rx));
-      if (players === 1 && Math.abs(z - size / 2) < 14) rx = Math.min(rx, Math.round(size / 2 - 14));
+      for (const [sx, sz] of sites) {
+        if (Math.abs(z - sz) >= 14 || Math.abs(rx + width / 2 - sx) >= 14) continue;
+        rx = rx + width / 2 < sx ? Math.round(sx - 14 - width) : Math.round(sx + 14);
+        rx = Math.max(3, Math.min(size - 4 - width, rx));
+      }
       for (let w = 0; w < width; w++) {
         if (get(rx + w, z) !== Tile.Sea) set(rx + w, z, Tile.River);
       }

@@ -5,8 +5,8 @@ import { mulberry32, Tile, tileAt, type Terrain } from '../game/world/terrain';
 import { textures } from './textures';
 import { addCloudShadows, addLeafScale, addSnow, addWind, shared } from './effects';
 
-/** Vertici per lato di ogni casella. */
-const RES = 4;
+/** Vertici per lato di ogni casella (meno sulle mappe grandi, per le prestazioni). */
+const resFor = (size: number) => (size > 100 ? 3 : 4);
 export const WATER_LEVEL = -0.18;
 
 const TARGET: Record<Tile, number> = {
@@ -79,6 +79,7 @@ interface Decor {
 const ni = (g: THREE.BufferGeometry) => (g.index ? g.toNonIndexed() : g);
 
 export class TerrainView {
+  private res: number;
   readonly group = new THREE.Group();
   private size: number;
   private n: number;
@@ -109,7 +110,8 @@ export class TerrainView {
 
   constructor(private terrain: Terrain, private tuftsPerTile = 6) {
     this.size = terrain.size;
-    this.n = this.size * RES + 1;
+    this.res = resFor(terrain.size);
+    this.n = this.size * this.res + 1;
     const rand = mulberry32(terrain.seed + 1234);
     this.noise = new Float32Array(this.n * this.n).map(() => rand());
     this.base = this.computeBase();
@@ -120,7 +122,7 @@ export class TerrainView {
     this.heightTexture.magFilter = THREE.LinearFilter;
     this.heightTexture.minFilter = THREE.LinearFilter;
 
-    this.geo = new THREE.PlaneGeometry(this.size, this.size, this.size * RES, this.size * RES);
+    this.geo = new THREE.PlaneGeometry(this.size, this.size, this.size * this.res, this.size * this.res);
     this.geo.rotateX(-Math.PI / 2);
     this.geo.translate(this.size / 2, 0, this.size / 2);
     // UV in coordinate di mondo: la texture di dettaglio si ripete ogni casella
@@ -197,8 +199,8 @@ export class TerrainView {
     };
     for (let j = 0; j < this.n; j++) {
       for (let i = 0; i < this.n; i++) {
-        const wx = i / RES - 0.5;
-        const wz = j / RES - 0.5;
+        const wx = i / this.res - 0.5;
+        const wz = j / this.res - 0.5;
         const x0 = Math.floor(wx);
         const z0 = Math.floor(wz);
         const fx = wx - x0;
@@ -225,8 +227,8 @@ export class TerrainView {
 
   /** Altezza del terreno (attuale) in un punto del mondo. */
   heightAt(x: number, z: number): number {
-    const fi = Math.max(0, Math.min(this.n - 1.001, x * RES));
-    const fj = Math.max(0, Math.min(this.n - 1.001, z * RES));
+    const fi = Math.max(0, Math.min(this.n - 1.001, x * this.res));
+    const fj = Math.max(0, Math.min(this.n - 1.001, z * this.res));
     const i = Math.floor(fi);
     const j = Math.floor(fj);
     const tx = fi - i;
@@ -238,8 +240,8 @@ export class TerrainView {
   }
 
   private baseAt(x: number, z: number): number {
-    const i = Math.round(Math.max(0, Math.min(this.n - 1, x * RES)));
-    const j = Math.round(Math.max(0, Math.min(this.n - 1, z * RES)));
+    const i = Math.round(Math.max(0, Math.min(this.n - 1, x * this.res)));
+    const j = Math.round(Math.max(0, Math.min(this.n - 1, z * this.res)));
     return this.base[j * this.n + i];
   }
 
@@ -247,8 +249,8 @@ export class TerrainView {
   baseLevel(x: number, z: number, w: number, d: number): number {
     let sum = 0;
     let n = 0;
-    for (let j = Math.ceil(z * RES); j <= Math.floor((z + d) * RES); j++) {
-      for (let i = Math.ceil(x * RES); i <= Math.floor((x + w) * RES); i++) {
+    for (let j = Math.ceil(z * this.res); j <= Math.floor((z + d) * this.res); j++) {
+      for (let i = Math.ceil(x * this.res); i <= Math.floor((x + w) * this.res); i++) {
         if (i < 0 || j < 0 || i >= this.n || j >= this.n) continue;
         sum += this.base[j * this.n + i];
         n++;
@@ -281,7 +283,7 @@ export class TerrainView {
 
   /** Vertici per casella e per lato (per gli shader). */
   get grid() {
-    return { res: RES, n: this.n };
+    return { res: this.res, n: this.n };
   }
 
   /** Spiana il terreno sotto gli edifici e scava i fossati. */
@@ -297,10 +299,10 @@ export class TerrainView {
       this.baseLevel(f.x, f.z, f.w, f.d) + (f.defId === 'moat' ? -(0.35 + 0.25 * ((f.depth ?? 1) - 1)) : 0);
     for (const f of ordered) {
       const lvl = level(f);
-      const i0 = Math.ceil(f.x * RES);
-      const i1 = Math.floor((f.x + f.w) * RES);
-      const j0 = Math.ceil(f.z * RES);
-      const j1 = Math.floor((f.z + f.d) * RES);
+      const i0 = Math.ceil(f.x * this.res);
+      const i1 = Math.floor((f.x + f.w) * this.res);
+      const j0 = Math.ceil(f.z * this.res);
+      const j1 = Math.floor((f.z + f.d) * this.res);
       for (let j = j0; j <= j1; j++) {
         for (let i = i0; i <= i1; i++) {
           if (i < 0 || j < 0 || i >= this.n || j >= this.n) continue;
@@ -320,8 +322,8 @@ export class TerrainView {
     const solid = new Uint8Array(this.n * this.n);
     for (const f of fps) {
       if (f.defId === 'moat') continue;
-      for (let j = Math.ceil(f.z * RES); j <= Math.floor((f.z + f.d) * RES); j++) {
-        for (let i = Math.ceil(f.x * RES); i <= Math.floor((f.x + f.w) * RES); i++) {
+      for (let j = Math.ceil(f.z * this.res); j <= Math.floor((f.z + f.d) * this.res); j++) {
+        for (let i = Math.ceil(f.x * this.res); i <= Math.floor((f.x + f.w) * this.res); i++) {
           if (i >= 0 && j >= 0 && i < this.n && j < this.n) solid[j * this.n + i] = 1;
         }
       }
@@ -334,14 +336,14 @@ export class TerrainView {
         const ax = m.x + 0.5;
         const az = m.z + 0.5;
         const r = 0.4;
-        for (let j = Math.floor((Math.min(m.z, o.z) - 0.2) * RES); j <= Math.ceil((Math.max(m.z, o.z) + 1.2) * RES); j++) {
-          for (let i = Math.floor((Math.min(m.x, o.x) - 0.2) * RES); i <= Math.ceil((Math.max(m.x, o.x) + 1.2) * RES); i++) {
+        for (let j = Math.floor((Math.min(m.z, o.z) - 0.2) * this.res); j <= Math.ceil((Math.max(m.z, o.z) + 1.2) * this.res); j++) {
+          for (let i = Math.floor((Math.min(m.x, o.x) - 0.2) * this.res); i <= Math.ceil((Math.max(m.x, o.x) + 1.2) * this.res); i++) {
             if (i < 0 || j < 0 || i >= this.n || j >= this.n) continue;
             const k = j * this.n + i;
             if (solid[k]) continue;
             // Distanza dal segmento tra i centri delle due caselle
-            const px = i / RES - ax;
-            const pz = j / RES - az;
+            const px = i / this.res - ax;
+            const pz = j / this.res - az;
             const t = Math.max(0, Math.min(1, (px * dx + pz * dz) / 2));
             const d = Math.hypot(px - dx * t, pz - dz * t);
             if (d > r + 0.25) continue;
@@ -360,17 +362,17 @@ export class TerrainView {
     for (const f of ordered) {
       const lvl = level(f);
       const m = f.defId === 'moat' ? 0.3 : f.defId.startsWith('road') ? 0.3 : 0.6;
-      const i0 = Math.floor((f.x - m) * RES);
-      const i1 = Math.ceil((f.x + f.w + m) * RES);
-      const j0 = Math.floor((f.z - m) * RES);
-      const j1 = Math.ceil((f.z + f.d + m) * RES);
+      const i0 = Math.floor((f.x - m) * this.res);
+      const i1 = Math.ceil((f.x + f.w + m) * this.res);
+      const j0 = Math.floor((f.z - m) * this.res);
+      const j1 = Math.ceil((f.z + f.d + m) * this.res);
       for (let j = j0; j <= j1; j++) {
         for (let i = i0; i <= i1; i++) {
           if (i < 0 || j < 0 || i >= this.n || j >= this.n) continue;
           const k = j * this.n + i;
           if (inside[k]) continue;
-          const wx = i / RES;
-          const wz = j / RES;
+          const wx = i / this.res;
+          const wz = j / this.res;
           const dist = Math.max(f.x - wx, wx - (f.x + f.w), f.z - wz, wz - (f.z + f.d), 0);
           if (dist >= m) continue;
           const t = dist / m;
@@ -424,8 +426,8 @@ export class TerrainView {
     for (let j = 0; j < this.n; j++) {
       for (let i = 0; i < this.n; i++) {
         const k = j * this.n + i;
-        const wx = i / RES - 0.5;
-        const wz = j / RES - 0.5;
+        const wx = i / this.res - 0.5;
+        const wz = j / this.res - 0.5;
         const x0 = Math.floor(wx);
         const z0 = Math.floor(wz);
         const fx = wx - x0;

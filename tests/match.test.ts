@@ -43,11 +43,11 @@ describe('partita a due', () => {
   it('ognuno costruisce solo nella propria metà', () => {
     const a = make(0);
     const b = make(1);
-    expect(a.terrain.size).toBe(88);
+    expect(a.terrain.size).toBe(104);
     const [ax, az] = a.homeSite();
     const [bx] = b.homeSite();
-    expect(ax).toBeLessThan(44);
-    expect(bx).toBeGreaterThan(44);
+    expect(ax).toBeLessThan(52);
+    expect(bx).toBeGreaterThan(52);
     expect(a.canPlace('hut', ax, az + 4).ok).toBe(true);
     expect(a.canPlace('hut', bx, az + 4).reason).toBe('Fuori dal tuo territorio');
     expect(b.canPlace('hut', ax, az + 4).reason).toBe('Fuori dal tuo territorio');

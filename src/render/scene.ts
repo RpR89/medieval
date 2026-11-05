@@ -13,7 +13,7 @@ import type { Game } from '../game/sim/game';
 import type { PlacedBuilding } from '../game/sim/state';
 import { animate, applySeason, buildModel, LINKED_TYPES, ROAD_FAMILY, updateHerd, WALL_FAMILY, type Link, type ModelCtx } from './models';
 import { StaticBatches } from './batches';
-import { ArmyView } from './armies';
+import { ArmyView, SIDE_COLORS } from './armies';
 import { mats } from './kit';
 import type { Footprint } from './terrain';
 import { TerrainView, WATER_LEVEL } from './terrain';
@@ -122,7 +122,7 @@ export class WorldRenderer {
     const area = (64 / size) ** 2;
     this.terrainView = new TerrainView(game.terrain, Math.max(2, Math.round((quality === 'high' ? 10 : quality === 'medium' ? 6 : 3) * area)));
     this.scene.add(this.terrainView.group);
-    if (game.state.match) this.addTerritoryBorder();
+    if (game.terrain.sites.length > 1) this.addTerritoryBorder();
     this.armyView = new ArmyView(game, this.terrainView);
     this.scene.add(this.armyView.group);
 
@@ -383,31 +383,38 @@ export class WorldRenderer {
     });
   }
 
-  /** Confine tra i due territori: una fila di cippi di pietra con un nastro dorato. */
+  /** Confini tra i territori: cippi di pietra dove cambia il castello più vicino. */
   private addTerritoryBorder() {
     const size = this.game.terrain.size;
-    const x = Math.floor(size / 2);
+    const pts: Array<[number, number]> = [];
+    for (let z = 0; z < size; z++) {
+      for (let x = 0; x < size; x++) {
+        const o = this.game.ownerAt(x, z);
+        if (x + 1 < size && this.game.ownerAt(x + 1, z) !== o && (z % 2 === 0)) pts.push([x + 1, z + 0.5]);
+        if (z + 1 < size && this.game.ownerAt(x, z + 1) !== o && (x % 2 === 0)) pts.push([x + 0.5, z + 1]);
+      }
+    }
     const stones = new THREE.InstancedMesh(
       new THREE.CylinderGeometry(0.06, 0.09, 0.45, 6).translate(0, 0.2, 0),
       new THREE.MeshStandardMaterial({ color: 0xcfc6b0, roughness: 0.9 }),
-      Math.ceil(size / 2),
+      Math.max(1, pts.length),
     );
     const m = new THREE.Matrix4();
-    let n = 0;
-    for (let z = 0; z < size; z += 2) {
-      m.makeTranslation(x, this.terrainView.heightAt(x, z + 0.5), z + 0.5);
-      stones.setMatrixAt(n++, m);
-    }
-    stones.count = n;
+    pts.forEach(([x, z], i) => {
+      m.makeTranslation(x, this.terrainView.heightAt(x, z), z);
+      stones.setMatrixAt(i, m);
+    });
+    stones.count = pts.length;
     stones.castShadow = true;
     this.scene.add(stones);
-    const ribbon = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.12, size),
-      new THREE.MeshBasicMaterial({ color: 0xd9a441, transparent: true, opacity: 0.5, depthWrite: false }),
-    );
-    ribbon.rotation.x = -Math.PI / 2;
-    ribbon.position.set(x, 0.06, size / 2);
-    this.scene.add(ribbon);
+  }
+
+  private flagMats = new Map<number, THREE.Material>();
+  private ownerFlag(owner: number): THREE.Material {
+    if (!this.flagMats.has(owner)) {
+      this.flagMats.set(owner, new THREE.MeshStandardMaterial({ color: SIDE_COLORS[(owner + 1) % SIDE_COLORS.length], roughness: 0.9, side: THREE.DoubleSide }));
+    }
+    return this.flagMats.get(owner)!;
   }
 
   private allBuildings(): PlacedBuilding[] {
@@ -426,8 +433,9 @@ export class WorldRenderer {
       const obj = this.makeObject(b, ctx);
       // Gli edifici dell'avversario hanno bandiere blu
       if (this.game.isForeign(b)) {
+        const m = b.owner !== undefined ? this.ownerFlag(b.owner) : mats().flagBlue;
         obj.traverse((o) => {
-          if (o instanceof THREE.Mesh && (o.material === mats().flag || o.material === mats().flagGold)) o.material = mats().flagBlue;
+          if (o instanceof THREE.Mesh && (o.material === mats().flag || o.material === mats().flagGold)) o.material = m;
         });
       }
       this.scene.add(obj);

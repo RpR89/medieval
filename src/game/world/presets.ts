@@ -89,16 +89,28 @@ export const PRESETS: Record<PresetId, MapPreset> = {
 
 export const PRESET_LIST = Object.values(PRESETS);
 
-/** Lato della mappa: più grande con due giocatori. */
-export function mapSize(players: 1 | 2): number {
-  return players === 2 ? 88 : 64;
+/** Lato della mappa secondo il numero di castelli (giocatori e signori). */
+export function mapSize(sites: number): number {
+  if (sites <= 1) return 96;
+  if (sites === 2) return 104;
+  if (sites === 3) return 120;
+  return 128;
 }
 
-/** Centri dei siti dei castelli. */
-export function siteCenters(size: number, players: 1 | 2): Array<[number, number]> {
-  if (players === 1) return [[size / 2, size / 2]];
-  return [
-    [Math.round(size * 0.27), Math.round(size / 2)],
-    [Math.round(size * 0.73), Math.round(size / 2)],
-  ];
+/** Centri dei siti dei castelli: due ai lati, tre o più in cerchio (il primo è il giocatore, a sud). */
+export function siteCenters(size: number, sites: number): Array<[number, number]> {
+  if (sites <= 1) return [[Math.round(size / 2), Math.round(size / 2)]];
+  if (sites === 2) {
+    return [
+      [Math.round(size * 0.27), Math.round(size / 2)],
+      [Math.round(size * 0.73), Math.round(size / 2)],
+    ];
+  }
+  const r = size * 0.32;
+  const out: Array<[number, number]> = [];
+  for (let i = 0; i < sites; i++) {
+    const a = Math.PI / 2 + (i / sites) * Math.PI * 2;
+    out.push([Math.round(size / 2 + Math.cos(a) * r), Math.round(size / 2 + Math.sin(a) * r)]);
+  }
+  return out;
 }

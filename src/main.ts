@@ -97,6 +97,7 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
       onTool: (id) => setTool(id),
       onDeselect: () => select(null),
       selectCompanies: (ids) => selectCompanies(ids),
+      focus: (x, z) => view.focus(x, z),
       onSpeed: (s) => setSpeed(s),
       onSave: () => save(true),
       musicOn: music.enabled,

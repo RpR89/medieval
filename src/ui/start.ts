@@ -91,11 +91,19 @@ export function showStartScreen(root: HTMLElement): Promise<StartResult> {
       const nameInput = el('input', { type: 'text', placeholder: 'Nome del castello', maxlength: '40', value: 'Rocca di ' + session.name });
       const mapSelect = el('select');
       for (const p of PRESET_LIST) mapSelect.append(el('option', { value: p.id, text: `${p.icon} ${p.name} — ${p.description}` }));
+      const lordsSelect = el('select');
+      for (const [n, t] of [[0, 'Nessuno: solo predoni'], [1, '1 signore rivale'], [2, '2 signori rivali'], [3, '3 signori rivali'], [4, '4 signori rivali']] as const) {
+        lordsSelect.append(el('option', { value: String(n), text: t }));
+      }
+      lordsSelect.value = '2';
       const newBtn = el('button', { class: 'primary', text: 'Nuova partita in solitario' });
       newBtn.onclick = () => {
         if (existing && !confirm('Iniziare una nuova partita sovrascriverà il salvataggio attuale. Continuare?')) return;
         const seed = Math.floor(Math.random() * 2 ** 31);
-        finish({ session, state: createInitialState(seed, nameInput.value.trim() || 'Castello senza nome', { preset: mapSelect.value as PresetId }) });
+        finish({
+          session,
+          state: createInitialState(seed, nameInput.value.trim() || 'Castello senza nome', { preset: mapSelect.value as PresetId, lords: Number(lordsSelect.value) }),
+        });
       };
       const back = el('button', { class: 'link', text: '← Indietro' });
       back.onclick = () => chooseGame(session);
@@ -109,7 +117,15 @@ export function showStartScreen(root: HTMLElement): Promise<StartResult> {
         cont.onclick = () => finish({ session, state: existing! });
         items.push(cont, el('hr'));
       }
-      items.push(el('label', { text: 'Nuovo castello' }), nameInput, el('label', { text: 'Mappa' }), mapSelect, newBtn);
+      items.push(
+        el('label', { text: 'Nuovo castello' }),
+        nameInput,
+        el('label', { text: 'Mappa' }),
+        mapSelect,
+        el('label', { text: 'Signori rivali (con castelli, eserciti e diplomazia)' }),
+        lordsSelect,
+        newBtn,
+      );
       card.replaceChildren(...items);
     }
 

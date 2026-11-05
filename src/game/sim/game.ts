@@ -31,6 +31,7 @@ import {
 } from '../world/terrain';
 import { resolveSiege, type AttackerArmy, type DefenderSnapshot, type SiegeSegment } from './siege';
 import { findPath } from './pathfind';
+import { lordCastle, lordLevel, PERSONALITIES, STATUS_NAMES, type Lord } from './lords';
 import {
   BASE_HOUSING,
   BASE_STORAGE,
@@ -162,7 +163,7 @@ export class Game {
   levelOverride?: number;
 
   constructor(public state: GameState, private random: () => number = Math.random) {
-    this.terrain = generateTerrain(state.seed, { preset: state.preset, players: state.match ? 2 : 1 });
+    this.terrain = generateTerrain(state.seed, { preset: state.preset, players: state.match ? 2 : 1 + (state.lords?.length ?? 0) });
     this.occupancy = new Int32Array(this.terrain.size * this.terrain.size);
     for (const b of state.buildings) {
       this.mark(b, b.uid);
@@ -173,6 +174,7 @@ export class Game {
     const d = dateFromDays(state.day);
     this.lastSeasonIndex = seasonIndex(d.season);
     this.lastYear = d.year;
+    if (state.lords?.length) this.syncLords(true);
   }
 
   // ───────────── Eventi ─────────────
@@ -670,8 +672,9 @@ export class Game {
       return { ok: false, reason: 'Hai già un castello: fallo evolvere' };
     }
     const [w, d] = def.size;
-    const t = this.territory();
-    if (x < t.x0 || z < t.z0 || x + w > t.x1 || z + d > t.z1) return { ok: false, reason: 'Fuori dal tuo territorio' };
+    for (let dz = 0; dz < d; dz++) for (let dx = 0; dx < w; dx++) {
+      if (!this.ownsTile(x + dx, z + dz)) return { ok: false, reason: 'Fuori dal tuo territorio' };
+    }
     let rock = 0;
     let gold = 0;
     let river = 0;
@@ -974,6 +977,7 @@ export class Game {
     if (s.day >= s.nextRaidDay) this.resolveRaid();
     this.stepWar();
     this.stepCompanies(dt);
+    if (s.lords?.length) this.stepLords(dt);
   }
 
   private stepHerd(b: PlacedBuilding, def: BuildingDef, si: number, staffing: number, dt: number) {
@@ -1318,7 +1322,7 @@ export class Game {
         flooded: moatTiles ? flooded / moatTiles : 0,
         stakes: moatTiles ? stakes / moatTiles : 0,
       },
-      army: this.defendingTroops(),
+      army: this.withAllies(this.defendingTroops()),
       armory: this.state.buildings.some((b) => b.upgrades?.includes('armory')),
       cistern: this.state.buildings.some((b) => b.upgrades?.includes('cistern')),
       charcoal: this.state.resources.charcoal,
@@ -1450,7 +1454,9 @@ export class Game {
       if (def.fort) return this.hpState(b) === 'ruin' ? 1.6 : Infinity;
       return this.isForeign(b) ? 1.4 : 1.2;
     }
-    if (isWater(t)) return Infinity;
+    // Il mare non si attraversa; i fiumi si guadano a fatica (i ponti sono molto più rapidi)
+    if (t === Tile.Sea) return Infinity;
+    if (t === Tile.River) return 10;
     if (t === Tile.Forest) return 2.2;
     if (t === Tile.Rock || t === Tile.Gold) return 1.4;
     return 1;
@@ -1461,6 +1467,7 @@ export class Game {
     let v = Infinity;
     for (const k of ['infantry', 'archers', 'cavalry'] as const) if (c.troops[k] > 0) v = Math.min(v, MARCH_SPEED[k]);
     for (const k of ['rams', 'trebuchets'] as const) if (c.troops[k] > 0) v = Math.min(v, ENGINES[k].speed);
+    if (c.envoy) return 6;
     v = (isFinite(v) ? v : 4) * FORMATIONS[c.formation ?? 'line'].speed;
     return c.groupSpeed ? Math.min(v, c.groupSpeed) : v;
   }
@@ -1581,7 +1588,12 @@ export class Game {
 
   /** Ordine d'attacco: marciare contro un edificio dell'avversario e assaltare il castello. */
   orderAttack(ids: string[], tx: number, tz: number): PlaceCheck {
-    if (!this.state.match || !this.others.length) return { ok: false, reason: 'Nessun castello nemico da attaccare' };
+    if (!this.others.length) return { ok: false, reason: 'Nessun castello nemico da attaccare' };
+    const tb = this.buildingAt(Math.floor(tx), Math.floor(tz));
+    if (tb?.owner !== undefined) {
+      const lord = this.lord(tb.owner);
+      if (lord && lord.status !== 'war') this.declareWar(lord, 'Hai attaccato il suo castello');
+    }
     const list = this.own(ids);
     this.orderGroup(list, tx, tz, 'attack', false);
     for (const c of list) c.target = [tx, tz];
@@ -1642,12 +1654,33 @@ export class Game {
 
   /** Soldati nemici dentro il proprio territorio (per l'allarme). */
   enemiesInTerritory(): number {
-    const t = this.territory();
     let n = 0;
     for (const c of this.enemyCompanies) {
-      if (c.x >= t.x0 && c.x < t.x1 && c.z >= t.z0 && c.z < t.z1) n += c.troops.infantry + c.troops.archers + c.troops.cavalry;
+      if (c.owner !== undefined && this.lord(c.owner)?.status !== 'war') continue;
+      if (this.ownsTile(Math.floor(c.x), Math.floor(c.z))) n += c.troops.infantry + c.troops.archers + c.troops.cavalry;
     }
     return n;
+  }
+
+  /** Indice del sito di castello più vicino alla casella (divisione del territorio). */
+  ownerAt(x: number, z: number): number {
+    let best = 0;
+    let bd = Infinity;
+    this.terrain.sites.forEach(([sx, sz], i) => {
+      const d = (x + 0.5 - sx) ** 2 + (z + 0.5 - sz) ** 2;
+      if (d < bd) {
+        bd = d;
+        best = i;
+      }
+    });
+    return best;
+  }
+
+  /** La casella è nel proprio territorio? */
+  ownsTile(x: number, z: number): boolean {
+    if (x < 0 || z < 0 || x >= this.terrain.size || z >= this.terrain.size) return false;
+    if (this.terrain.sites.length <= 1) return true;
+    return this.ownerAt(x, z) === (this.state.match?.slot ?? 0);
   }
 
   private nearHome(c: Company, r = 6): boolean {
@@ -1687,7 +1720,7 @@ export class Game {
 
   private pruneCompanies() {
     if (!this.state.companies) return;
-    this.state.companies = this.state.companies.filter((c) => c.troops.infantry + c.troops.archers + c.troops.cavalry > 0);
+    this.state.companies = this.state.companies.filter((c) => c.envoy || c.troops.infantry + c.troops.archers + c.troops.cavalry > 0);
   }
 
   private stepCompanies(dt: number) {
@@ -1704,7 +1737,7 @@ export class Game {
         const dx = tx - c.x;
         const dz = tz - c.z;
         const d = Math.hypot(dx, dz);
-        const cost = this.moveCost(nx, nz);
+        const cost = c.envoy ? this.envoyMoveCost(nx, nz) : this.moveCost(nx, nz);
         if (!isFinite(cost)) {
           // Il percorso è stato chiuso (nuove mura): ricalcola
           if (c.order === 'attack' && c.target) this.route(c, c.target[0], c.target[1]);
@@ -1743,6 +1776,10 @@ export class Game {
           continue;
         }
       }
+      if (c.envoy && c.order === 'move' && this.envoyArrived(c)) {
+        this.resolveMission(c);
+        continue;
+      }
       if (c.order === 'home' && this.nearHome(c, 3.2)) {
         this.mergeHome(c);
         continue;
@@ -1765,7 +1802,12 @@ export class Game {
       goods += n ?? 0;
     }
     this.state.companies = this.companies().filter((x) => x !== c);
-    this.log(`Un reparto è rientrato nel castello${goods ? ` con ${Math.round(goods)} unità di bottino` : ''}.`, 'good');
+    this.log(
+      c.envoy
+        ? `Il diplomatico è tornato al castello${goods ? ` con ${Math.round(goods)} monete di tributo` : ''}.`
+        : `Un reparto è rientrato nel castello${goods ? ` con ${Math.round(goods)} unità di bottino` : ''}.`,
+      'good',
+    );
     this.emit();
   }
 
@@ -1806,6 +1848,10 @@ export class Game {
       },
     };
     this.log(`All'assalto! ${troops.infantry + troops.archers + troops.cavalry} soldati attaccano le mura nemiche.`, 'info');
+    if (!this.state.match) {
+      this.assaultLord(lead, a);
+      return;
+    }
     for (const fn of this.assaultListeners) fn(a);
     this.emit();
   }
@@ -1846,8 +1892,8 @@ export class Game {
    */
   fieldBattles(): Array<{ enemyLosses: Record<string, Force>; text: string }> {
     const out: Array<{ enemyLosses: Record<string, Force>; text: string }> = [];
-    const mine = this.companies().filter((c) => !c.engaged);
-    const theirs = this.enemyCompanies.filter((c) => !c.engaged);
+    const mine = this.companies().filter((c) => !c.engaged && !c.envoy);
+    const theirs = this.enemyCompanies.filter((c) => !c.engaged && !c.envoy && (c.owner === undefined || this.lord(c.owner)?.status === 'war'));
     const used = new Set<string>();
     for (const c of mine) {
       if (used.has(c.id)) continue;
@@ -1925,6 +1971,455 @@ export class Game {
     this.pruneCompanies();
     if (text) this.log(`${text} Caduti: ${dead}.`, text.startsWith('Vittoria') ? 'good' : 'bad');
     this.emit();
+  }
+
+
+  // ───────────── Signori rivali e diplomazia (giocatore singolo) ─────────────
+
+  lords(): Lord[] {
+    return this.state.lords ?? [];
+  }
+
+  lord(id: number): Lord | undefined {
+    return this.state.lords?.find((l) => l.id === id);
+  }
+
+  /** Edifici dei signori come "altri" sulla mappa; ricostruisce i castelli cambiati d'epoca. */
+  private syncLords(force = false) {
+    const year = this.date.year;
+    let changed = force;
+    for (const l of this.lords()) {
+      const lv = lordLevel(year, l.personality);
+      if (lv !== l.level || !l.buildings.length) {
+        l.level = lv;
+        l.buildings = lordCastle(this.terrain, this.terrain.sites[l.id], lv, this.state.seed + l.id * 101);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    for (const b of this.others) this.mark(b, 0);
+    this.others = [];
+    for (const l of this.lords()) {
+      for (const b of l.buildings) {
+        const fb: PlacedBuilding = { ...b, uid: FOREIGN + l.id * 100000 + b.uid, owner: l.id };
+        this.others.push(fb);
+        this.mark(fb, fb.uid);
+      }
+    }
+    this.changed();
+  }
+
+  /** Il castello di un signore (il suo mastio). */
+  lordKeep(l: Lord): [number, number] {
+    return this.terrain.sites[l.id];
+  }
+
+  lordPower(l: Lord): number {
+    return l.army.infantry * 4 + l.army.archers * 3 + l.army.cavalry * 7 + l.level * 25;
+  }
+
+  myPower(): number {
+    return this.armyPower() + this.fortDefense() + (this.state.companies ?? []).reduce((s, c) => s + c.troops.infantry * 4 + c.troops.archers * 3 + c.troops.cavalry * 7, 0);
+  }
+
+  private declareWar(l: Lord, why: string) {
+    if (l.status === 'war') return;
+    const wasAlly = l.status === 'alliance' || l.status === 'pact';
+    l.status = 'war';
+    l.relation = Math.min(l.relation, -60);
+    this.log(`⚔️ Guerra con ${l.name} di ${l.castle}! ${why}.`, 'bad');
+    // Tradire un patto rovina la reputazione presso gli altri signori
+    if (wasAlly) for (const o of this.lords()) if (o !== l) o.relation -= 15;
+  }
+
+  /** Alleati che mandano rinforzi quando il castello è assediato. */
+  private withAllies(t: { infantry: number; archers: number; cavalry: number }) {
+    const out = { ...t };
+    for (const l of this.lords()) {
+      if (l.status !== 'alliance') continue;
+      out.infantry += Math.floor(l.army.infantry * 0.25);
+      out.archers += Math.floor(l.army.archers * 0.25);
+      out.cavalry += Math.floor(l.army.cavalry * 0.25);
+    }
+    return out;
+  }
+
+  private lordDay = -1;
+
+  private stepLords(dt: number) {
+    const s = this.state;
+    const today = Math.floor(s.day);
+    // Movimento dei loro eserciti a ogni passo
+    for (const l of this.lords()) this.stepLordCompanies(l, dt);
+    this.enemyCompanies = this.lords().flatMap((l) => l.companies.map((c) => ({ ...c, owner: l.id })));
+    // Scontri in campo aperto con i nostri reparti
+    for (const f of this.fieldBattles()) {
+      for (const l of this.lords()) {
+        for (const c of l.companies) {
+          const loss = f.enemyLosses[c.id];
+          if (!loss) continue;
+          for (const k of Object.keys(loss) as Array<keyof Force>) c.troops[k] = Math.max(0, c.troops[k] - loss[k]);
+          c.path = [];
+        }
+        l.companies = l.companies.filter((c) => c.troops.infantry + c.troops.archers + c.troops.cavalry > 0);
+      }
+    }
+    if (today === this.lordDay) return;
+    this.lordDay = today;
+    this.syncLords();
+    const year = this.date.year;
+    for (const l of this.lords()) {
+      const p = PERSONALITIES[l.personality];
+      // Crescita dell'esercito e del tesoro
+      const target = (8 + l.level * 9 + (year - 900) / 12) * p.army;
+      const total = l.army.infantry + l.army.archers + l.army.cavalry;
+      if (total < target) {
+        const add = Math.max(0.05, (target - total) * 0.01);
+        l.army.infantry += add * 0.6;
+        l.army.archers += add * 0.28;
+        l.army.cavalry += add * 0.12;
+      }
+      l.wealth += 0.5 + l.level * 0.6;
+      // Il rapporto torna lentamente verso il carattere del signore
+      const base = l.status === 'alliance' ? Math.max(p.base, 40) : l.status === 'war' ? Math.min(p.base, -40) : p.base;
+      l.relation += Math.sign(base - l.relation) * Math.min(Math.abs(base - l.relation), 0.08);
+      l.relation = Math.max(-100, Math.min(100, l.relation));
+      // Cambi di stato
+      if (l.status !== 'war' && l.relation <= -60) this.declareWar(l, 'I rapporti sono precipitati');
+      if (l.status === 'vassal') {
+        const tribute = 1 + l.level;
+        s.resources.coins += tribute;
+        l.wealth = Math.max(0, l.wealth - tribute);
+        if (l.relation < -80) {
+          this.declareWar(l, 'Si è ribellato al tributo');
+        }
+      }
+      // Decisioni periodiche
+      if (s.day < l.nextAction || this.locked) continue;
+      l.nextAction = s.day + 60 + this.random() * 120;
+      const strong = this.lordPower(l) > this.myPower() * (l.personality === 'aggressive' ? 0.7 : 1.1);
+      if (l.status === 'war' || (l.status === 'neutral' && l.personality === 'aggressive' && strong && l.relation < -20 && this.random() < 0.5)) {
+        if (l.status !== 'war') this.declareWar(l, 'Ha scelto la via delle armi');
+        this.launchLordRaid(l);
+      } else if (l.status === 'alliance' && this.random() < 0.6) {
+        const gift = Math.round(40 + l.level * 30);
+        s.resources.coins += gift;
+        l.wealth = Math.max(0, l.wealth - gift);
+        this.log(`🎁 ${l.name}, nostro alleato, ci manda ${gift} monete.`, 'good');
+      } else if (l.personality === 'greedy' && l.status === 'neutral' && strong && this.random() < 0.4) {
+        l.relation -= 10;
+        this.log(`💰 ${l.name} pretende un tributo e minaccia guerra: mandagli un diplomatico con un dono.`, 'bad');
+      }
+    }
+  }
+
+  private launchLordRaid(l: Lord) {
+    if (l.companies.length) return;
+    const k = 0.55;
+    const troops: Force = {
+      infantry: Math.floor(l.army.infantry * k),
+      archers: Math.floor(l.army.archers * k),
+      cavalry: Math.floor(l.army.cavalry * k),
+      rams: l.level >= 3 ? 1 + Math.floor(l.level / 3) : 0,
+      trebuchets: l.level >= 4 ? 1 : 0,
+    };
+    if (troops.infantry + troops.archers + troops.cavalry < 3) return;
+    l.army.infantry -= troops.infantry;
+    l.army.archers -= troops.archers;
+    l.army.cavalry -= troops.cavalry;
+    const [sx, sz] = this.lordKeep(l);
+    const c: Company = { id: `l${l.id}-${l.nextUid++}`, troops, x: sx + 0.5, z: sz + 4.5, order: 'attack', formation: 'line', behavior: 'aggressive' };
+    const [kx, kz] = this.keepCenter();
+    c.path = findPath(this.terrain.size, [Math.floor(c.x), Math.floor(c.z)], [Math.floor(kx), Math.floor(kz)], (x, z) => this.lordMoveCost(x, z));
+    l.companies.push(c);
+    const n = troops.infantry + troops.archers + troops.cavalry;
+    this.log(`⚔️ ${l.name} marcia contro di noi con ${n} soldati${troops.rams + troops.trebuchets ? ' e macchine d\'assedio' : ''}!`, 'bad');
+  }
+
+  /** Costo di movimento per gli eserciti dei signori: le nostre mura li fermano. */
+  private lordMoveCost(x: number, z: number): number {
+    const t = tileAt(this.terrain, x, z);
+    if (t === undefined) return Infinity;
+    const b = this.buildingAt(x, z);
+    if (b) {
+      const def = getBuilding(b.defId);
+      if (def.road) return 0.65;
+      if (def.fort && def.fort !== 'moat') return this.isForeign(b) && def.fort === 'gate' ? 0.8 : this.hpState(b) === 'ruin' ? 1.6 : Infinity;
+      if (def.fort === 'moat') return 3;
+      return 1.2;
+    }
+    if (t === Tile.Sea) return Infinity;
+    if (t === Tile.River) return 10;
+    return t === Tile.Forest ? 2.2 : t === Tile.Rock || t === Tile.Gold ? 1.4 : 1;
+  }
+
+  private stepLordCompanies(l: Lord, dt: number) {
+    for (const c of [...l.companies]) {
+      let budget = this.companySpeed(c) * dt;
+      while (budget > 1e-6 && c.path?.length) {
+        const [nx, nz] = c.path[0];
+        const dx = nx + 0.5 - c.x;
+        const dz = nz + 0.5 - c.z;
+        const d = Math.hypot(dx, dz);
+        const cost = this.lordMoveCost(nx, nz);
+        if (!isFinite(cost)) {
+          c.path = [];
+          break;
+        }
+        const step = budget / cost;
+        if (step >= d) {
+          c.x = nx + 0.5;
+          c.z = nz + 0.5;
+          c.path.shift();
+          budget -= d * cost;
+        } else {
+          c.x += (dx / d) * step;
+          c.z += (dz / d) * step;
+          budget = 0;
+        }
+        if (d > 1e-6) c.heading = Math.atan2(-dz, dx);
+      }
+      if (c.order === 'attack') {
+        // Arrivati alle nostre mura (o alla fine del percorso): assedio
+        const [kx, kz] = this.keepCenter();
+        const nearWalls = this.state.buildings.some((b) => {
+          const def = getBuilding(b.defId);
+          if (!def.fort || def.fort === 'moat') return false;
+          return Math.hypot(b.x + def.size[0] / 2 - c.x, b.z + def.size[1] / 2 - c.z) < 2.6;
+        });
+        const atKeep = Math.hypot(kx - c.x, kz - c.z) < 4;
+        if (!nearWalls && !atKeep && !c.path?.length) {
+          // Non riesce ad arrivare: rinuncia e torna
+          c.order = 'home';
+          const [sx, sz] = this.lordKeep(l);
+          c.path = findPath(this.terrain.size, [Math.floor(c.x), Math.floor(c.z)], [sx, sz + 4], (x, z) => this.lordMoveCost(x, z));
+        } else if (nearWalls || atKeep) {
+          const army: AttackerArmy = { name: `L'esercito di ${l.name}`, ...c.troops, morale: l.personality === 'aggressive' ? 0.6 : 0.5 };
+          const res = this.besiege(army);
+          const lost = res.attackerLosses;
+          c.troops.infantry = Math.max(0, c.troops.infantry - lost.infantry);
+          c.troops.archers = Math.max(0, c.troops.archers - lost.archers);
+          c.troops.cavalry = Math.max(0, c.troops.cavalry - lost.cavalry);
+          if (res.outcome !== 'repelled') l.wealth += 150 + l.level * 50;
+          if (res.outcome === 'repelled') l.relation -= 5;
+          c.order = 'home';
+          const [sx, sz] = this.lordKeep(l);
+          c.path = findPath(this.terrain.size, [Math.floor(c.x), Math.floor(c.z)], [sx, sz + 4], (x, z) => this.lordMoveCost(x, z));
+        }
+      } else if (c.order === 'home' && !c.path?.length) {
+        l.army.infantry += c.troops.infantry;
+        l.army.archers += c.troops.archers;
+        l.army.cavalry += c.troops.cavalry;
+        l.companies = l.companies.filter((x) => x !== c);
+      }
+      if (c.troops.infantry + c.troops.archers + c.troops.cavalry <= 0) l.companies = l.companies.filter((x) => x !== c);
+    }
+  }
+
+  /** I nostri reparti assaltano il castello di un signore: l'assedio si risolve subito. */
+  private assaultLord(lead: Company, a: IncomingAttack) {
+    // Il signore è quello del castello più vicino
+    let lord: Lord | undefined;
+    let bd = Infinity;
+    for (const l of this.lords()) {
+      const [x, z] = this.lordKeep(l);
+      const d = Math.hypot(x - lead.x, z - lead.z);
+      if (d < bd) {
+        bd = d;
+        lord = l;
+      }
+    }
+    if (!lord) return;
+    if (lord.status !== 'war') this.declareWar(lord, 'Hai assaltato le sue mura');
+    const segments: SiegeSegment[] = [];
+    for (const b of lord.buildings) {
+      const def = getBuilding(b.defId);
+      if (!def.fort || def.fort === 'moat') continue;
+      const max = this.maxHp(b);
+      segments.push({ uid: b.uid, defId: b.defId, role: def.fort, hp: b.hp ?? max, maxHp: max, upgrades: [...(b.upgrades ?? [])], defense: def.defense ?? 0 });
+    }
+    const snap: DefenderSnapshot = {
+      segments,
+      closed: true,
+      moat: { tiles: 0, coverage: 0, depth: 1, flooded: 0, stakes: 0 },
+      army: { infantry: Math.round(lord.army.infantry), archers: Math.round(lord.army.archers), cavalry: Math.round(lord.army.cavalry) },
+      armory: lord.level >= 4,
+      cistern: lord.level >= 3,
+      charcoal: lord.level >= 3 ? 20 : 0,
+    };
+    const army: AttackerArmy = { name: `L'esercito di ${this.state.castleName}`, ...a.troops, morale: 0.6, arrows: a.tactics?.arrows, melee: a.tactics?.melee };
+    const res = resolveSiege(snap, army, this.random);
+    for (const [uid, hp] of res.damage) {
+      const b = lord.buildings.find((x) => x.uid === uid);
+      if (b) b.hp = Math.max(0, Math.round(hp));
+    }
+    for (const k of ['infantry', 'archers', 'cavalry'] as const) lord.army[k] = Math.max(0, lord.army[k] - res.defenderLosses[k]);
+    // Bottino dal tesoro del signore
+    const share = res.outcome === 'sacked' ? 0.5 : res.outcome === 'held' ? 0.15 : 0;
+    const coins = Math.floor(lord.wealth * share);
+    lord.wealth -= coins;
+    const loot: Cost = coins ? { coins, grain: Math.round(coins * 0.8), wood: Math.round(coins * 0.5) } : {};
+    if (res.outcome === 'sacked') {
+      lord.status = 'vassal';
+      lord.relation = -40;
+      this.log(`👑 ${lord.name} si sottomette: ${lord.castle} diventa nostra vassalla e ci pagherà un tributo.`, 'good');
+    }
+    const lost = res.attackerLosses;
+    const survivors: Force = {
+      infantry: Math.max(0, a.troops.infantry - lost.infantry),
+      archers: Math.max(0, a.troops.archers - lost.archers),
+      cavalry: Math.max(0, a.troops.cavalry - lost.cavalry),
+      rams: res.outcome === 'repelled' ? Math.floor(a.troops.rams / 2) : a.troops.rams,
+      trebuchets: res.outcome === 'repelled' ? Math.floor(a.troops.trebuchets / 2) : a.troops.trebuchets,
+    };
+    this.applyAttackResult({
+      id: a.id,
+      outcome: res.outcome,
+      survivors,
+      loot,
+      log: res.log,
+      attackerLosses: lost.infantry + lost.archers + lost.cavalry,
+      defenderLosses: res.defenderLosses.infantry + res.defenderLosses.archers + res.defenderLosses.cavalry,
+    });
+    // I danni si vedono sul castello del signore
+    this.syncLords(true);
+  }
+
+  // ───── Diplomatici ─────
+
+  static readonly MISSIONS: Record<'alliance' | 'pact' | 'peace' | 'gift' | 'tribute' | 'war', { name: string; icon: string; description: string }> = {
+    gift: { name: 'Dono', icon: '🎁', description: 'Porta un dono: migliora i rapporti.' },
+    pact: { name: 'Patto di non aggressione', icon: '🤝', description: 'Nessuno attacca l\'altro. Serve un rapporto almeno neutrale.' },
+    alliance: { name: 'Alleanza', icon: '🛡️', description: 'Aiuto reciproco: l\'alleato manda rinforzi e doni. Serve un buon rapporto.' },
+    peace: { name: 'Pace', icon: '🕊️', description: 'Chiede la fine della guerra. Un dono aiuta.' },
+    tribute: { name: 'Richiesta di tributo', icon: '💰', description: 'Se sei molto più forte paga, altrimenti si offende.' },
+    war: { name: 'Dichiarazione di guerra', icon: '⚔️', description: 'Apre le ostilità.' },
+  };
+
+  canSendDiplomat(lordId: number, gift: Cost): PlaceCheck {
+    if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
+    if (!this.lord(lordId)) return { ok: false, reason: 'Signore sconosciuto' };
+    if (!this.ownKeep()) return { ok: false, reason: 'Serve un castello da cui partire' };
+    const cost: Cost = { ...gift, coins: (gift.coins ?? 0) + 15 };
+    if (!canAfford(this.state.resources, cost)) return { ok: false, reason: 'Risorse insufficienti (il viaggio costa 15 monete)' };
+    if (this.companies().some((c) => c.envoy?.lord === lordId)) return { ok: false, reason: 'Un diplomatico è già in viaggio verso di lui' };
+    return { ok: true };
+  }
+
+  /** Manda un diplomatico (a cavallo, col drappo bianco) al castello di un signore. */
+  sendDiplomat(lordId: number, mission: keyof typeof Game.MISSIONS, gift: Cost = {}): Company | null {
+    if (!this.canSendDiplomat(lordId, gift).ok) return null;
+    const l = this.lord(lordId)!;
+    pay(this.state.resources, { ...gift, coins: (gift.coins ?? 0) + 15 });
+    const [x, z] = this.spawnPoint();
+    const c: Company = {
+      id: `d-${this.state.nextUid++}`,
+      troops: { infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0 },
+      x,
+      z,
+      order: 'move',
+      envoy: { lord: lordId, mission, gift },
+    };
+    const [kx, kz] = this.lordKeep(l);
+    c.path = findPath(this.terrain.size, [Math.floor(x), Math.floor(z)], [kx, kz], (xx, zz) => this.envoyMoveCost(xx, zz));
+    this.companies().push(c);
+    this.log(`🕊️ Un diplomatico parte verso ${l.castle} (${Game.MISSIONS[mission].name.toLowerCase()}).`, 'info');
+    this.emit();
+    return c;
+  }
+
+  /** I diplomatici passano dalle porte di tutti (sono ospiti). */
+  private envoyMoveCost(x: number, z: number): number {
+    const b = this.buildingAt(x, z);
+    if (b && getBuilding(b.defId).fort === 'gate') return 0.8;
+    return this.moveCost(x, z);
+  }
+
+  private envoyArrived(c: Company): boolean {
+    const l = this.lord(c.envoy!.lord);
+    if (!l) return true;
+    const [kx, kz] = this.lordKeep(l);
+    return Math.hypot(kx - c.x, kz - c.z) < 5 || !c.path?.length;
+  }
+
+  private resolveMission(c: Company) {
+    const e = c.envoy!;
+    const l = this.lord(e.lord);
+    c.order = 'home';
+    const [hx, hz] = this.keepCenter();
+    c.path = findPath(this.terrain.size, [Math.floor(c.x), Math.floor(c.z)], [Math.floor(hx), Math.floor(hz)], (x, z) => this.envoyMoveCost(x, z));
+    if (!l) return;
+    const giftValue = Object.entries(e.gift ?? {}).reduce((s, [id, n]) => s + (n ?? 0) * RESOURCES[id as ResourceId].basePrice, 0);
+    const bonus = Math.min(40, giftValue / 12);
+    const luck = this.random() * 20 - 10;
+    // In guerra il diplomatico rischia la vita
+    if (l.status === 'war' && e.mission !== 'peace' && this.random() < 0.25) {
+      this.state.companies = this.companies().filter((x) => x !== c);
+      this.log(`☠️ ${l.name} ha fatto imprigionare il nostro diplomatico.`, 'bad');
+      return;
+    }
+    const say = (t: string, good: boolean) => this.log(`🕊️ ${l.castle}: ${t}`, good ? 'good' : 'bad');
+    switch (e.mission) {
+      case 'gift':
+        l.relation = Math.min(100, l.relation + bonus);
+        say(`${l.name} accetta il dono (rapporto +${Math.round(bonus)}).`, true);
+        break;
+      case 'pact':
+        if (l.status === 'war') say('non si fanno patti con chi è in guerra: chiedi prima la pace.', false);
+        else if (l.relation + bonus + luck >= -5) {
+          l.status = l.status === 'alliance' ? 'alliance' : 'pact';
+          l.relation = Math.min(100, l.relation + 10 + bonus / 2);
+          say(`${l.name} firma un patto di non aggressione.`, true);
+        } else {
+          l.relation -= 3;
+          say(`${l.name} rifiuta il patto.`, false);
+        }
+        break;
+      case 'alliance':
+        if (l.status === 'war') say('impossibile allearsi con un nemico in guerra.', false);
+        else if (l.relation + bonus + luck >= 35 || (l.status === 'pact' && l.relation + bonus + luck >= 20)) {
+          l.status = 'alliance';
+          l.relation = Math.min(100, l.relation + 15);
+          say(`${l.name} accetta l'alleanza! Ci manderà rinforzi e doni.`, true);
+        } else {
+          l.relation -= 2;
+          say(`${l.name} non si fida ancora abbastanza (rapporto ${Math.round(l.relation)}).`, false);
+        }
+        break;
+      case 'peace': {
+        const fear = this.myPower() > this.lordPower(l) ? 15 : -10;
+        if (l.status !== 'war') say('non siamo in guerra.', true);
+        else if (l.relation + bonus + fear + luck >= -55) {
+          l.status = 'neutral';
+          l.relation = Math.max(l.relation, -25);
+          l.companies.forEach((x) => (x.order = 'home'));
+          say(`${l.name} accetta la pace.`, true);
+        } else say(`${l.name} rifiuta la pace: la guerra continua.`, false);
+        break;
+      }
+      case 'tribute':
+        if (this.myPower() > this.lordPower(l) * 1.5) {
+          const coins = Math.floor(l.wealth * 0.3);
+          l.wealth -= coins;
+          c.cargo = { coins };
+          l.relation -= 20;
+          say(`${l.name} paga un tributo di ${coins} monete, a denti stretti.`, true);
+        } else {
+          l.relation -= 15;
+          say(`${l.name} ride della richiesta.`, false);
+          if (l.personality === 'aggressive') this.declareWar(l, 'Ha preso la richiesta come un insulto');
+        }
+        break;
+      case 'war':
+        this.declareWar(l, 'Gli abbiamo dichiarato guerra');
+        break;
+    }
+    this.emit();
+  }
+
+  /** Testo breve per l'interfaccia. */
+  lordStatusName(l: Lord): string {
+    return STATUS_NAMES[l.status];
   }
 
   // ───────────── Tasse e contento ─────────────

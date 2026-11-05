@@ -588,7 +588,6 @@ export function keepStone(g: G, c: ModelCtx) {
     for (const [fx, fz, r] of [[0, 1.12, 0], [0, -1.12, PI], [1.12, 0, PI / 2], [-1.12, 0, -PI / 2]] as const) {
       for (const off of [-0.6, -0.2, 0.2, 0.6]) g.add(archWindow(fx === 0 ? off : fx, 2.75, fz === 0 ? off : fz, 0.14, 0.34, r));
     }
-    g.add(box(2.34, 0.06, 2.34, k.gold, 0, 3.2, 0));
   }
   g.add(flag(k.flagGold, 0.4, has(c, 'great_hall') ? 5.5 : 4.75, 0.4, 0.5));
 }

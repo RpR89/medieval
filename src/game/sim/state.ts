@@ -4,6 +4,7 @@ import { DAYS_PER_YEAR } from '../data/calendar';
 import type { PresetId } from '../world/presets';
 import type { Cost } from '../data/resources';
 import type { Behavior, Formation, Stance } from '../data/units';
+import { createLords, type Lord } from './lords';
 
 export interface PlacedBuilding {
   uid: number;
@@ -16,6 +17,8 @@ export interface PlacedBuilding {
   hp?: number;
   /** Miglioramenti costruiti (id di UPGRADES). */
   upgrades?: string[];
+  /** Proprietario per gli edifici dei signori controllati dal gioco (indice del signore). */
+  owner?: number;
 }
 
 /** Rapporto dell'ultimo assedio, per l'interfaccia. */
@@ -132,6 +135,8 @@ export interface GameState {
   preset?: PresetId;
   /** Partita multigiocatore: id e posto (0 = chi l'ha creata, 1 = chi si è unito). */
   match?: { id: string; slot: 0 | 1 };
+  /** Signori controllati dal gioco (solo in giocatore singolo). */
+  lords?: Lord[];
   /** Livello di tassazione (indice di TAX_LEVELS, default 2 = normale). */
   taxLevel?: number;
   /** Contento della popolazione, 0-100. */
@@ -149,6 +154,8 @@ export interface GameState {
 export interface StateOptions {
   preset?: PresetId;
   match?: { id: string; slot: 0 | 1 };
+  /** Numero di signori rivali (0-4), solo in giocatore singolo. */
+  lords?: number;
 }
 
 export const BASE_HOUSING = 10;
@@ -180,6 +187,7 @@ export function createInitialState(seed: number, castleName = 'Castello senza no
     nextRaidDay: DAYS_PER_YEAR * 2 + 120,
     preset: opts.preset,
     match: opts.match,
+    lords: !opts.match && opts.lords ? createLords(Math.min(4, opts.lords), seed) : undefined,
     log: [
       {
         day: 0,

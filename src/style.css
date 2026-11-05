@@ -185,3 +185,7 @@ button.multi { background: #6b2a1e; border-color: #a3402f; color: var(--ink); }
 
 .castle-level .stars { color: var(--accent); letter-spacing: 2px; }
 .castle-level button { width: 100%; margin: 4px 0; }
+
+.lord { border-bottom: 1px solid var(--line); padding: 6px 0 8px; }
+.lord .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.lord select { flex: 1; }

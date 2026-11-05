@@ -133,7 +133,7 @@ describe('punti vita e miglioramenti', () => {
 describe('fossati', () => {
   it('si allagano se toccano il fiume, o con l\'allagamento', () => {
     const g = flatGame(1100);
-    for (let z = 0; z < 64; z++) g.terrain.tiles[z * 64 + 5] = Tile.River;
+    for (let z = 0; z < g.terrain.size; z++) g.terrain.tiles[z * g.terrain.size + 5] = Tile.River;
     g.placeLine('moat', lineTiles(6, 10, 12, 10));
     const far = g.place('moat', 30, 30)!;
     expect(g.moatFlooded(g.buildingAt(12, 10)!)).toBe(true);
@@ -156,7 +156,7 @@ describe('strade', () => {
 
   it('i ponti attraversano il fiume', () => {
     const g = flatGame();
-    for (let z = 0; z < 64; z++) g.terrain.tiles[z * 64 + 20] = Tile.River;
+    for (let z = 0; z < g.terrain.size; z++) g.terrain.tiles[z * g.terrain.size + 20] = Tile.River;
     expect(g.canPlace('bridge', 20, 10).ok).toBe(true);
     expect(g.canPlace('bridge', 21, 10).ok).toBe(false);
     expect(g.canPlace('road', 20, 11).ok).toBe(false);
