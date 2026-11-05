@@ -222,3 +222,27 @@ describe('tempo, epoche e bilancio', () => {
     expect(b1.net).toBeLessThan(0);
   });
 });
+
+describe('registro delle risorse', () => {
+  it('spiega entrate, uscite e spese una tantum per voce', () => {
+    const game = new Game(createInitialState(5), () => 0.5);
+    game.state.day = 95;
+    const [x, z] = findSpot(game, 'field_grain');
+    game.place('field_grain', x, z);
+    game.state.army.infantry = 5;
+    game.state.resources.vegetables = 0;
+    game.state.resources.meat = 0;
+    game.advance(20);
+    const grain = game.resourceFlows('grain');
+    expect(grain.income.find((r) => r.label === getBuilding('field_grain').name)?.perMonth).toBeGreaterThan(0);
+    expect(grain.expense.some((r) => r.label === 'Abitanti (cibo)')).toBe(true);
+    expect(grain.expense.some((r) => r.label === 'Soldati (cibo)')).toBe(true);
+    const coins = game.resourceFlows('coins');
+    expect(coins.income.some((r) => r.label === 'Tasse')).toBe(true);
+    expect(coins.expense.some((r) => r.label.startsWith('Paga:'))).toBe(true);
+    const wood = game.resourceFlows('wood');
+    expect(wood.oneOff.find((r) => r.label === 'Costruzioni')?.amount).toBeLessThan(0);
+    const net = coins.income.reduce((a, r) => a + r.perMonth, 0) + coins.expense.reduce((a, r) => a + r.perMonth, 0);
+    expect(coins.netPerMonth).toBeCloseTo(net);
+  });
+});

@@ -67,6 +67,9 @@ export class Hud {
   private saveEl: HTMLElement;
   private speedBtns: HTMLButtonElement[] = [];
   private resEls = new Map<ResourceId, HTMLElement>();
+  /** Riquadro con entrate e uscite della risorsa sotto il mouse. */
+  private resTip = el('div', { class: 'res-tip panel hidden' });
+  private resHover: ResourceId | null = null;
   private buildList: HTMLElement;
   private buildBtns = new Map<string, HTMLButtonElement>();
   private category: BuildingCategory = 'fortification';
@@ -118,7 +121,15 @@ export class Hud {
     const resBar = el('div', { class: 'resources' });
     for (const id of RESOURCE_IDS) {
       const v = el('span', { class: 'v' });
-      const item = el('span', { class: 'res', title: RESOURCES[id].name }, RESOURCES[id].icon, v);
+      const item = el('span', { class: 'res' }, RESOURCES[id].icon, v);
+      item.onmouseenter = () => {
+        this.resHover = id;
+        this.refreshResTip(item);
+      };
+      item.onmouseleave = () => {
+        this.resHover = null;
+        this.resTip.classList.add('hidden');
+      };
       this.resEls.set(id, v);
       resBar.append(item);
     }
@@ -180,6 +191,7 @@ export class Hud {
       text: 'Trascina: sposta · Tasto destro: ruota · Rotella: zoom · WASD: muovi · Spazio: pausa',
     });
 
+    root.append(this.resTip);
     root.append(this.top, build, this.panel, this.selPanel, this.compPanel, this.logEl, this.toastEl, this.hintEl);
     this.renderBuildList();
     this.setTab('castle');
@@ -1006,6 +1018,49 @@ export class Hud {
     setTimeout(() => t.remove(), 5600);
   }
 
+  /** Entrate, uscite e movimenti una tantum della risorsa sotto il mouse. */
+  private refreshResTip(anchor?: HTMLElement) {
+    const id = this.resHover;
+    if (!id) return;
+    const g = this.game;
+    const f = g.resourceFlows(id);
+    const v = g.state.resources[id];
+    const cap = g.storageCap();
+    const num = (n: number, sign = true) => `${sign && n > 0 ? '+' : ''}${n < 0 ? '−' : ''}${fmt(Math.abs(n))}`;
+    const rows = (list: Array<{ label: string; perMonth: number }>, cls: string) =>
+      list.length
+        ? `<table>${list.map((r) => `<tr><td>${escapeHtml(r.label)}</td><td class="${cls}">${num(r.perMonth)}</td></tr>`).join('')}</table>`
+        : '<p class="muted small">Nessuna</p>';
+    const totIn = f.income.reduce((a, r) => a + r.perMonth, 0);
+    const totOut = f.expense.reduce((a, r) => a + r.perMonth, 0);
+    const net = f.netPerMonth;
+    let forecast = '';
+    if (net < -0.05 && v > 0) forecast = `<p class="small bad">⏳ Al ritmo attuale finisce tra ${formatDuration((v / -net) * 30)}</p>`;
+    else if (net > 0.05 && id !== 'coins' && v < cap) forecast = `<p class="small muted">Magazzini pieni tra ${formatDuration(((cap - v) / net) * 30)}</p>`;
+    else if (id !== 'coins' && v >= cap - 0.5 && net > 0) forecast = '<p class="small bad">Magazzini pieni: la produzione in più va persa</p>';
+    const oneOff = f.oneOff.length
+      ? `<h4>Ultimi 30 giorni (una tantum)</h4><table>${f.oneOff
+          .map((r) => `<tr><td>${escapeHtml(r.label)}</td><td class="${r.amount >= 0 ? 'good' : 'bad'}">${num(r.amount)}</td></tr>`)
+          .join('')}</table>`
+      : '';
+    setHtml(
+      this.resTip,
+      `<h3>${RESOURCES[id].icon} ${RESOURCES[id].name}</h3>
+      <p>In magazzino: <b>${fmt(v)}</b>${id !== 'coins' ? ` <span class="muted">/ ${fmt(cap)}</span>` : ''}</p>
+      <h4>Entrate al mese <span class="good">${num(totIn)}</span></h4>${rows(f.income, 'good')}
+      <h4>Uscite al mese <span class="bad">${num(totOut)}</span></h4>${rows(f.expense, 'bad')}
+      <p class="net">Saldo mensile: <b class="${net >= 0 ? 'good' : 'bad'}">${num(net)}</b></p>
+      ${forecast}${oneOff}`,
+    );
+    this.resTip.classList.remove('hidden');
+    if (anchor) {
+      const r = anchor.getBoundingClientRect();
+      const w = 290;
+      this.resTip.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, r.left - 10))}px`;
+      this.resTip.style.top = `${r.bottom + 6}px`;
+    }
+  }
+
   refresh(speed: number) {
     const g = this.game;
     const d = g.date;
@@ -1029,8 +1084,8 @@ export class Hud {
       e.textContent = fmt(v);
       e.parentElement!.classList.toggle('empty', v < 1);
       e.parentElement!.classList.toggle('full', id !== 'coins' && v >= cap - 0.5);
-      e.parentElement!.title = `${RESOURCES[id].name}: ${fmt(v)}${id !== 'coins' ? ` / ${cap}` : ''}`;
     }
+    if (this.resHover) this.refreshResTip();
     this.refreshBuildList();
     this.refreshTab();
     this.refreshSelection();

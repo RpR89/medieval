@@ -573,6 +573,10 @@ export class Game {
   }
 
   upgrade(b: PlacedBuilding, upId: string): boolean {
+    return this.track('Miglioramenti', () => this.upgradeImpl(b, upId), 'event');
+  }
+
+  private upgradeImpl(b: PlacedBuilding, upId: string): boolean {
     if (!this.canUpgrade(b, upId).ok) return false;
     if (['bailey', 'great_hall', 'palace'].includes(upId)) {
       const next = { bailey: 2, great_hall: 4, palace: 5 }[upId as 'bailey'];
@@ -589,6 +593,10 @@ export class Game {
 
   /** Applica il miglioramento a tutti gli edifici dello stesso tipo, finché bastano le risorse. */
   upgradeAll(defId: string, upId: string): number {
+    return this.track('Miglioramenti', () => this.upgradeAllImpl(defId, upId), 'event');
+  }
+
+  private upgradeAllImpl(defId: string, upId: string): number {
     let n = 0;
     for (const b of this.state.buildings) {
       if (b.defId !== defId || !this.canUpgrade(b, upId).ok) continue;
@@ -628,6 +636,10 @@ export class Game {
   }
 
   repair(b: PlacedBuilding): boolean {
+    return this.track('Riparazioni', () => this.repairImpl(b), 'event');
+  }
+
+  private repairImpl(b: PlacedBuilding): boolean {
     if (this.isForeign(b) || this.locked) return false;
     const cost = this.repairCost(b);
     if (!Object.keys(cost).length || !canAfford(this.state.resources, cost)) return false;
@@ -640,6 +652,10 @@ export class Game {
   }
 
   repairAll(): number {
+    return this.track('Riparazioni', () => this.repairAllImpl(), 'event');
+  }
+
+  private repairAllImpl(): number {
     if (this.locked) return 0;
     let n = 0;
     let visual = false;
@@ -730,6 +746,10 @@ export class Game {
   }
 
   place(defId: string, x: number, z: number): PlacedBuilding | null {
+    return this.track('Costruzioni', () => this.placeImpl(defId, x, z), 'event');
+  }
+
+  private placeImpl(defId: string, x: number, z: number): PlacedBuilding | null {
     const b = this.placeQuiet(defId, x, z);
     if (b) this.changed();
     return b;
@@ -737,6 +757,10 @@ export class Game {
 
   /** Costruisce lungo una fila di caselle (mura, fossati, strade). */
   placeLine(defId: string, tiles: Array<[number, number]>): { placed: number; reason?: string } {
+    return this.track('Costruzioni', () => this.placeLineImpl(defId, tiles), 'event');
+  }
+
+  private placeLineImpl(defId: string, tiles: Array<[number, number]>): { placed: number; reason?: string } {
     let placed = 0;
     let reason: string | undefined;
     for (const [x, z] of tiles) {
@@ -756,6 +780,10 @@ export class Game {
   }
 
   demolish(uid: number): boolean {
+    return this.track('Demolizioni (rimborso)', () => this.demolishImpl(uid), 'event');
+  }
+
+  private demolishImpl(uid: number): boolean {
     if (this.locked) return false;
     const i = this.state.buildings.findIndex((b) => b.uid === uid);
     if (i < 0) return false;
@@ -789,6 +817,10 @@ export class Game {
   }
 
   recruit(unit: UnitType, n = 1): number {
+    return this.track('Reclutamento', () => this.recruitImpl(unit, n), 'event');
+  }
+
+  private recruitImpl(unit: UnitType, n: number): number {
     let done = 0;
     for (let i = 0; i < n && this.canRecruit(unit).ok; i++) {
       pay(this.state.resources, UNITS[unit].cost);
@@ -826,6 +858,10 @@ export class Game {
   }
 
   trade(id: ResourceId, amount: number): PlaceCheck {
+    return this.track('Mercato', () => this.tradeImpl(id, amount), 'event');
+  }
+
+  private tradeImpl(id: ResourceId, amount: number): PlaceCheck {
     if (id === 'coins') return { ok: false, reason: 'Non si commerciano monete' };
     if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
     if (!this.summary().hasMarket) return { ok: false, reason: 'Serve un mercato' };
@@ -847,7 +883,11 @@ export class Game {
   }
 
   /** Riceve una carovana da un altro giocatore. */
-  receive(goods: Cost, from: string) {
+  receive(goods: Cost, from: string): void {
+    return this.track('Carovane ricevute', () => this.receiveImpl(goods, from), 'event');
+  }
+
+  private receiveImpl(goods: Cost, from: string): void {
     const cap = this.storageCap();
     for (const [id, n] of Object.entries(goods)) {
       const rid = id as ResourceId;
@@ -879,7 +919,7 @@ export class Game {
     const si = seasonIndex(date.season);
 
     if (date.year !== this.lastYear) this.onNewYear(date.year);
-    if (si !== this.lastSeasonIndex) this.onNewSeason(si);
+    if (si !== this.lastSeasonIndex) this.track('Macellazione d\'inverno', () => this.onNewSeason(si), 'event');
 
     const a = this.analysis();
     const pop0 = s.population;
@@ -887,18 +927,7 @@ export class Game {
 
     // Produzione degli edifici (le strade aumentano la resa)
     for (const { b, def } of this.defsPlaced()) {
-      if (def.produces) {
-        let factor = staffing * (def.seasonal ? def.seasonal[si] : 1) * dt * (a.connected.get(b.uid) ?? 1) * this.productivity();
-        if (def.consumes) {
-          for (const [id, n] of Object.entries(def.consumes)) {
-            const need = (n ?? 0) * factor;
-            if (need > 0) factor *= Math.min(1, r[id as ResourceId] / need);
-          }
-          for (const [id, n] of Object.entries(def.consumes)) r[id as ResourceId] -= (n ?? 0) * factor;
-        }
-        for (const [id, n] of Object.entries(def.produces)) r[id as ResourceId] += (n ?? 0) * factor;
-      }
-      if (def.herd && b.herd !== undefined) this.stepHerd(b, def, si, staffing, dt);
+      if (def.produces || def.herd) this.track(def.name, () => this.produce(b, def, a, si, staffing, dt));
     }
 
     // Alimentazione
@@ -907,12 +936,21 @@ export class Game {
     let need = (pop * FOOD_PER_PERSON + (this.soldiers() + away.infantry + away.archers + away.cavalry) * SOLDIER_FOOD) * dt;
     const needed = need;
     let variety = 0;
-    for (const id of EATING_ORDER) {
-      if (r[id] > 0.5) variety++;
-      const eat = Math.min(r[id], need);
-      r[id] -= eat;
-      need -= eat;
-    }
+    const soldiersEating = (this.soldiers() + away.infantry + away.archers + away.cavalry) * SOLDIER_FOOD;
+    this.track(
+      [
+        ['Abitanti (cibo)', pop * FOOD_PER_PERSON],
+        ['Soldati (cibo)', soldiersEating],
+      ],
+      () => {
+        for (const id of EATING_ORDER) {
+          if (r[id] > 0.5) variety++;
+          const eat = Math.min(r[id], need);
+          r[id] -= eat;
+          need -= eat;
+        }
+      },
+    );
     const fed = needed > 0 ? 1 - need / needed : 1;
 
     // Contento della popolazione: si avvicina gradualmente al valore che merita il governo
@@ -934,24 +972,28 @@ export class Game {
     // Tumulti: con la gente molto scontenta, ogni giorno c'è il rischio di una rivolta
     if (hm < 20 && this.random() < 0.02 * dt) {
       const lostCoins = Math.round(r.coins * 0.1);
-      r.coins -= lostCoins;
-      for (const id of FOOD_IDS) r[id] *= 0.9;
+      this.track('Tumulti', () => {
+        r.coins -= lostCoins;
+        for (const id of FOOD_IDS) r[id] *= 0.9;
+      }, 'event');
       this.log(`Tumulti nel borgo: la folla saccheggia i magazzini (−${lostCoins} monete, −10% di cibo). Abbassa le tasse!`, 'bad');
     }
     if (s.population > a.housing) s.population -= (s.population - a.housing) * 0.02 * dt;
     s.population = Math.max(0, s.population);
 
     // Tasse
-    r.coins += this.taxPerDay() * dt;
+    this.track('Tasse', () => (r.coins += this.taxPerDay() * dt));
 
     // Mantenimento dell'esercito (anche le truppe in spedizione e le macchine d'assedio)
-    for (const id of Object.keys(ENGINES) as EngineType[]) {
-      const n = (s.engines?.[id] ?? 0) + away[id];
-      for (const [res, u] of Object.entries(ENGINES[id].upkeep)) r[res as ResourceId] = Math.max(0, r[res as ResourceId] - (u ?? 0) * n * dt);
-    }
-    for (const id of Object.keys(UNITS) as UnitType[]) {
+    this.track('Macchine d\'assedio (manutenzione)', () => {
+      for (const id of Object.keys(ENGINES) as EngineType[]) {
+        const n = (s.engines?.[id] ?? 0) + away[id];
+        for (const [res, u] of Object.entries(ENGINES[id].upkeep)) r[res as ResourceId] = Math.max(0, r[res as ResourceId] - (u ?? 0) * n * dt);
+      }
+    });
+    for (const id of Object.keys(UNITS) as UnitType[]) this.track(`Paga: ${UNITS[id].name.toLowerCase()}`, () => {
       const n = s.army[id] + away[id];
-      if (!n) continue;
+      if (!n) return;
       let ok = true;
       for (const [res, u] of Object.entries(UNITS[id].upkeep)) {
         const cost = (u ?? 0) * n * dt;
@@ -963,21 +1005,122 @@ export class Game {
         s.army[id] -= 1;
         this.log(`Un soldato (${UNITS[id].name}) ha disertato: paga o rifornimenti mancanti.`, 'bad');
       }
-    }
+    });
 
     // Deperimento e magazzini
     const cap = a.storage;
-    for (const id of RESOURCE_IDS) {
-      const sp = RESOURCES[id].spoilage;
-      if (sp) r[id] -= r[id] * sp * dt;
-      if (id !== 'coins' && r[id] > cap) r[id] = cap;
-      if (r[id] < 0) r[id] = 0;
-    }
+    this.track('Deperimento', () => {
+      for (const id of RESOURCE_IDS) {
+        const sp = RESOURCES[id].spoilage;
+        if (sp) r[id] -= r[id] * sp * dt;
+      }
+    });
+    this.track('Magazzini pieni (merce persa)', () => {
+      for (const id of RESOURCE_IDS) {
+        if (id !== 'coins' && r[id] > cap) r[id] = cap;
+        if (r[id] < 0) r[id] = 0;
+      }
+    });
 
-    if (s.day >= s.nextRaidDay) this.resolveRaid();
-    this.stepWar();
-    this.stepCompanies(dt);
+    if (s.day >= s.nextRaidDay) this.track('Assedi dei predoni', () => this.resolveRaid(), 'event');
+    this.track('Assedi e spedizioni', () => this.stepWar(), 'event');
+    this.track('Bottino riportato dai reparti', () => this.stepCompanies(dt), 'event');
     if (s.lords?.length) this.stepLords(dt);
+    this.updateFlowRates(dt);
+  }
+
+  /** Produzione di un edificio (e dei suoi animali) in un passo. */
+  private produce(b: PlacedBuilding, def: BuildingDef, a: Analysis, si: number, staffing: number, dt: number) {
+    const r = this.state.resources;
+    if (def.produces) {
+      let factor = staffing * (def.seasonal ? def.seasonal[si] : 1) * dt * (a.connected.get(b.uid) ?? 1) * this.productivity();
+      if (def.consumes) {
+        for (const [id, n] of Object.entries(def.consumes)) {
+          const need = (n ?? 0) * factor;
+          if (need > 0) factor *= Math.min(1, r[id as ResourceId] / need);
+        }
+        for (const [id, n] of Object.entries(def.consumes)) r[id as ResourceId] -= (n ?? 0) * factor;
+      }
+      for (const [id, n] of Object.entries(def.produces)) r[id as ResourceId] += (n ?? 0) * factor;
+    }
+    if (def.herd && b.herd !== undefined) this.stepHerd(b, def, si, staffing, dt);
+  }
+
+  // ───────────── Registro delle risorse (entrate e uscite per voce) ─────────────
+
+  /** Flussi continui: media mobile (al giorno) per "risorsa|voce". */
+  private flowRates = new Map<string, number>();
+  private stepFlows = new Map<string, number>();
+  /** Spese e incassi una tantum degli ultimi 30 giorni. */
+  private flowEvents: Array<{ day: number; res: ResourceId; amount: number; label: string }> = [];
+  private tracking = false;
+
+  /** Esegue fn e attribuisce alla voce (o alle voci, in proporzione) le variazioni delle risorse. */
+  private track<T>(label: string | Array<[string, number]>, fn: () => T, kind: 'rate' | 'event' = 'rate'): T {
+    if (this.tracking) return fn();
+    const r = this.state.resources;
+    const before = RESOURCE_IDS.map((id) => r[id]);
+    this.tracking = true;
+    try {
+      return fn();
+    } finally {
+      this.tracking = false;
+      const parts: Array<[string, number]> = typeof label === 'string' ? [[label, 1]] : label;
+      const tot = parts.reduce((s, [, w]) => s + w, 0) || 1;
+      RESOURCE_IDS.forEach((id, i) => {
+        const d = r[id] - before[i];
+        if (Math.abs(d) < 1e-9) return;
+        for (const [l, w] of parts) {
+          if (!w) continue;
+          const amt = (d * w) / tot;
+          if (kind === 'rate') {
+            const key = `${id}|${l}`;
+            this.stepFlows.set(key, (this.stepFlows.get(key) ?? 0) + amt);
+          } else this.flowEvents.push({ day: this.state.day, res: id, amount: amt, label: l });
+        }
+      });
+    }
+  }
+
+  private updateFlowRates(dt: number) {
+    const k = Math.min(1, dt / 10); // media su circa 10 giorni: segue le stagioni
+    const keys = new Set([...this.flowRates.keys(), ...this.stepFlows.keys()]);
+    for (const key of keys) {
+      const inst = (this.stepFlows.get(key) ?? 0) / dt;
+      const old = this.flowRates.get(key);
+      const v = old === undefined ? inst : old + (inst - old) * k;
+      if (Math.abs(v) < 1e-5 && !this.stepFlows.has(key)) this.flowRates.delete(key);
+      else this.flowRates.set(key, v);
+    }
+    this.stepFlows.clear();
+    const cut = this.state.day - 30;
+    if (this.flowEvents.length && this.flowEvents[0].day < cut) this.flowEvents = this.flowEvents.filter((e) => e.day >= cut);
+  }
+
+  /** Entrate e uscite di una risorsa: flussi al mese e movimenti una tantum degli ultimi 30 giorni. */
+  resourceFlows(id: ResourceId): {
+    income: Array<{ label: string; perMonth: number }>;
+    expense: Array<{ label: string; perMonth: number }>;
+    netPerMonth: number;
+    oneOff: Array<{ label: string; amount: number }>;
+  } {
+    const income: Array<{ label: string; perMonth: number }> = [];
+    const expense: Array<{ label: string; perMonth: number }> = [];
+    let net = 0;
+    for (const [key, v] of this.flowRates) {
+      const [res, label] = key.split('|');
+      if (res !== id) continue;
+      const perMonth = v * 30;
+      if (Math.abs(perMonth) < 0.05) continue;
+      net += perMonth;
+      (perMonth > 0 ? income : expense).push({ label, perMonth });
+    }
+    income.sort((a, b) => b.perMonth - a.perMonth);
+    expense.sort((a, b) => a.perMonth - b.perMonth);
+    const byLabel = new Map<string, number>();
+    for (const e of this.flowEvents) if (e.res === id) byLabel.set(e.label, (byLabel.get(e.label) ?? 0) + e.amount);
+    const oneOff = [...byLabel].filter(([, v]) => Math.abs(v) >= 0.5).map(([label, amount]) => ({ label, amount })).sort((a, b) => a.amount - b.amount);
+    return { income, expense, netPerMonth: net, oneOff };
   }
 
   private stepHerd(b: PlacedBuilding, def: BuildingDef, si: number, staffing: number, dt: number) {
@@ -1073,6 +1216,10 @@ export class Game {
   }
 
   buildEngine(type: EngineType): boolean {
+    return this.track('Macchine d\'assedio (costruzione)', () => this.buildEngineImpl(type), 'event');
+  }
+
+  private buildEngineImpl(type: EngineType): boolean {
     if (!this.canBuildEngine(type).ok) return false;
     pay(this.state.resources, ENGINES[type].cost);
     this.engines()[type]++;
@@ -2088,7 +2235,7 @@ export class Game {
       if (l.status !== 'war' && l.relation <= -60) this.declareWar(l, 'I rapporti sono precipitati');
       if (l.status === 'vassal') {
         const tribute = 1 + l.level;
-        s.resources.coins += tribute;
+        this.track('Tributi dei vassalli', () => (s.resources.coins += tribute));
         l.wealth = Math.max(0, l.wealth - tribute);
         if (l.relation < -80) {
           this.declareWar(l, 'Si è ribellato al tributo');
@@ -2103,7 +2250,7 @@ export class Game {
         this.launchLordRaid(l);
       } else if (l.status === 'alliance' && this.random() < 0.6) {
         const gift = Math.round(40 + l.level * 30);
-        s.resources.coins += gift;
+        this.track('Doni degli alleati', () => (s.resources.coins += gift), 'event');
         l.wealth = Math.max(0, l.wealth - gift);
         this.log(`🎁 ${l.name}, nostro alleato, ci manda ${gift} monete.`, 'good');
       } else if (l.personality === 'greedy' && l.status === 'neutral' && strong && this.random() < 0.4) {
@@ -2308,6 +2455,10 @@ export class Game {
 
   /** Manda un diplomatico (a cavallo, col drappo bianco) al castello di un signore. */
   sendDiplomat(lordId: number, mission: keyof typeof Game.MISSIONS, gift: Cost = {}): Company | null {
+    return this.track('Diplomazia', () => this.sendDiplomatImpl(lordId, mission, gift), 'event');
+  }
+
+  private sendDiplomatImpl(lordId: number, mission: keyof typeof Game.MISSIONS, gift: Cost): Company | null {
     if (!this.canSendDiplomat(lordId, gift).ok) return null;
     const l = this.lord(lordId)!;
     pay(this.state.resources, { ...gift, coins: (gift.coins ?? 0) + 15 });
@@ -2511,6 +2662,10 @@ export class Game {
 
   /** La motta diventa mastio di pietra, sullo stesso posto (cisterna e armeria restano). */
   evolveKeep(): boolean {
+    return this.track('Evoluzione del castello', () => this.evolveKeepImpl(), 'event');
+  }
+
+  private evolveKeepImpl(): boolean {
     if (!this.canEvolveKeep().ok) return false;
     const k = this.ownKeep()!;
     pay(this.state.resources, KEEP_EVOLVE.cost);

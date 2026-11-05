@@ -54,6 +54,10 @@ export function formatDuration(days: number): string {
   const d = Math.max(0, days);
   if (d < 10) return `${Math.max(1, Math.round(d))} ${Math.round(d) === 1 ? 'giorno' : 'giorni'}`;
   if (d < 45) return `${Math.round(d / 7)} settimane`;
+  if (d >= 720) {
+    const y = Math.round(d / 360);
+    return `${y} anni`;
+  }
   const m = Math.round(d / 30);
   return `${m} ${m === 1 ? 'mese' : 'mesi'}`;
 }
