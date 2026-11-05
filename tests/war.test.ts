@@ -12,6 +12,7 @@ function duel(year = 1100) {
     st.nextRaidDay = 1e9; // niente predoni in questi test
     const g = new Game(st, mulberry32(10 + slot));
     g.terrain.tiles.fill(Tile.Grass);
+    g.levelOverride = 5;
     Object.assign(g.state.resources, { wood: 1e5, stone: 1e5, coins: 5000, charcoal: 500, grain: 2000 });
     g.storageCap = () => 1e9;
     return g;

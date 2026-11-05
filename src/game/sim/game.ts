@@ -20,7 +20,7 @@ import {
   type ResourceId,
 } from '../data/resources';
 import { CARRY, ENGINES, FORMATIONS, MARCH_SPEED, SOLDIER_FOOD, STANCES, UNITS, type Behavior, type EngineType, type Formation, type Stance } from '../data/units';
-import { UPGRADE_BY_ID, upgradesFor, type UpgradeDef } from '../data/upgrades';
+import { CASTLE_LEVELS, KEEP_EVOLVE, UPGRADE_BY_ID, upgradesFor, type UpgradeDef } from '../data/upgrades';
 import {
   generateTerrain,
   isBuildableLand,
@@ -158,6 +158,8 @@ export class Game {
   others: PlacedBuilding[] = [];
   /** Bloccato: in multigiocatore finché non sono online entrambi i giocatori. */
   locked = false;
+  /** Solo per i test: forza il livello del castello. */
+  levelOverride?: number;
 
   constructor(public state: GameState, private random: () => number = Math.random) {
     this.terrain = generateTerrain(state.seed, { preset: state.preset, players: state.match ? 2 : 1 });
@@ -347,6 +349,10 @@ export class Game {
       storage += def.storage ?? 0;
       taxMul += def.taxBonus ?? 0;
     }
+    const lv = CASTLE_LEVELS[this.castleLevel()];
+    housing += lv.housing;
+    storage += lv.storage;
+    taxMul += lv.tax;
 
     // Riempimento dal bordo della mappa: ciò che non si raggiunge è dentro la cinta
     const outside = new Uint8Array(size * size);
@@ -558,6 +564,7 @@ export class Game {
       return { ok: false, reason: `Richiede: ${UPGRADE_BY_ID[u.requires].name}` };
     }
     if (u.needsMoat && !this.gateHasMoat(b)) return { ok: false, reason: 'Serve un fossato davanti alla porta' };
+    if (u.minPop && this.state.population < u.minPop) return { ok: false, reason: `Servono ${u.minPop} abitanti` };
     if (this.hpState(b) === 'ruin') return { ok: false, reason: 'Prima va riparato' };
     if (!canAfford(this.state.resources, u.cost)) return { ok: false, reason: 'Risorse insufficienti' };
     return { ok: true };
@@ -565,6 +572,10 @@ export class Game {
 
   upgrade(b: PlacedBuilding, upId: string): boolean {
     if (!this.canUpgrade(b, upId).ok) return false;
+    if (['bailey', 'great_hall', 'palace'].includes(upId)) {
+      const next = { bailey: 2, great_hall: 4, palace: 5 }[upId as 'bailey'];
+      this.log(`Il castello sale al livello ${next}: ${CASTLE_LEVELS[next].name}!`, 'good');
+    }
     const before = this.maxHp(b);
     pay(this.state.resources, UPGRADE_BY_ID[upId].cost);
     b.upgrades = [...(b.upgrades ?? []), upId];
@@ -651,7 +662,13 @@ export class Game {
       return { ok: false, reason: `Disponibile dal ${def.minYear}` };
     }
     if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
+    if (def.minLevel && this.castleLevel() < def.minLevel) {
+      return { ok: false, reason: `Richiede il castello al livello ${def.minLevel} (${CASTLE_LEVELS[def.minLevel].name})` };
+    }
     if (def.unique && this.count(def.id) > 0) return { ok: false, reason: 'Ne puoi avere uno solo' };
+    if (def.fort === 'keep' && this.state.buildings.some((b) => getBuilding(b.defId).fort === 'keep')) {
+      return { ok: false, reason: 'Hai già un castello: fallo evolvere' };
+    }
     const [w, d] = def.size;
     const t = this.territory();
     if (x < t.x0 || z < t.z0 || x + w > t.x1 || z + d > t.z1) return { ok: false, reason: 'Fuori dal tuo territorio' };
@@ -1954,6 +1971,46 @@ export class Game {
   /** Moltiplicatore di produzione dovuto al contento (0,85 – 1,15). */
   productivity(): number {
     return 0.85 + 0.3 * (this.happiness() / 100);
+  }
+
+  // ───────────── Livelli del castello ─────────────
+
+  ownKeep(): PlacedBuilding | undefined {
+    return this.state.buildings.find((b) => getBuilding(b.defId).fort === 'keep');
+  }
+
+  castleLevel(): number {
+    if (this.levelOverride !== undefined) return this.levelOverride;
+    const k = this.ownKeep();
+    if (!k) return 0;
+    const u = k.upgrades ?? [];
+    if (k.defId === 'keep_wood') return u.includes('bailey') ? 2 : 1;
+    return u.includes('palace') ? 5 : u.includes('great_hall') ? 4 : 3;
+  }
+
+  /** Si può trasformare la motta in mastio di pietra (dal livello 2 al 3)? */
+  canEvolveKeep(): PlaceCheck {
+    const k = this.ownKeep();
+    if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
+    if (!k || k.defId !== 'keep_wood') return { ok: false, reason: 'Serve la motta' };
+    if (!k.upgrades?.includes('bailey')) return { ok: false, reason: 'Prima il cortile fortificato (livello 2)' };
+    if (this.date.year < KEEP_EVOLVE.minYear) return { ok: false, reason: `Disponibile dal ${KEEP_EVOLVE.minYear}` };
+    if (this.state.population < KEEP_EVOLVE.minPop) return { ok: false, reason: `Servono ${KEEP_EVOLVE.minPop} abitanti` };
+    if (!canAfford(this.state.resources, KEEP_EVOLVE.cost)) return { ok: false, reason: 'Risorse insufficienti' };
+    return { ok: true };
+  }
+
+  /** La motta diventa mastio di pietra, sullo stesso posto (cisterna e armeria restano). */
+  evolveKeep(): boolean {
+    if (!this.canEvolveKeep().ok) return false;
+    const k = this.ownKeep()!;
+    pay(this.state.resources, KEEP_EVOLVE.cost);
+    k.defId = 'keep_stone';
+    k.upgrades = (k.upgrades ?? []).filter((u) => UPGRADE_BY_ID[u]?.appliesTo.includes('keep_stone'));
+    k.hp = this.maxHp(k);
+    this.log(`Il castello sale al livello 3: la motta è diventata un ${CASTLE_LEVELS[3].name.toLowerCase()}!`, 'good');
+    this.changed();
+    return true;
   }
 
   /** Giorni al prossimo assalto (per l'interfaccia). */

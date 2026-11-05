@@ -1,4 +1,5 @@
-/** Calendario di gioco: 1 secondo reale a velocità 1x = 1 giorno. */
+/** Calendario di gioco: a velocità 1× un giorno dura SECONDS_PER_DAY secondi reali. */
+export const SECONDS_PER_DAY = 4;
 export const DAYS_PER_SEASON = 90;
 export const DAYS_PER_YEAR = DAYS_PER_SEASON * 4;
 export const START_YEAR = 900;

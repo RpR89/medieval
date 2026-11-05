@@ -58,6 +58,8 @@ export interface BuildingDef {
   cost: Cost;
   /** Anno da cui è disponibile (vedi epoche). */
   minYear: number;
+  /** Livello del castello necessario. */
+  minLevel?: number;
   /** Anno dopo cui non è più costruibile (superato da tecniche migliori). */
   maxYear?: number;
   placement: PlacementRule;
@@ -198,6 +200,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'wall_stone',
+    minLevel: 3,
     icon: '🧱',
     fort: 'wall',
     hp: 220,
@@ -214,6 +217,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'tower_square',
+    minLevel: 3,
     icon: '♜',
     fort: 'tower',
     hp: 450,
@@ -229,6 +233,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'gate_stone',
+    minLevel: 3,
     icon: '⛩️',
     fort: 'gate',
     hp: 320,
@@ -244,6 +249,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'tower_round',
+    minLevel: 4,
     icon: '🛕',
     fort: 'tower',
     hp: 560,
@@ -259,6 +265,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'gatehouse',
+    minLevel: 4,
     icon: '🏛️',
     fort: 'gate',
     hp: 650,
@@ -289,6 +296,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'house',
+    minLevel: 3,
     icon: '🏠',
     name: 'Casa in muratura',
     category: 'housing',
@@ -504,6 +512,7 @@ export const BUILDINGS: BuildingDef[] = [
   // ───── Commercio ─────
   {
     id: 'market',
+    minLevel: 2,
     icon: '⚖️',
     name: 'Mercato',
     category: 'trade',
@@ -547,6 +556,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'stable',
+    minLevel: 2,
     icon: '🐎',
     name: 'Scuderia',
     category: 'military',
@@ -560,6 +570,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'siege_workshop',
+    minLevel: 3,
     icon: '🛠️',
     name: 'Officina d\'assedio',
     category: 'military',
@@ -589,6 +600,7 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'road_paved',
+    minLevel: 3,
     icon: '🛣️',
     name: 'Strada lastricata',
     category: 'infrastructure',

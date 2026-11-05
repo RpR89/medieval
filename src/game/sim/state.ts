@@ -85,7 +85,13 @@ export interface Company {
   behavior?: Behavior;
   /** Velocità imposta quando si marcia in gruppo (quella del più lento). */
   groupSpeed?: number;
+  /** Proprietario per i reparti dei signori controllati dal gioco (indice del signore). */
+  owner?: number;
+  /** Diplomatico in missione (nessun soldato). */
+  envoy?: { lord: number; mission: DiploMission; gift?: Cost };
 }
+
+export type DiploMission = 'alliance' | 'pact' | 'peace' | 'gift' | 'tribute' | 'war';
 
 /** Esercito nemico in marcia verso il proprio castello. */
 export interface IncomingAttack {

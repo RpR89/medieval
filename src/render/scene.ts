@@ -308,6 +308,7 @@ export class WorldRenderer {
       if (!extend) return 0;
       const def = getBuilding(o.defId);
       if (def.fort === 'keep') return diag ? 0.4 : 0.45;
+      if (def.fort === 'gate' && def.size[0] === 1) return diag ? 0.05 : 0;
       if (def.size[0] > 1 || def.size[1] > 1) return diag ? 0.25 : 0.3;
       return 0;
     };

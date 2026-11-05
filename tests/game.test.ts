@@ -130,6 +130,7 @@ describe('simulazione', () => {
 
   it('il mercato compra e vende ai prezzi stagionali', () => {
     const game = new Game(createInitialState(2));
+    game.levelOverride = 2;
     expect(game.trade('wood', -10).ok).toBe(false);
     const [x, z] = findSpot(game, 'market');
     game.place('market', x, z);

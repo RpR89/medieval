@@ -182,3 +182,6 @@ button.multi { background: #6b2a1e; border-color: #a3402f; color: var(--ink); }
 .formations button { font-size: 11px; padding: 2px 5px; }
 .strong { font-weight: bold; color: var(--accent); margin-top: 4px; }
 .companies-panel { max-height: calc(100% - 330px); overflow-y: auto; }
+
+.castle-level .stars { color: var(--accent); letter-spacing: 2px; }
+.castle-level button { width: 100%; margin: 4px 0; }

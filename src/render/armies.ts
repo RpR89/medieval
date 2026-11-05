@@ -17,6 +17,57 @@ interface ArmyObj {
 
 const tabardRed = new THREE.MeshStandardMaterial({ color: 0xa8302a, roughness: 0.9 });
 const tabardBlue = new THREE.MeshStandardMaterial({ color: 0x2f5fb8, roughness: 0.9 });
+const tabards = new Map<number, THREE.MeshStandardMaterial>();
+const flags = new Map<number, THREE.MeshStandardMaterial>();
+/** Colore dello schieramento: rosso il giocatore, blu l'avversario, altri colori per i signori. */
+export const SIDE_COLORS = [0xa8302a, 0x2f5fb8, 0x3f8a4a, 0xd8a83a, 0x7a3a8a, 0x2a8a8a];
+function tabardFor(color: number) {
+  if (color === 0xa8302a) return tabardRed;
+  if (color === 0x2f5fb8) return tabardBlue;
+  if (!tabards.has(color)) tabards.set(color, new THREE.MeshStandardMaterial({ color, roughness: 0.9 }));
+  return tabards.get(color)!;
+}
+function flagFor(color: number) {
+  if (!flags.has(color)) flags.set(color, new THREE.MeshStandardMaterial({ color, roughness: 0.9, side: THREE.DoubleSide }));
+  return flags.get(color)!;
+}
+
+/** Etichetta sopra il reparto: composizione e formazione, del colore dello schieramento. */
+function label(f: Force, color: number, formation: Formation, envoy: boolean): THREE.Sprite {
+  const c = document.createElement('canvas');
+  c.width = 320;
+  c.height = 72;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = 'rgba(25, 18, 12, 0.82)';
+  ctx.beginPath();
+  ctx.roundRect(2, 2, 316, 68, 14);
+  ctx.fill();
+  ctx.fillStyle = '#' + color.toString(16).padStart(6, '0');
+  ctx.beginPath();
+  ctx.roundRect(2, 2, 18, 68, [14, 0, 0, 14]);
+  ctx.fill();
+  ctx.fillStyle = '#f4ead6';
+  ctx.font = 'bold 30px Georgia, serif';
+  ctx.textBaseline = 'middle';
+  const parts: string[] = [];
+  if (envoy) parts.push('🕊️ Diplomatico');
+  else {
+    if (f.infantry) parts.push(`🛡️${f.infantry}`);
+    if (f.archers) parts.push(`🏹${f.archers}`);
+    if (f.cavalry) parts.push(`🐎${f.cavalry}`);
+    if (f.rams) parts.push(`🪵${f.rams}`);
+    if (f.trebuchets) parts.push(`🎯${f.trebuchets}`);
+    parts.push({ line: '▬', column: '⋮', wedge: '▲', square: '■', shields: '⛨' }[formation]);
+  }
+  ctx.fillText(parts.join(' '), 32, 38);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+  sp.scale.set(1.5, 0.34, 1);
+  sp.renderOrder = 10;
+  sp.userData.label = true;
+  return sp;
+}
 const skin = new THREE.MeshStandardMaterial({ color: 0xd9b08c, roughness: 0.9 });
 
 function soldier(m: THREE.Material, kind: 'infantry' | 'archers' | 'cavalry'): THREE.Group {
@@ -113,8 +164,8 @@ function slots(n: number, formation: Formation): Array<[number, number]> {
   return out;
 }
 
-function buildArmy(f: Force, enemy: boolean, formation: Formation = 'line'): THREE.Group {
-  const m = enemy ? tabardBlue : tabardRed;
+function buildArmy(f: Force, enemy: boolean, formation: Formation = 'line', color?: number): THREE.Group {
+  const m = color !== undefined ? tabardFor(color) : enemy ? tabardBlue : tabardRed;
   const g = new THREE.Group();
   const k = mats();
   const cap = (n: number) => Math.min(n, 18);
@@ -130,7 +181,7 @@ function buildArmy(f: Force, enemy: boolean, formation: Formation = 'line'): THR
     s.position.set(pos[i][0], 0, pos[i][1]);
     if (formation === 'shields' && kind === 'infantry') {
       // Pavese: grande scudo davanti al fante
-      s.add(box(0.02, 0.17, 0.12, enemy ? tabardBlue : tabardRed, 0.06, 0.02, 0));
+      s.add(box(0.02, 0.17, 0.12, m, 0.06, 0.02, 0));
       s.add(box(0.021, 0.04, 0.124, k.planks, 0.061, 0.08, 0));
     }
     g.add(s);
@@ -155,8 +206,21 @@ function buildArmy(f: Force, enemy: boolean, formation: Formation = 'line'): THR
     g.add(t);
   }
   const baked = bake(g);
-  baked.add(flag(enemy ? mats().flagBlue : mats().flag, 0.25, 0, -0.55, 0.3));
+  baked.add(flag(color !== undefined ? flagFor(color) : enemy ? mats().flagBlue : mats().flag, 0.25, 0, -0.55, 0.3));
+  // Soldati più grandi del naturale rispetto agli edifici: si riconoscono meglio dall'alto
+  baked.scale.setScalar(1.45);
   return baked;
+}
+
+/** Diplomatico a cavallo con il drappo bianco. */
+function envoyModel(color: number): THREE.Group {
+  const k = mats();
+  const g = soldier(tabardFor(color), 'cavalry');
+  g.add(cyl(0.008, 0.008, 0.5, k.beam, -0.02, 0.2, -0.05, 4));
+  g.add(box(0.16, 0.1, 0.005, new THREE.MeshStandardMaterial({ color: 0xf4f0e6, side: THREE.DoubleSide }), 0.06, 0.62, -0.05));
+  const out = bake(g);
+  out.scale.setScalar(1.8);
+  return out;
 }
 
 const ringGeo = new THREE.RingGeometry(0.55, 0.68, 32).rotateX(-Math.PI / 2);
@@ -214,27 +278,47 @@ export class ArmyView {
       if (!a.resolved && a.arriveDay > a.departDay) show(`in:${a.id}`, a.troops, away, home, a.departDay, a.arriveDay, true);
     }
     // Reparti comandati dai giocatori
-    const place = (id: string, f: Force, x: number, z: number, heading: number, moving: boolean, enemy: boolean, formation: Formation = 'line') => {
-      const key = `${id}:${JSON.stringify(f)}:${formation}`;
+    const place = (
+      id: string,
+      f: Force,
+      x: number,
+      z: number,
+      heading: number,
+      moving: boolean,
+      enemy: boolean,
+      formation: Formation = 'line',
+      color?: number,
+      envoy = false,
+    ) => {
+      const key = `${id}:${JSON.stringify(f)}:${formation}:${color}:${envoy}`;
       seen.add(id);
       let a = this.armies.get(id);
       if (!a || a.key !== key) {
         if (a) this.group.remove(a.obj);
-        a = { obj: buildArmy(f, enemy, formation), key };
-        a.obj.name = `army:${id}`;
+        const root = new THREE.Group();
+        const body = envoy ? envoyModel(color ?? 0xffffff) : buildArmy(f, enemy, formation, color);
+        body.userData.body = true;
+        root.add(body);
         const ring = new THREE.Mesh(ringGeo, ringMat);
         ring.userData.ring = true;
         ring.position.y = 0.04;
-        ring.scale.setScalar(1 + Math.min(1.2, Math.sqrt(f.infantry + f.archers + f.cavalry) * 0.12));
-        a.obj.add(ring);
+        ring.scale.setScalar(1.2 + Math.min(1.4, Math.sqrt(f.infantry + f.archers + f.cavalry) * 0.15));
+        root.add(ring);
+        const lab = label(f, color ?? (enemy ? 0x2f5fb8 : 0xa8302a), formation, envoy);
+        lab.position.y = 1.15;
+        root.add(lab);
+        a = { obj: root, key };
+        a.obj.name = `army:${id}`;
         this.armies.set(id, a);
         this.group.add(a.obj);
       }
       a.obj.position.set(x, this.terrain.heightAt(x, z) + (moving ? Math.abs(Math.sin(t * 7 + x)) * 0.02 : 0), z);
-      a.obj.rotation.y = heading;
-      for (const ch of a.obj.children) if (ch.userData.ring) ch.visible = this.selected.has(id);
+      for (const ch of a.obj.children) {
+        if (ch.userData.body) ch.rotation.y = heading;
+        if (ch.userData.ring) ch.visible = this.selected.has(id);
+      }
     };
-    for (const c of g.state.companies ?? []) place(c.id, c.troops, c.x, c.z, c.heading ?? 0, !!c.path?.length, false, c.formation);
+    for (const c of g.state.companies ?? []) place(c.id, c.troops, c.x, c.z, c.heading ?? 0, !!c.path?.length, false, c.formation, undefined, !!c.envoy);
     this.updatePaths(g.state.companies ?? []);
     for (const c of g.enemyCompanies) {
       const prev = this.shown.get(c.id) ?? { x: c.x, z: c.z };
@@ -242,7 +326,7 @@ export class ArmyView {
       prev.x += (c.x - prev.x) * 0.15;
       prev.z += (c.z - prev.z) * 0.15;
       this.shown.set(c.id, prev);
-      place(`e:${c.id}`, c.troops, prev.x, prev.z, c.heading ?? 0, moving, true, c.formation);
+      place(`e:${c.id}`, c.troops, prev.x, prev.z, c.heading ?? 0, moving, true, c.formation, c.owner !== undefined ? SIDE_COLORS[c.owner + 1] : undefined, !!c.envoy);
     }
     for (const [id, a] of this.armies) {
       if (seen.has(id)) continue;

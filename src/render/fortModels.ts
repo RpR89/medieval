@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mulberry32 } from '../game/world/terrain';
-import { archWindow, box, cone, cyl, flag, hipRoof, mats, slit, smoke, sphere } from './kit';
+import { archWindow, box, cone, cyl, flag, gableRoof, hipRoof, mats, slit, smoke, sphere } from './kit';
 import { corbels, crenels, door, roundCrenels } from './parts';
 
 /**
@@ -301,11 +301,46 @@ function drawbridge(g: G, dir: [number, number], wid: number, from: number) {
   g.add(sub);
 }
 
-function gateAxis(c: ModelCtx): 'x' | 'z' {
+/**
+ * Orientamento della porta: lungo le mura collegate. Con mura solo in diagonale
+ * la porta si gira di 45°.
+ */
+function gateAngle(c: ModelCtx): number {
   const l = c.links ?? [];
-  const z = l.some((v) => v.dx === 0 && v.dz !== 0);
   const x = l.some((v) => v.dz === 0 && v.dx !== 0);
-  return z && !x ? 'z' : 'x';
+  const z = l.some((v) => v.dx === 0 && v.dz !== 0);
+  if (x || !l.length) return 0;
+  if (z) return PI / 2;
+  const d = l[0];
+  // Direzione della diagonale (stessa per i due versi)
+  return d.dx * d.dz > 0 ? -PI / 4 : PI / 4;
+}
+
+/** Tratti di raccordo dalla porta verso le mura che non sono in asse con essa. */
+function gateStubs(g: G, c: ModelCtx, angle: number, stone: boolean) {
+  const k = mats();
+  for (const l of c.links ?? []) {
+    const a = Math.atan2(-l.dz, l.dx);
+    if (Math.abs(Math.cos(a - angle)) > 0.98) continue; // in asse: la porta stessa fa da muro
+    along(g, l, (sub, len) => {
+      const from = 0.28;
+      const L = len - from;
+      if (stone) {
+        sub.add(box(L, 1.5, 0.5, k.stone, from + L / 2, 0, 0));
+        sub.add(box(L, 0.25, 0.62, k.stoneDark, from + L / 2, 0, 0));
+        for (let i = 0; i < Math.max(1, Math.round(L * 3)); i++) {
+          for (const s of [-0.2, 0.2]) sub.add(box(0.12, 0.19, 0.1, k.stoneLight, from + (i + 0.5) * (L / Math.max(1, Math.round(L * 3))), 1.5, s));
+        }
+      } else {
+        const n = Math.max(1, Math.round(L * 6));
+        for (let i = 0; i < n; i++) {
+          const t = from + (i + 0.5) * (L / n);
+          sub.add(cyl(0.08, 0.09, 1.1, k.log, t, 0, 0, 7));
+          sub.add(cone(0.08, 0.18, k.log, t, 1.1, 0, 7));
+        }
+      }
+    });
+  }
 }
 
 export function gateWood(g: G, c: ModelCtx) {
@@ -329,8 +364,10 @@ export function gateWood(g: G, c: ModelCtx) {
     }
     if (has(c, 'pitch')) pitchCauldron(inner, 0.2, 1.62, 0);
   } else rubble(inner, c.seed ?? 2, 6, k.log, 0.4);
-  if (gateAxis(c) === 'z') inner.rotation.y = PI / 2;
+  const angle = gateAngle(c);
+  inner.rotation.y = angle;
   g.add(inner);
+  if (!ruin) gateStubs(g, c, angle, false);
   if (has(c, 'drawbridge') && c.moatDir && !ruin) drawbridge(g, c.moatDir, 0.7, 0.1);
 }
 
@@ -362,8 +399,10 @@ export function gateStone(g: G, c: ModelCtx) {
     }
     if (has(c, 'pitch')) pitchCauldron(inner, 0.25, 1.9, 0);
   }
-  if (gateAxis(c) === 'z') inner.rotation.y = PI / 2;
+  const angle = gateAngle(c);
+  inner.rotation.y = angle;
   g.add(inner);
+  if (!ruin) gateStubs(g, c, angle, true);
   if (has(c, 'drawbridge') && c.moatDir && !ruin) drawbridge(g, c.moatDir, 0.42, 0.38);
 }
 
@@ -467,6 +506,15 @@ export function keepWood(g: G, c: ModelCtx) {
   g.add(dr);
   if (has(c, 'cistern')) cisternWell(g, -1.15, 1.15);
   if (has(c, 'armory')) armoryRack(g, 1.0, -1.25);
+  if (has(c, 'bailey')) {
+    // Livello 2: sala e stalla nel cortile ai piedi della motta
+    g.add(box(0.75, 0.38, 0.42, k.planks, 1.0, 0, 1.15));
+    g.add(gableRoof(0.8, 0.42, 0.3, k.thatch, k.planks, 1.0, 0.38, 1.15, 0.06));
+    g.add(box(0.5, 0.3, 0.36, k.darkPlanks, -1.15, 0, -1.05));
+    g.add(gableRoof(0.55, 0.36, 0.22, k.thatch, k.darkPlanks, -1.15, 0.3, -1.05, 0.05));
+    for (let i = 0; i < 6; i++) g.add(cyl(0.035, 0.04, 0.4, k.log, -1.45 + i * 0.12, 0, 1.45, 5));
+    g.add(flag(k.flag, 1.3, 0.38, 1.3, 0.25));
+  }
   g.add(flag(k.flag, 0, 3.35, 0, 0.4));
   if (c.state === 'damaged') rubble(g, c.seed ?? 1, 5, k.log, 1.2);
 }
@@ -520,7 +568,29 @@ export function keepStone(g: G, c: ModelCtx) {
   if (has(c, 'cistern')) cisternWell(g, -1.2, 1.2);
   if (has(c, 'armory')) armoryRack(g, 1.0, -1.32);
   if (c.state === 'damaged') rubble(g, c.seed ?? 11, 8, k.stone, 1.4);
-  g.add(flag(k.flagGold, 0.4, 4.75, 0.4, 0.5));
+  if (has(c, 'great_hall')) {
+    // Livello 4: sala grande sul mastio (tetto a falde) e campanile della cappella
+    g.add(box(1.7, 0.5, 1.2, k.stoneLight, 0, 4.3, 0.2));
+    g.add(gableRoof(1.8, 1.2, 0.75, k.roofTile, k.stoneLight, 0, 4.8, 0.2, 0.1));
+    for (const x of [-0.5, 0, 0.5]) g.add(archWindow(x, 4.4, 0.81, 0.12, 0.3, 0));
+    g.add(box(0.28, 0.5, 0.28, k.stoneLight, -0.65, 4.8, -0.65));
+    g.add(box(0.18, 0.22, 0.02, k.dark, -0.65, 4.95, -0.5));
+    g.add(hipRoof(0.38, 0.38, 0.35, k.slate, -0.65, 5.3, -0.65));
+    g.add(cyl(0.01, 0.01, 0.25, k.iron, -0.65, 5.65, -0.65, 4));
+  }
+  if (has(c, 'palace')) {
+    // Livello 5: torrette più alte con tetti conici, loggia ad archi, stendardi dorati
+    for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      g.add(cyl(0.24, 0.26, 1.0, k.stoneLight, x * 1.02, 4.75, z * 1.02, 12));
+      g.add(cone(0.3, 0.7, k.slate, x * 1.02, 5.75, z * 1.02, 12));
+      g.add(flag(k.flagGold, x * 1.02, 6.4, z * 1.02, 0.3));
+    }
+    for (const [fx, fz, r] of [[0, 1.12, 0], [0, -1.12, PI], [1.12, 0, PI / 2], [-1.12, 0, -PI / 2]] as const) {
+      for (const off of [-0.6, -0.2, 0.2, 0.6]) g.add(archWindow(fx === 0 ? off : fx, 2.75, fz === 0 ? off : fz, 0.14, 0.34, r));
+    }
+    g.add(box(2.34, 0.06, 2.34, k.gold, 0, 3.2, 0));
+  }
+  g.add(flag(k.flagGold, 0.4, has(c, 'great_hall') ? 5.5 : 4.75, 0.4, 0.5));
 }
 
 // ───────────── Fossato ─────────────

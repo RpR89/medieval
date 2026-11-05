@@ -314,6 +314,48 @@ export class TerrainView {
         }
       }
     }
+    // 1b) fossati in diagonale: si scava un canale tra le due caselle che si toccano solo per l'angolo
+    const moats = new Map<number, Footprint>();
+    for (const f of fps) if (f.defId === 'moat') moats.set(f.z * this.size + f.x, f);
+    const solid = new Uint8Array(this.n * this.n);
+    for (const f of fps) {
+      if (f.defId === 'moat') continue;
+      for (let j = Math.ceil(f.z * RES); j <= Math.floor((f.z + f.d) * RES); j++) {
+        for (let i = Math.ceil(f.x * RES); i <= Math.floor((f.x + f.w) * RES); i++) {
+          if (i >= 0 && j >= 0 && i < this.n && j < this.n) solid[j * this.n + i] = 1;
+        }
+      }
+    }
+    for (const m of moats.values()) {
+      for (const [dx, dz] of [[1, 1], [1, -1]]) {
+        const o = moats.get((m.z + dz) * this.size + m.x + dx);
+        if (!o || moats.has(m.z * this.size + m.x + dx) || moats.has((m.z + dz) * this.size + m.x)) continue;
+        const lvl = Math.max(level(m), level(o));
+        const ax = m.x + 0.5;
+        const az = m.z + 0.5;
+        const r = 0.4;
+        for (let j = Math.floor((Math.min(m.z, o.z) - 0.2) * RES); j <= Math.ceil((Math.max(m.z, o.z) + 1.2) * RES); j++) {
+          for (let i = Math.floor((Math.min(m.x, o.x) - 0.2) * RES); i <= Math.ceil((Math.max(m.x, o.x) + 1.2) * RES); i++) {
+            if (i < 0 || j < 0 || i >= this.n || j >= this.n) continue;
+            const k = j * this.n + i;
+            if (solid[k]) continue;
+            // Distanza dal segmento tra i centri delle due caselle
+            const px = i / RES - ax;
+            const pz = j / RES - az;
+            const t = Math.max(0, Math.min(1, (px * dx + pz * dz) / 2));
+            const d = Math.hypot(px - dx * t, pz - dz * t);
+            if (d > r + 0.25) continue;
+            const target = d <= r ? lvl : lvl + (H[k] - lvl) * ((d - r) / 0.25);
+            if (target < H[k]) H[k] = target;
+            if (d <= r) {
+              inside[k] = 1;
+              this.dryMask[k] = m.dry && o.dry ? 1 : 0;
+            }
+          }
+        }
+      }
+    }
+
     // 2) raccordo morbido attorno agli ingombri
     for (const f of ordered) {
       const lvl = level(f);

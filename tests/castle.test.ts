@@ -11,6 +11,7 @@ function flatGame(year = 900) {
   st.day = (year - 900) * 360 + 100;
   const g = new Game(st, mulberry32(42));
   g.terrain.tiles.fill(Tile.Grass);
+  g.levelOverride = 5; // questi test riguardano le fortificazioni, non i livelli del castello
   Object.assign(g.state.resources, { wood: 1e5, stone: 1e5, coins: 1e5, charcoal: 1000 });
   g.storageCap = () => 1e9;
   return g;
@@ -220,5 +221,46 @@ describe('assedio: difendere costa meno che attaccare', () => {
     g.besiege(raiders(14, 3));
     expect(g.state.lastSiege?.log.length).toBeGreaterThan(1);
     expect(g.state.buildings.some((b) => b.hp !== undefined && b.hp < g.maxHp(b))).toBe(true);
+  });
+});
+
+describe('livelli del castello', () => {
+  it('si sale dal livello 1 al 5: cortile, mastio, sala grande, palazzo', () => {
+    const st = createInitialState(1);
+    st.day = 100;
+    const g = new Game(st, mulberry32(1));
+    g.terrain.tiles.fill(Tile.Grass);
+    Object.assign(g.state.resources, { wood: 1e5, stone: 1e5, coins: 1e5, gold: 100 });
+    g.storageCap = () => 1e9;
+    expect(g.castleLevel()).toBe(0);
+    expect(g.canPlace('market', 10, 10).reason).toMatch(/livello 2/);
+    const k = g.place('keep_wood', 30, 30)!;
+    expect(g.castleLevel()).toBe(1);
+    g.state.population = 30;
+    expect(g.upgrade(k, 'bailey')).toBe(true);
+    expect(g.castleLevel()).toBe(2);
+    expect(g.canPlace('market', 10, 10).ok).toBe(true);
+    // Il mastio in pietra si ottiene trasformando la motta, non costruendone un secondo
+    expect(g.canPlace('keep_stone', 10, 10).ok).toBe(false);
+    expect(g.canEvolveKeep().reason).toMatch(/1050/);
+    g.state.day = 160 * 360;
+    g.state.population = 40;
+    expect(g.canEvolveKeep().reason).toMatch(/50 abitanti/);
+    g.state.population = 60;
+    const housing2 = g.analysis().housing;
+    expect(g.evolveKeep()).toBe(true);
+    expect(g.ownKeep()!.defId).toBe('keep_stone');
+    expect(g.ownKeep()!.uid).toBe(k.uid);
+    expect(g.castleLevel()).toBe(3);
+    expect(g.analysis().housing).toBeGreaterThan(housing2);
+    g.state.day = 300 * 360;
+    g.state.population = 80;
+    expect(g.upgrade(g.ownKeep()!, 'great_hall')).toBe(true);
+    expect(g.castleLevel()).toBe(4);
+    g.state.day = 360 * 360;
+    g.state.population = 120;
+    expect(g.upgrade(g.ownKeep()!, 'palace')).toBe(true);
+    expect(g.castleLevel()).toBe(5);
+    expect(g.analysis().taxMul).toBeGreaterThan(1.35);
   });
 });

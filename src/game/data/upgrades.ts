@@ -24,7 +24,22 @@ export interface UpgradeDef {
   resist?: number;
   /** Serve un fossato adiacente (ponte levatoio). */
   needsMoat?: boolean;
+  /** Abitanti necessari. */
+  minPop?: number;
 }
+
+/** Livelli di evoluzione del castello e loro vantaggi. */
+export const CASTLE_LEVELS = [
+  { level: 0, name: 'Accampamento', icon: '⛺', housing: 0, storage: 0, tax: 0, how: 'Costruisci la motta con torre lignea.' },
+  { level: 1, name: 'Motta', icon: '🏯', housing: 0, storage: 0, tax: 0, how: 'Aggiungi il cortile (bailey) alla motta: servono 25 abitanti.' },
+  { level: 2, name: 'Motta con cortile', icon: '🏘️', housing: 6, storage: 200, tax: 0.1, how: 'Trasforma la motta in mastio di pietra (dal 1050, 50 abitanti).' },
+  { level: 3, name: 'Mastio in pietra', icon: '🏰', housing: 10, storage: 300, tax: 0.15, how: 'Costruisci la sala grande (dal 1150, 70 abitanti).' },
+  { level: 4, name: 'Castello con sala grande', icon: '🏛️', housing: 16, storage: 500, tax: 0.25, how: 'Costruisci il palazzo signorile (dal 1250, 110 abitanti).' },
+  { level: 5, name: 'Rocca signorile', icon: '👑', housing: 24, storage: 800, tax: 0.4, how: 'Il castello ha raggiunto il massimo splendore.' },
+] as const;
+
+/** Costo e requisiti per trasformare la motta in mastio di pietra. */
+export const KEEP_EVOLVE = { cost: { stone: 300, wood: 80, coins: 200 }, minYear: 1050, minPop: 50 };
 
 const WALLS = ['wall_stone'];
 const TOWERS = ['tower_square', 'tower_round'];
@@ -202,6 +217,44 @@ export const UPGRADES: UpgradeDef[] = [
     defense: 1.5,
   },
   // ───── Mastio ─────
+  // ───── Evoluzione del castello ─────
+  {
+    id: 'bailey',
+    name: 'Cortile fortificato (bailey)',
+    icon: '🏘️',
+    description: 'Cortile recintato ai piedi della motta con sala, stalle e magazzini. Porta il castello al livello 2.',
+    appliesTo: ['keep_wood'],
+    cost: { wood: 150, coins: 100 },
+    minYear: 900,
+    minPop: 25,
+    defense: 6,
+    hpMul: 1.2,
+  },
+  {
+    id: 'great_hall',
+    name: 'Sala grande',
+    icon: '🏛️',
+    description: 'Sala dei banchetti e cappella addossate al mastio: il castello sale al livello 4.',
+    appliesTo: ['keep_stone'],
+    cost: { stone: 260, wood: 120, coins: 300 },
+    minYear: 1150,
+    minPop: 70,
+    defense: 12,
+    hpMul: 1.2,
+  },
+  {
+    id: 'palace',
+    name: 'Palazzo signorile',
+    icon: '👑',
+    description: 'Torri più alte, loggia e appartamenti del signore: livello 5, rocca signorile.',
+    appliesTo: ['keep_stone'],
+    requires: 'great_hall',
+    cost: { stone: 450, wood: 160, coins: 600, gold: 20 },
+    minYear: 1250,
+    minPop: 110,
+    defense: 20,
+    hpMul: 1.3,
+  },
   {
     id: 'cistern',
     name: 'Cisterna',

@@ -12,6 +12,7 @@ import { eraForYear } from '../game/data/eras';
 import { canAfford, formatCost, RESOURCE_IDS, RESOURCES, TAX_LEVELS, type ResourceId } from '../game/data/resources';
 import { BEHAVIORS, ENGINES, FORMATIONS, UNITS, type Behavior, type EngineType, type Formation, type Stance } from '../game/data/units';
 import type { Force } from '../game/sim/state';
+import { CASTLE_LEVELS, KEEP_EVOLVE, UPGRADE_BY_ID } from '../game/data/upgrades';
 import type { Game } from '../game/sim/game';
 import type { PlacedBuilding } from '../game/sim/state';
 import type { ChatMessage, RealmPlayer } from '../net/realm';
@@ -221,13 +222,14 @@ export class Hud {
     const year = this.game.date.year;
     for (const [id, btn] of this.buildBtns) {
       const def = getBuilding(id);
-      const locked = !isAvailable(def, year);
+      const levelLocked = !!def.minLevel && this.game.castleLevel() < def.minLevel;
+      const locked = !isAvailable(def, year) || levelLocked;
       btn.classList.toggle('locked', locked);
       btn.classList.toggle('poor', !locked && !canAfford(this.game.state.resources, def.cost));
       btn.classList.toggle('active', this.activeTool === id);
       btn.classList.toggle('done', !!def.unique && this.game.count(id) > 0);
       const meta = btn.querySelector('.meta')!;
-      const text = locked ? `🔒 Dal ${def.minYear}` : this.metaFor(id);
+      const text = !isAvailable(def, year) ? `🔒 Dal ${def.minYear}` : levelLocked ? `🔒 Castello livello ${def.minLevel}` : this.metaFor(id);
       if (meta.textContent !== text) meta.textContent = text;
     }
   }
@@ -504,13 +506,42 @@ export class Hud {
       moodText,
       moodParts,
     );
-    this.panelBody.append(tax, defense, repairAll, siege, body);
+    // ───── Livello del castello
+    const levelInfo = el('div');
+    const levelBtn = el('button', { class: 'primary' });
+    const levelWhy = el('p', { class: 'small muted' });
+    const nextStep = () => {
+      const g = this.game;
+      const lv = g.castleLevel();
+      const keep = g.ownKeep();
+      if (lv === 2) return { label: `🏰 Trasforma in mastio di pietra (${formatCost(KEEP_EVOLVE.cost)})`, check: g.canEvolveKeep(), run: () => g.evolveKeep() };
+      const id = lv === 1 ? 'bailey' : lv === 3 ? 'great_hall' : lv === 4 ? 'palace' : null;
+      if (!id || !keep) return null;
+      const u = UPGRADE_BY_ID[id];
+      return { label: `${u.icon} ${u.name} (${formatCost(u.cost)})`, check: g.canUpgrade(keep, id), run: () => g.upgrade(keep, id) };
+    };
+    levelBtn.onclick = () => nextStep()?.run();
+    const levelBox = el('div', { class: 'castle-level' }, el('h4', { text: '👑 Livello del castello' }), levelInfo, levelBtn, levelWhy);
+    this.panelBody.append(levelBox, tax, defense, repairAll, siege, body);
     let lastSiege = -1;
     this.refreshTab = () => {
       const g = this.game;
       const s = g.summary();
       const d = g.defenseBreakdown();
       taxBtns.forEach((b, i) => b.classList.toggle('active', i === g.taxLevel()));
+      const lvl = g.castleLevel();
+      const L = CASTLE_LEVELS[lvl];
+      const stars = '★'.repeat(lvl) + '☆'.repeat(5 - lvl);
+      const lvlHtml = `<p><span class="stars">${stars}</span> <strong>${L.icon} ${escapeHtml(L.name)}</strong> (livello ${lvl}/5)</p>
+        <p class="small muted">${lvl ? `Vantaggi: +${L.housing} alloggi, +${L.storage} magazzini, tasse +${Math.round(L.tax * 100)}%.` : ''} ${escapeHtml(L.how)}</p>`;
+      if (levelInfo.innerHTML !== lvlHtml) levelInfo.innerHTML = lvlHtml;
+      const step = nextStep();
+      levelBtn.classList.toggle('hidden', !step);
+      if (step) {
+        levelBtn.textContent = step.label;
+        levelBtn.disabled = !step.check.ok;
+        levelWhy.textContent = step.check.ok ? '' : step.check.reason ?? '';
+      } else levelWhy.textContent = '';
       const h = g.happiness();
       const mood = g.moodTarget();
       moodBar.style.width = `${Math.round(h)}%`;

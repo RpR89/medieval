@@ -13,6 +13,7 @@ function world(slot: 0 | 1 = 0, match = true) {
   st.nextRaidDay = 1e9;
   const g = new Game(st, mulberry32(7 + slot));
   g.terrain.tiles.fill(Tile.Grass);
+  g.levelOverride = 5;
   Object.assign(g.state.resources, { wood: 1e5, stone: 1e5, coins: 1e5, grain: 5000 });
   g.storageCap = () => 1e9;
   return g;
