@@ -353,7 +353,7 @@ export class Hud {
     const checks = ups.map((u) => g.canUpgrade(b, u.id));
     const repairCost = g.repairCost(b);
     const key = JSON.stringify([
-      Math.round(b.hp ?? 0), b.upgrades, Math.round(b.herd ?? 0), checks.map((c) => c.ok),
+      Math.round(b.hp ?? 0), b.upgrades, Math.round(b.herd ?? 0), checks.map((c) => c.ok), b.garrison, g.state.army.archers + g.state.army.infantry,
       canAfford(g.state.resources, repairCost), g.structureVersion, b.defId,
       job && [Math.round((job.done / job.work) * 100), g.lastCrew.get(job.id) ?? 0, eta === null ? -1 : Math.round(eta)],
       evo?.ok, evo?.reason, g.desiredBuilders(), b.level, lvl?.ok, lvl?.reason,
@@ -436,7 +436,22 @@ export class Hud {
         }),
       );
     }
-    if (def.fort) {
+    if (def.vision && !isSite) {
+      const gar = b.garrison ? b.garrison.infantry + b.garrison.archers : 0;
+      const minus = el('button', { text: '−' });
+      const plus = el('button', { text: '+' });
+      minus.onclick = () => g.setGarrison(b, gar - 1);
+      plus.onclick = () => g.setGarrison(b, gar + 1);
+      minus.disabled = gar <= 0;
+      plus.disabled = gar >= (def.garrison ?? 0) || g.state.army.archers + g.state.army.infantry < 1;
+      parts.push(
+        el('h4', { text: '🔭 Vedetta' }),
+        el('p', { class: 'small', text: `Vede fino a ${g.visionOf(b)} caselle e dà l'allarme quando si avvicinano truppe nemiche.` }),
+        el('div', { class: 'row' }, el('span', { text: `🛡️ Guardie: ${gar} / ${def.garrison}` }), el('span', { class: 'spacer' }), minus, plus),
+        el('p', { class: 'small muted', text: 'Ogni guardia allunga la vista di una casella e difende la torre dalle incursioni (meglio con recinto e muretto). Le guardie si prendono dalla guarnigione, prima gli arcieri.' }),
+      );
+    }
+    if (def.fort || def.vision) {
       const max = g.maxHp(b);
       if (max) {
         const hp = Math.max(0, Math.round(b.hp ?? max));
@@ -456,7 +471,7 @@ export class Hud {
       if (def.fort === 'moat') {
         parts.push(el('p', { class: 'small', text: `Profondità ${g.moatDepth(b)}/3 · ${g.moatFlooded(b) ? '💧 Allagato (difesa ×1,6)' : 'Asciutto'}` }));
       }
-      parts.push(el('p', { class: 'small', text: `🛡️ Difesa: ${fmt(g.defenseOf(b))}${!g.analysis().closed && def.fort !== 'keep' && def.fort !== 'moat' ? ' (dimezzata: cinta aperta)' : ''}` }));
+      if (def.fort) parts.push(el('p', { class: 'small', text: `🛡️ Difesa: ${fmt(g.defenseOf(b))}${!g.analysis().closed && def.fort !== 'keep' && def.fort !== 'moat' ? ' (dimezzata: cinta aperta)' : ''}` }));
     }
     if (to && evo) {
       const cost = g.evolveCost(b);
@@ -836,7 +851,18 @@ export class Hud {
   private buildArmyTab() {
     const rows = el('div');
     const info = el('p', { class: 'small muted' });
-    this.panelBody.append(rows, info);
+    const scoutBtn = el('button', { text: '🐎 Invia un esploratore (15 🪙)', title: 'Un cavaliere che vede lontano: selezionalo e mandalo col tasto destro. Non combatte.' });
+    scoutBtn.onclick = () => {
+      const c = this.game.sendScout();
+      if (!c) this.toast(this.game.canSendScout().reason ?? 'Impossibile', 'bad');
+      else this.cb.selectCompanies?.([c.id]);
+    };
+    this.panelBody.append(
+      el('p', { class: 'small muted', text: 'Vedi solo attorno ai tuoi edifici, ai reparti, agli esploratori e alle torri di avvistamento. I castelli dei signori compaiono quando li scopri o se sono tuoi alleati.' }),
+      scoutBtn,
+      rows,
+      info,
+    );
     const units = Object.keys(UNITS) as UnitType[];
     const counts = new Map<UnitType, HTMLElement>();
     const reasons = new Map<UnitType, HTMLElement>();
@@ -1063,6 +1089,15 @@ export class Hud {
       };
       const show = el('button', { class: 'link', text: '📍 Mostra sulla mappa' });
       show.onclick = () => this.cb.focus?.(...g.lordKeep(l));
+      const scout = el('button', { text: '🐎 Esplora', title: 'Manda un esploratore a cavallo a vedere il suo castello (15 monete)' });
+      scout.onclick = () => {
+        const [kx, kz] = g.lordKeep(l);
+        const [hx, hz] = g.homeSite();
+        const d = Math.hypot(kx - hx, kz - hz) || 1;
+        // Si ferma a qualche casella dalle mura, dalla nostra parte
+        const c = g.sendScout(kx + ((hx - kx) / d) * 9, kz + ((hz - kz) / d) * 9);
+        this.toast(c ? `L'esploratore parte verso ${l.castle}.` : g.canSendScout().reason ?? 'Impossibile', c ? 'good' : 'bad');
+      };
       rows.set(l.id, { info, bar });
       list.append(
         el(
@@ -1070,7 +1105,7 @@ export class Hud {
           { class: 'lord' },
           info,
           el('div', { class: 'hp' }, bar),
-          el('div', { class: 'row' }, mission, show),
+          el('div', { class: 'row' }, mission, scout, show),
           el('div', { class: 'row small' }, el('span', { text: 'Dono: 🪙' }), coins, el('span', { text: '🌾' }), grain),
           el('div', { class: 'row' }, send, why),
         ),

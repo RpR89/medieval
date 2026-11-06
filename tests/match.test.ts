@@ -46,7 +46,7 @@ describe('partita a due', () => {
   it('ognuno costruisce solo nella propria metà', () => {
     const a = make(0);
     const b = make(1);
-    expect(a.terrain.size).toBe(104);
+    expect(a.terrain.size).toBe(128);
     const [ax, az] = a.homeSite();
     const [bx] = b.homeSite();
     expect(ax).toBeLessThan(52);

@@ -167,6 +167,8 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
     updateGhost();
   }
   function select(b: ReturnType<Game['buildingAt']> | null) {
+    // Gli edifici nascosti dalla nebbia non si possono selezionare
+    if (b && !game.isRevealed(b)) b = null;
     view.select(b ?? null);
     hud.select(b ?? null);
   }

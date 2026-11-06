@@ -23,6 +23,8 @@ export interface PlacedBuilding {
   owner?: number;
   /** Livello degli edifici civili (1 se assente). */
   level?: number;
+  /** Soldati di guardia (torri di avvistamento). */
+  garrison?: { infantry: number; archers: number };
   /** Solo edifici degli altri: cantiere allo stadio 0-3, oppure 4 = lavori su un edificio finito. */
   site?: number;
 }
@@ -115,6 +117,8 @@ export interface Company {
   owner?: number;
   /** Diplomatico in missione (nessun soldato). */
   envoy?: { lord: number; mission: DiploMission; gift?: Cost };
+  /** Esploratore a cavallo (nessun soldato): vede lontano. */
+  scout?: boolean;
 }
 
 export type DiploMission = 'alliance' | 'pact' | 'peace' | 'gift' | 'tribute' | 'war';
@@ -158,6 +162,8 @@ export interface GameState {
   preset?: PresetId;
   /** Schieramento scelto all'inizio. */
   faction?: FactionId;
+  /** Caselle già esplorate (bit per casella, in base64). */
+  explored?: string;
   /** Partita multigiocatore: id e posto (0 = chi l'ha creata, 1 = chi si è unito). */
   match?: { id: string; slot: 0 | 1 };
   /** Signori controllati dal gioco (solo in giocatore singolo). */

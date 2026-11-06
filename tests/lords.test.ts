@@ -37,7 +37,7 @@ function run(g: Game, days: number, until?: () => boolean) {
 describe('signori rivali', () => {
   it('la mappa si ingrandisce e ogni signore ha il suo castello e il suo territorio', () => {
     const g = single(3);
-    expect(g.terrain.size).toBe(128);
+    expect(g.terrain.size).toBe(160);
     expect(g.terrain.sites).toHaveLength(4);
     expect(g.lords()).toHaveLength(3);
     for (const l of g.lords()) {

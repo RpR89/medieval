@@ -104,6 +104,10 @@ export interface BuildingDef {
   evolvesTo?: string;
   /** Miglioramenti già compresi nella struttura. */
   builtIn?: string[];
+  /** Raggio di avvistamento (torri di avvistamento). */
+  vision?: number;
+  /** Soldati che si possono mettere di guardia. */
+  garrison?: number;
 }
 
 export const BUILDINGS: BuildingDef[] = [
@@ -616,6 +620,38 @@ export const BUILDINGS: BuildingDef[] = [
     workers: 1,
     consumes: { wood: 2 },
     produces: { charcoal: 0.8 },
+  },
+  {
+    id: 'watchtower',
+    icon: '🔭',
+    name: 'Torre di avvistamento',
+    category: 'military',
+    description: 'Torre di legno alta e snella: fa vedere lontano e avvisa quando si avvicinano truppe nemiche. Si può presidiare con soldati e proteggere con un recinto.',
+    size: [1, 1],
+    cost: { wood: 35, coins: 10 },
+    minYear: 900,
+    placement: 'land',
+    workers: 0,
+    hp: 120,
+    vision: 12,
+    garrison: 6,
+    evolvesTo: 'watchtower_stone',
+  },
+  {
+    id: 'watchtower_stone',
+    minLevel: 2,
+    icon: '🗼',
+    name: 'Torre di avvistamento in pietra',
+    category: 'military',
+    description: 'Torre di guardia in muratura con terrazza: vede più lontano, ospita più soldati e resiste alle incursioni.',
+    size: [1, 1],
+    cost: { stone: 60, lime: 8, wood: 12, coins: 20 },
+    minYear: 1100,
+    placement: 'land',
+    workers: 0,
+    hp: 420,
+    vision: 16,
+    garrison: 12,
   },
   {
     id: 'lime_kiln',

@@ -380,6 +380,98 @@ export function towerBastion(g: G, c: ModelCtx) {
   g.add(flag(k.flag, 0, 2.86, 0, 0.45));
 }
 
+// ───────────── Torri di avvistamento ─────────────
+
+/**
+ * Torre di avvistamento su una casella: in legno è un traliccio alto e snello con la piattaforma
+ * coperta in cima; in pietra un torrino rastremato con terrazza merlata. Recinto, muretto e
+ * fuoco di segnalazione si vedono come miglioramenti.
+ */
+export function watchtower(g: G, c: ModelCtx, stone: boolean) {
+  const k = mats();
+  const ruin = c.state === 'ruin';
+  const rand = mulberry32(c.seed ?? 5);
+  if (has(c, 'watch_fence')) {
+    for (let i = 0; i < 22; i++) {
+      const a = (i / 22) * PI * 2;
+      if (i === 5) continue; // ingresso
+      const h = 0.32 + rand() * 0.06;
+      g.add(cyl(0.025, 0.028, h, k.log, Math.cos(a) * 0.46, 0, Math.sin(a) * 0.46, 5));
+      g.add(cone(0.025, 0.05, k.log, Math.cos(a) * 0.46, h, Math.sin(a) * 0.46, 5));
+    }
+  }
+  if (has(c, 'watch_wall')) {
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * PI * 2;
+      if (i === 3) continue;
+      const w = box(0.2, 0.24, 0.08, k.stone, Math.cos(a) * 0.4, 0, Math.sin(a) * 0.4);
+      w.rotation.y = -a + PI / 2;
+      g.add(w);
+    }
+  }
+  if (ruin) {
+    if (stone) g.add(cyl(0.28, 0.34, 0.6, k.stone, 0, 0, 0, 10));
+    else for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(cyl(0.035, 0.04, 0.4, k.log, x * 0.24, 0, z * 0.24, 5));
+    rubble(g, c.seed ?? 5, 7, stone ? k.stone : k.log, 0.4);
+    return;
+  }
+  let top: number;
+  if (!stone) {
+    // Quattro pali inclinati verso l'interno, controventati
+    const H = 2.0;
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      const leg = cyl(0.035, 0.045, H, k.log, sx * 0.26, 0, sz * 0.26, 6);
+      leg.rotation.z = -sx * 0.06;
+      leg.rotation.x = sz * 0.06;
+      g.add(leg);
+    }
+    for (const y of [0.55, 1.15, 1.65]) {
+      const s = 0.26 - y * 0.06;
+      for (const [x, z, r] of [[0, s, 0], [0, -s, 0], [s, 0, PI / 2], [-s, 0, PI / 2]] as const) {
+        const brace = box(s * 2.1, 0.03, 0.03, k.beam, x, y, z);
+        brace.rotation.y = r;
+        g.add(brace);
+        const diag = box(s * 2.4, 0.025, 0.025, k.beam, x, y - 0.25, z);
+        diag.rotation.y = r;
+        diag.rotation.z = 0.45;
+        g.add(diag);
+      }
+    }
+    top = H - 0.05;
+    g.add(box(0.62, 0.05, 0.62, k.planks, 0, top, 0));
+    for (const [x, z, w, d] of [[0, 0.3, 0.62, 0.03], [0, -0.3, 0.62, 0.03], [0.3, 0, 0.03, 0.62], [-0.3, 0, 0.03, 0.62]] as const) g.add(box(w, 0.2, d, k.darkPlanks, x, top + 0.05, z));
+    for (const [x, z] of [[-0.28, -0.28], [0.28, -0.28], [-0.28, 0.28], [0.28, 0.28]]) g.add(box(0.03, 0.42, 0.03, k.beam, x, top + 0.05, z));
+    g.add(hipRoof(0.74, 0.74, 0.32, k.shingle, 0, top + 0.47, 0));
+    // Scala a pioli
+    const ladder = new THREE.Group();
+    for (const s of [-0.07, 0.07]) ladder.add(box(0.025, 2.0, 0.025, k.planks, s, 0, 0));
+    for (let i = 1; i < 12; i++) ladder.add(box(0.15, 0.018, 0.018, k.planks, 0, i * 0.16, 0));
+    ladder.position.set(0.05, 0, 0.42);
+    ladder.rotation.x = -0.12;
+    g.add(ladder);
+  } else {
+    // Torrino in pietra rastremato con terrazza merlata
+    const H = 2.15;
+    g.add(cyl(0.3, 0.36, 0.3, k.stoneDark, 0, 0, 0, 12));
+    g.add(cyl(0.25, 0.31, H, k.stone, 0, 0.2, 0, 12));
+    g.add(cyl(0.27, 0.27, 0.05, k.stoneLight, 0, 1.2, 0, 12));
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * PI * 2 + 0.4;
+      g.add(slit(Math.cos(a) * 0.27, 0.9 + i * 0.35, Math.sin(a) * 0.27, 0.04, 0.16, -a + PI / 2));
+    }
+    top = H + 0.2;
+    g.add(cyl(0.34, 0.28, 0.12, k.stoneDark, 0, top, 0, 12));
+    roundCrenels(g, 0.31, top + 0.12, k.stoneLight, 10);
+    door(g, 0, 0.31, 0, 0.12, 0.24);
+  }
+  if (has(c, 'signal_fire')) {
+    g.add(cyl(0.07, 0.05, 0.08, k.iron, 0.1, top + 0.05, 0.1, 8));
+    g.add(box(0.07, 0.07, 0.07, k.fire, 0.1, top + 0.13, 0.1));
+    g.add(smoke(0.1, top + 0.2, 0.1, 4, 0.7));
+  }
+  g.add(flag(k.flag, 0, top + (stone ? 0.3 : 0.79), 0, 0.22));
+}
+
 // ───────────── Impalcature dei cantieri ─────────────
 
 /**

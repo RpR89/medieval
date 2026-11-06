@@ -218,6 +218,39 @@ export const UPGRADES: UpgradeDef[] = [
     minYear: 900,
     defense: 1.5,
   },
+  // ───── Torri di avvistamento ─────
+  {
+    id: 'watch_fence',
+    name: 'Recinto di pali',
+    icon: '🪵',
+    description: 'Palizzata attorno alla base della torre: le guardie resistono meglio alle incursioni.',
+    appliesTo: ['watchtower', 'watchtower_stone'],
+    cost: { wood: 24, coins: 4 },
+    minYear: 900,
+    hpMul: 1.6,
+    defense: 2,
+  },
+  {
+    id: 'watch_wall',
+    name: 'Muretto in pietra',
+    icon: '🧱',
+    description: 'Un muro basso di pietra con una porticina: la torre diventa un piccolo posto fortificato.',
+    appliesTo: ['watchtower_stone'],
+    requires: 'watch_fence',
+    cost: { stone: 40, lime: 6, coins: 10 },
+    minYear: 1100,
+    hpMul: 1.5,
+    defense: 4,
+  },
+  {
+    id: 'signal_fire',
+    name: 'Fuoco di segnalazione',
+    icon: '🔥',
+    description: 'Un braciere sempre pronto: l\'allarme arriva prima e la vista si allunga (+4 caselle).',
+    appliesTo: ['watchtower', 'watchtower_stone'],
+    cost: { wood: 10, charcoal: 10, coins: 6 },
+    minYear: 900,
+  },
   // ───── Mastio ─────
   // ───── Evoluzione del castello ─────
   {

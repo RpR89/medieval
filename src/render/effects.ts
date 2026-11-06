@@ -13,7 +13,52 @@ export const shared = {
   uSnow: { value: 0 },
   /** Quanto fogliame hanno le latifoglie (1 = pieno, 0 = spoglie). */
   uLeaf: { value: 1 },
+  /** Nebbia di guerra: 0 = mai visto, 0,5 = esplorato, 1 = in vista. */
+  uFog: { value: null as THREE.Texture | null },
+  uFogSize: { value: 64 },
+  uFogOn: { value: 0 },
 };
+
+/** Nebbia di guerra: scurisce e smorza i colori delle zone non sorvegliate. */
+export function addFog(mat: THREE.Material) {
+  if (mat.userData.fog) return;
+  mat.userData.fog = true;
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = (shader, renderer) => {
+    prev?.call(mat, shader, renderer);
+    shader.uniforms.uFog = shared.uFog;
+    shader.uniforms.uFogSize = shared.uFogSize;
+    shader.uniforms.uFogOn = shared.uFogOn;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>\nvarying vec3 vFogPos;`)
+      .replace(
+        '#include <project_vertex>',
+        `#include <project_vertex>
+        {
+          vec4 fp = vec4(transformed, 1.0);
+          #ifdef USE_INSTANCING
+            fp = instanceMatrix * fp;
+          #endif
+          vFogPos = (modelMatrix * fp).xyz;
+        }`,
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\nuniform sampler2D uFog;\nuniform float uFogSize, uFogOn;\nvarying vec3 vFogPos;`)
+      .replace(
+        '#include <dithering_fragment>',
+        `#include <dithering_fragment>
+        if (uFogOn > 0.5) {
+          vec2 fuv = vFogPos.xz / uFogSize;
+          float fv = (fuv.x < 0.0 || fuv.y < 0.0 || fuv.x > 1.0 || fuv.y > 1.0) ? 0.5 : texture2D(uFog, fuv).r;
+          float lum = fv < 0.5 ? mix(0.22, 0.58, fv * 2.0) : mix(0.58, 1.0, (fv - 0.5) * 2.0);
+          vec3 grey = vec3(dot(gl_FragColor.rgb, vec3(0.3, 0.59, 0.11)));
+          gl_FragColor.rgb = mix(grey, gl_FragColor.rgb, 0.35 + 0.65 * fv) * lum;
+        }`,
+      );
+  };
+  chainKey(mat, 'fog');
+  mat.needsUpdate = true;
+}
 
 /** Le chiome si restringono verso il centro man mano che le foglie cadono. */
 export function addLeafScale(mat: THREE.Material, center = 1.0) {

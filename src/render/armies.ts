@@ -50,7 +50,7 @@ function label(f: Force, color: number, formation: Formation, envoy: boolean): T
   ctx.font = 'bold 30px Georgia, serif';
   ctx.textBaseline = 'middle';
   const parts: string[] = [];
-  if (envoy) parts.push('🕊️ Diplomatico');
+  if (envoy) parts.push(color === 0x3f8a4a ? '🐎 Esploratore' : '🕊️ Diplomatico');
   else {
     if (f.infantry) parts.push(`🛡️${f.infantry}`);
     if (f.archers) parts.push(`🏹${f.archers}`);
@@ -269,6 +269,8 @@ export class ArmyView {
       const z = from[1] + dz * p;
       a.obj.position.set(x, this.terrain.heightAt(x, z) + Math.abs(Math.sin(t * 6)) * 0.015, z);
       a.obj.rotation.y = Math.atan2(-dz, dx);
+      // Le truppe nemiche si vedono solo dove c'è qualcuno a guardare
+      a.obj.visible = !enemy || g.isVisible(x, z);
     };
     for (const e of g.state.expeditions ?? []) {
       if (e.status === 'marching') show(e.id, e.troops, home, away, e.departDay, e.arriveDay, false);
@@ -322,7 +324,7 @@ export class ArmyView {
         if (ch.userData.ring) ch.visible = this.selected.has(id);
       }
     };
-    for (const c of g.state.companies ?? []) place(c.id, c.troops, c.x, c.z, c.heading ?? 0, !!c.path?.length, false, c.formation, undefined, !!c.envoy);
+    for (const c of g.state.companies ?? []) place(c.id, c.troops, c.x, c.z, c.heading ?? 0, !!c.path?.length, false, c.formation, c.scout ? 0x3f8a4a : undefined, !!c.envoy || !!c.scout);
     this.updatePaths(g.state.companies ?? []);
     for (const c of g.enemyCompanies) {
       const prev = this.shown.get(c.id) ?? { x: c.x, z: c.z };
@@ -331,6 +333,8 @@ export class ArmyView {
       prev.z += (c.z - prev.z) * 0.15;
       this.shown.set(c.id, prev);
       place(`e:${c.id}`, c.troops, prev.x, prev.z, c.heading ?? 0, moving, true, c.formation, c.owner !== undefined ? SIDE_COLORS[c.owner + 1] : undefined, !!c.envoy);
+      const shown = this.armies.get(`e:${c.id}`);
+      if (shown) shown.obj.visible = g.isVisible(prev.x, prev.z);
     }
     for (const [id, a] of this.armies) {
       if (seen.has(id)) continue;

@@ -6,7 +6,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { makeWater, shared } from './effects';
+import { addFog, makeWater, shared } from './effects';
 import { mixNumber, seasonMix, type Season, type SeasonMix } from '../game/data/calendar';
 import { getBuilding } from '../game/data/buildings';
 import type { Game } from '../game/sim/game';
@@ -122,9 +122,21 @@ export class WorldRenderer {
 
     // Densità dell'erba proporzionata alla dimensione della mappa
     const area = (64 / size) ** 2;
-    this.terrainView = new TerrainView(game.terrain, Math.max(2, Math.round((quality === 'high' ? 10 : quality === 'medium' ? 6 : 3) * area)));
+    this.terrainView = new TerrainView(game.terrain, Math.max(3, Math.round((quality === 'high' ? 15 : quality === 'medium' ? 9 : 4) * area)));
     this.scene.add(this.terrainView.group);
     if (game.terrain.sites.length > 1) this.addTerritoryBorder();
+    // Nebbia di guerra: una texture con una casella per pixel, sui materiali del terreno
+    const n = game.terrain.size;
+    this.fogTex = new THREE.DataTexture(new Uint8Array(n * n * 4), n, n);
+    this.fogTex.magFilter = THREE.LinearFilter;
+    this.fogTex.minFilter = THREE.LinearFilter;
+    shared.uFog.value = this.fogTex;
+    shared.uFogSize.value = n;
+    shared.uFogOn.value = 1;
+    this.terrainView.group.traverse((o) => {
+      if (o instanceof THREE.Mesh) for (const m of Array.isArray(o.material) ? o.material : [o.material]) addFog(m);
+    });
+    this.updateFog();
     this.armyView = new ArmyView(game, this.terrainView);
     this.scene.add(this.armyView.group);
 
@@ -155,6 +167,7 @@ export class WorldRenderer {
     this.water.rotation.x = -Math.PI / 2;
     this.water.position.set(size / 2, WATER_LEVEL, size / 2);
     this.water.receiveShadow = true;
+    addFog(this.water.material as THREE.Material);
     this.scene.add(this.water);
 
     this.selection = new THREE.Mesh(
@@ -215,7 +228,7 @@ export class WorldRenderer {
       this.shadowDirty = true;
     }
     this.sun.shadow.radius = q === 'low' ? 1 : 2.5;
-    this.aoPass.enabled = q === 'high';
+    this.aoPass.enabled = q !== 'low';
     this.bloomPass.enabled = q === 'high';
     this.terrainView.setDetail(q !== 'low');
     this.resize();
@@ -426,7 +439,8 @@ export class WorldRenderer {
   }
 
   private allBuildings(): PlacedBuilding[] {
-    return [...this.game.state.buildings, ...this.game.sites(), ...this.game.others];
+    // Gli edifici degli altri si vedono solo se scoperti (o se sono di un alleato)
+    return [...this.game.state.buildings, ...this.game.sites(), ...this.game.others.filter((b) => this.game.isRevealed(b))];
   }
 
   private syncBuildings() {
@@ -630,6 +644,29 @@ export class WorldRenderer {
     this.controls.target.add(move);
   }
 
+  private fogTex: THREE.DataTexture;
+  private fogTimer = 0;
+  private revealVersion = -1;
+
+  /** Aggiorna cosa si vede e la texture della nebbia. */
+  private updateFog() {
+    this.game.updateVision();
+    const { vis, exp } = this.game.fogGrids();
+    const d = this.fogTex.image.data as Uint8Array;
+    for (let i = 0; i < vis.length; i++) {
+      const v = vis[i] ? 255 : exp[i] ? 128 : 0;
+      d[i * 4] = v;
+      d[i * 4 + 1] = v;
+      d[i * 4 + 2] = v;
+      d[i * 4 + 3] = 255;
+    }
+    this.fogTex.needsUpdate = true;
+    if (this.game.revealVersion !== this.revealVersion) {
+      this.revealVersion = this.game.revealVersion;
+      this.syncBuildings();
+    }
+  }
+
   render() {
     this.timer.update();
     const dt = Math.min(0.1, this.timer.getDelta());
@@ -661,6 +698,11 @@ export class WorldRenderer {
       if (herd) updateHerd(obj, def, Math.round(b.herd ?? 0));
       sphere.set(obj.position, Math.max(def.size[0], def.size[1]) + 2);
       if (frustum.intersectsSphere(sphere)) animate(obj, t, dt);
+    }
+    this.fogTimer += dt;
+    if (this.fogTimer > 0.25) {
+      this.fogTimer = 0;
+      this.updateFog();
     }
     this.armyView.update(t);
     for (const o of this.armyView.objects()) animate(o, t, dt);

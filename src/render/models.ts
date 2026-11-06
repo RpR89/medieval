@@ -18,7 +18,7 @@ import {
 } from './kit';
 import { addWind } from './effects';
 import { isLevelable, levelTier } from '../game/data/levels';
-import { bridge, gatehouse, gateStone, gateStrong, gateWood, keepStone, keepWood, moat, palisade, road, scaffold, stoneWall, towerBastion, towerRound, towerSquare, towerWood, type ModelCtx } from './fortModels';
+import { bridge, gatehouse, gateStone, gateStrong, gateWood, keepStone, keepWood, moat, palisade, road, scaffold, stoneWall, towerBastion, towerRound, towerSquare, towerWood, watchtower, type ModelCtx } from './fortModels';
 export type { Link, ModelCtx } from './fortModels';
 import { timberFrame, windowShutters, door, chimney, barrel, crate, sack, logPile, fence } from './parts';
 
@@ -711,6 +711,8 @@ export function buildModel(def: BuildingDef, ctx: ModelCtx = {}): THREE.Group {
     case 'gate_strong': gateStrong(g, ctx); break;
     case 'tower_bastion': towerBastion(g, ctx); break;
     case 'lime_kiln': limeKiln(g); break;
+    case 'watchtower': watchtower(g, ctx, false); break;
+    case 'watchtower_stone': watchtower(g, ctx, true); break;
     case 'mason_lodge': masonLodge(g); break;
     case 'moat': moat(g, ctx); break;
     case 'gate_wood': gateWood(g, ctx); break;

@@ -887,6 +887,10 @@ export class Game {
       this.state.resources[id as ResourceId] += Math.floor((n ?? 0) * 0.5);
     }
     if (def.herd && b.herd) this.slaughter(def.herd.species, Math.floor(b.herd));
+    if (b.garrison) {
+      this.state.army.infantry += b.garrison.infantry;
+      this.state.army.archers += b.garrison.archers;
+    }
     this.mark(b, 0);
     this.state.buildings.splice(i, 1);
     this.changed();
@@ -1339,6 +1343,12 @@ export class Game {
       for (const k of Object.keys(f) as Array<keyof Force>) f[k] += t[k];
     }
     for (const c of this.state.companies ?? []) for (const k of Object.keys(f) as Array<keyof Force>) f[k] += c.troops[k];
+    // Le guardie delle torri di avvistamento sono soldati pagati, ma lontani dal castello
+    for (const b of this.state.buildings) {
+      if (!b.garrison) continue;
+      f.infantry += b.garrison.infantry;
+      f.archers += b.garrison.archers;
+    }
     return f;
   }
 
@@ -1722,6 +1732,7 @@ export class Game {
     for (const k of ['rams', 'trebuchets'] as const) if (c.troops[k] > 0) v = Math.min(v, ENGINES[k].speed);
     // Le velocità sono in caselle al giorno: i giorni ora sono più brevi, la marcia resta uguale in tempo reale
     if (c.envoy) return 6 / TIME_SCALE;
+    if (c.scout) return 8 / TIME_SCALE;
     v = ((isFinite(v) ? v : 4) * FORMATIONS[c.formation ?? 'line'].speed) / TIME_SCALE;
     return c.groupSpeed ? Math.min(v, c.groupSpeed) : v;
   }
@@ -1974,7 +1985,7 @@ export class Game {
 
   private pruneCompanies() {
     if (!this.state.companies) return;
-    this.state.companies = this.state.companies.filter((c) => c.envoy || c.troops.infantry + c.troops.archers + c.troops.cavalry > 0);
+    this.state.companies = this.state.companies.filter((c) => c.envoy || c.scout || c.troops.infantry + c.troops.archers + c.troops.cavalry > 0);
   }
 
   private stepCompanies(dt: number) {
@@ -2057,7 +2068,9 @@ export class Game {
     }
     this.state.companies = this.companies().filter((x) => x !== c);
     this.log(
-      c.envoy
+      c.scout
+        ? 'L\'esploratore è rientrato al castello.'
+        : c.envoy
         ? `Il diplomatico è tornato al castello${goods ? ` con ${Math.round(goods)} monete di tributo` : ''}.`
         : `Un reparto è rientrato nel castello${goods ? ` con ${Math.round(goods)} unità di bottino` : ''}.`,
       'good',
@@ -2146,7 +2159,7 @@ export class Game {
    */
   fieldBattles(): Array<{ enemyLosses: Record<string, Force>; text: string }> {
     const out: Array<{ enemyLosses: Record<string, Force>; text: string }> = [];
-    const mine = this.companies().filter((c) => !c.engaged && !c.envoy);
+    const mine = this.companies().filter((c) => !c.engaged && !c.envoy && !c.scout);
     const theirs = this.enemyCompanies.filter((c) => !c.engaged && !c.envoy && (c.owner === undefined || this.lord(c.owner)?.status === 'war'));
     const used = new Set<string>();
     for (const c of mine) {
@@ -2858,6 +2871,7 @@ export class Game {
       }
     }
     if (dirty) this.syncLords(true);
+    this.watchtowerSkirmishes();
   }
 
   private launchLordRaid(l: Lord) {
@@ -3339,6 +3353,224 @@ export class Game {
     b.upgrades = (b.upgrades ?? []).filter((u) => UPGRADE_BY_ID[u]?.appliesTo.includes(to) && !def.builtIn?.includes(u));
     b.hp = this.maxHp(b);
     if (def.fort === 'keep') this.log(`Il castello sale al livello 3: la motta è diventata un ${CASTLE_LEVELS[3].name.toLowerCase()}!`, 'good');
+  }
+
+  // ───────────── Visibilità: nebbia di guerra, esploratori e torri di avvistamento ─────────────
+
+  private visibleGrid?: Uint8Array;
+  private exploredGrid?: Uint8Array;
+  /** Cresce quando si scopre un edificio straniero (la scena lo mostra). */
+  revealVersion = 0;
+  private alerted = new Set<string>();
+
+  fogGrids(): { vis: Uint8Array; exp: Uint8Array } {
+    const n = this.terrain.size * this.terrain.size;
+    if (!this.exploredGrid || this.exploredGrid.length !== n) {
+      this.exploredGrid = new Uint8Array(n);
+      this.visibleGrid = new Uint8Array(n);
+      const enc = this.state.explored;
+      if (enc) {
+        try {
+          const bin = atob(enc);
+          for (let i = 0; i < n; i++) if (bin.charCodeAt(i >> 3) & (1 << (i & 7))) this.exploredGrid[i] = 1;
+        } catch {
+          /* salvataggio vecchio o rovinato: si riparte da zero */
+        }
+      }
+    }
+    return { vis: this.visibleGrid!, exp: this.exploredGrid };
+  }
+
+  isVisible(x: number, z: number): boolean {
+    const n = this.terrain.size;
+    if (x < 0 || z < 0 || x >= n || z >= n) return false;
+    return this.fogGrids().vis[Math.floor(z) * n + Math.floor(x)] === 1;
+  }
+
+  isExplored(x: number, z: number): boolean {
+    const n = this.terrain.size;
+    if (x < 0 || z < 0 || x >= n || z >= n) return false;
+    return this.fogGrids().exp[Math.floor(z) * n + Math.floor(x)] === 1;
+  }
+
+  /** Un edificio straniero si vede se è stato scoperto, o se è di un alleato o vassallo. */
+  isRevealed(b: PlacedBuilding): boolean {
+    if (!this.isForeign(b)) return true;
+    if (b.owner !== undefined) {
+      const st = this.lord(b.owner)?.status;
+      if (st === 'alliance' || st === 'vassal') return true;
+    }
+    const [w, d] = getBuilding(b.defId).size;
+    return this.isExplored(b.x + w / 2, b.z + d / 2);
+  }
+
+  /** Raggio di avvistamento di una torre (cresce con le guardie e il fuoco di segnalazione). */
+  visionOf(b: PlacedBuilding): number {
+    const def = getBuilding(b.defId);
+    if (!def.vision || this.hpState(b) === 'ruin') return 0;
+    const g = b.garrison ? b.garrison.infantry + b.garrison.archers : 0;
+    return def.vision + Math.min(6, g) + (b.upgrades?.includes('signal_fire') ? 4 : 0);
+  }
+
+  /** Fonti di vista: edifici, reparti, esploratori, torri, alleati. */
+  private visionSources(): Array<[number, number, number]> {
+    const out: Array<[number, number, number]> = [];
+    for (const b of this.state.buildings) {
+      const def = getBuilding(b.defId);
+      const [w, d] = def.size;
+      const r = def.vision ? this.visionOf(b) : def.fort === 'keep' ? 12 : def.fort === 'tower' ? 7 : def.fort === 'gate' ? 5 : 3;
+      out.push([b.x + w / 2, b.z + d / 2, r]);
+    }
+    for (const b of this.sites()) out.push([b.x + 0.5, b.z + 0.5, 2]);
+    for (const c of this.companies()) out.push([c.x, c.z, c.scout ? 9 : c.envoy ? 4 : 5]);
+    if (!this.state.buildings.length) {
+      const [hx, hz] = this.homeSite();
+      out.push([hx, hz, 10]);
+    }
+    for (const l of this.lords()) {
+      if (l.status !== 'alliance' && l.status !== 'vassal') continue;
+      for (const b of l.buildings) out.push([b.x + 0.5, b.z + 0.5, 4]);
+      for (const c of l.companies) out.push([c.x, c.z, 5]);
+    }
+    return out;
+  }
+
+  /** Ricalcola cosa si vede; segna le caselle esplorate e dà l'allarme sui nemici avvistati. */
+  updateVision(): boolean {
+    const { vis, exp } = this.fogGrids();
+    const n = this.terrain.size;
+    vis.fill(0);
+    let grew = false;
+    for (const [cx, cz, r] of this.visionSources()) {
+      const r2 = r * r;
+      for (let z = Math.max(0, Math.floor(cz - r)); z <= Math.min(n - 1, Math.ceil(cz + r)); z++) {
+        for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(n - 1, Math.ceil(cx + r)); x++) {
+          const dx = x + 0.5 - cx;
+          const dz = z + 0.5 - cz;
+          if (dx * dx + dz * dz > r2) continue;
+          const k = z * n + x;
+          vis[k] = 1;
+          if (!exp[k]) {
+            exp[k] = 1;
+            grew = true;
+          }
+        }
+      }
+    }
+    if (grew) {
+      // Salva le caselle esplorate e mostra gli edifici stranieri appena scoperti
+      const bytes = new Uint8Array(Math.ceil((n * n) / 8));
+      for (let i = 0; i < n * n; i++) if (exp[i]) bytes[i >> 3] |= 1 << (i & 7);
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      this.state.explored = btoa(bin);
+      const key = this.others.filter((b) => this.isRevealed(b)).length;
+      if (key !== this.lastRevealed) {
+        this.lastRevealed = key;
+        this.revealVersion++;
+      }
+    }
+    // Allarme: truppe nemiche avvistate (dalle torri o dai reparti)
+    const alive = new Set<string>();
+    for (const c of this.enemyCompanies) {
+      if (c.envoy) continue;
+      alive.add(c.id);
+      if (this.alerted.has(c.id) || !this.isVisible(c.x, c.z)) continue;
+      this.alerted.add(c.id);
+      const l = c.owner !== undefined ? this.lord(c.owner) : undefined;
+      if (l && l.status !== 'war') continue;
+      const n2 = Math.round(c.troops.infantry + c.troops.archers + c.troops.cavalry);
+      const tower = this.state.buildings.some((b) => this.visionOf(b) > 0 && Math.hypot(b.x + 0.5 - c.x, b.z + 0.5 - c.z) <= this.visionOf(b));
+      this.log(`${tower ? '🔭 Le vedette hanno avvistato' : '👁️ Avvistato'} ${l ? `l'esercito di ${l.name}` : 'un esercito nemico'}: ${n2} soldati in marcia!`, 'bad');
+    }
+    for (const id of this.alerted) if (!alive.has(id)) this.alerted.delete(id);
+    return grew;
+  }
+  private lastRevealed = -1;
+
+  /** Mette (o toglie) soldati di guardia in una torre di avvistamento: prima gli arcieri. */
+  setGarrison(b: PlacedBuilding, n: number): number {
+    const def = getBuilding(b.defId);
+    if (!def.garrison || this.isForeign(b) || this.siteByUid(b.uid)) return 0;
+    const cur = b.garrison ?? { infantry: 0, archers: 0 };
+    // Rientrano tutti, poi si assegnano i nuovi
+    this.state.army.infantry += cur.infantry;
+    this.state.army.archers += cur.archers;
+    const want = Math.max(0, Math.min(def.garrison, Math.round(n)));
+    const archers = Math.min(want, Math.floor(this.state.army.archers));
+    const infantry = Math.min(want - archers, Math.floor(this.state.army.infantry));
+    this.state.army.archers -= archers;
+    this.state.army.infantry -= infantry;
+    b.garrison = archers + infantry ? { infantry, archers } : undefined;
+    this.emit();
+    return archers + infantry;
+  }
+
+  /** Forma un esploratore a cavallo: vede lontano, non combatte. */
+  canSendScout(): PlaceCheck {
+    if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
+    if (!this.ownKeep()) return { ok: false, reason: 'Serve prima il castello' };
+    if (this.companies().filter((c) => c.scout).length >= 3) return { ok: false, reason: 'Al massimo tre esploratori' };
+    if (this.state.resources.coins < 15) return { ok: false, reason: 'Servono 15 monete' };
+    return { ok: true };
+  }
+
+  sendScout(tx?: number, tz?: number): Company | null {
+    return this.track('Esploratori', () => {
+      if (!this.canSendScout().ok) return null;
+      this.state.resources.coins -= 15;
+      const [sx, sz] = this.spawnPoint();
+      const c: Company = {
+        id: `s${this.state.nextUid++}`,
+        troops: { infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0 },
+        x: sx + 0.5,
+        z: sz + 0.5,
+        order: 'idle',
+        scout: true,
+        formation: 'column',
+        behavior: 'hold',
+      };
+      (this.state.companies ??= []).push(c);
+      if (tx !== undefined && tz !== undefined) this.route(c, tx, tz);
+      this.log('🐎 Un esploratore a cavallo è partito: selezionalo e mandalo dove vuoi vedere (tasto destro).', 'info');
+      this.emit();
+      return c;
+    }, 'event');
+  }
+
+  /** Le incursioni nemiche che passano vicino a una torre di avvistamento la attaccano. */
+  private watchtowerSkirmishes() {
+    for (const l of this.lords()) {
+      if (l.status !== 'war') continue;
+      for (const c of l.companies) {
+        for (const b of this.state.buildings) {
+          if (!getBuilding(b.defId).vision || this.hpState(b) === 'ruin') continue;
+          if (Math.hypot(b.x + 0.5 - c.x, b.z + 0.5 - c.z) > 1.8) continue;
+          const key = `${c.id}|${b.uid}`;
+          if (this.alerted.has(key)) continue;
+          this.alerted.add(key);
+          const g = b.garrison ?? { infantry: 0, archers: 0 };
+          const protect = 1 + (b.upgrades?.includes('watch_fence') ? 0.6 : 0) + (b.upgrades?.includes('watch_wall') ? 0.8 : 0) + (b.defId === 'watchtower_stone' ? 0.5 : 0);
+          const def = (g.archers * 1.3 + g.infantry + 0.5) * protect * 3;
+          const atk = c.troops.infantry + c.troops.archers * 0.6 + c.troops.cavalry * 1.4;
+          const name = getBuilding(b.defId).name.toLowerCase();
+          if (atk > def) {
+            b.hp = 0;
+            const lost = g.infantry + g.archers;
+            b.garrison = undefined;
+            this.log(`🔥 ${l.name} ha incendiato una ${name}${lost ? ` (${lost} guardie cadute)` : ''}. Va riparata.`, 'bad');
+            this.changed();
+          } else {
+            const kill = Math.min(atk, def * 0.25);
+            const tot = Math.max(1, atk);
+            c.troops.infantry = Math.max(0, c.troops.infantry - kill * (c.troops.infantry / tot));
+            c.troops.archers = Math.max(0, c.troops.archers - kill * (c.troops.archers * 0.6 / tot));
+            c.troops.cavalry = Math.max(0, c.troops.cavalry - kill * (c.troops.cavalry * 1.4 / tot));
+            this.log(`🛡️ Le guardie della ${name} hanno respinto l'avanguardia di ${l.name} (circa ${Math.round(kill)} nemici a terra).`, 'good');
+          }
+        }
+      }
+    }
   }
 
   // ───────────── Livelli degli edifici civili ─────────────

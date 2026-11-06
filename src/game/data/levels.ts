@@ -12,7 +12,7 @@ export const LEVELS_PER_ERA = 4;
 const LEVELABLE = new Set(['housing', 'farming', 'animals', 'gathering', 'industry', 'trade', 'military']);
 
 export function isLevelable(def: BuildingDef): boolean {
-  return LEVELABLE.has(def.category) && !def.fort && !def.road;
+  return LEVELABLE.has(def.category) && !def.fort && !def.road && !def.vision;
 }
 
 /** Indice dell'epoca (0-4) per un anno. */

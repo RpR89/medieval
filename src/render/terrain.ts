@@ -548,6 +548,28 @@ export class TerrainView {
       ),
     )!;
     const flowerGeo = new THREE.IcosahedronGeometry(0.025, 0).translate(0, 0.1, 0);
+    // Varianti: abete alto e stretto, betulla slanciata, canne palustri, felci del sottobosco
+    const con2Geo = mergeGeometries([
+      new THREE.ConeGeometry(0.3, 0.6, 7).translate(0, 0.6, 0),
+      new THREE.ConeGeometry(0.26, 0.55, 7).translate(0, 0.95, 0),
+      new THREE.ConeGeometry(0.2, 0.5, 7).translate(0, 1.28, 0),
+      new THREE.ConeGeometry(0.13, 0.42, 7).translate(0, 1.6, 0),
+    ].map(ni))!;
+    const birchGeo = mergeGeometries([
+      new THREE.IcosahedronGeometry(0.22, 0).scale(1, 1.5, 1).translate(0, 1.2, 0),
+      new THREE.IcosahedronGeometry(0.17, 0).scale(1, 1.4, 1).translate(0.12, 0.95, 0.05),
+      new THREE.IcosahedronGeometry(0.16, 0).scale(1, 1.4, 1).translate(-0.1, 1.0, -0.06),
+      new THREE.IcosahedronGeometry(0.13, 0).translate(0.02, 1.52, 0),
+    ].map(ni))!;
+    const birchTrunk = new THREE.CylinderGeometry(0.03, 0.05, 1.2, 6).translate(0, 0.6, 0);
+    const reedGeo = mergeGeometries(
+      [0, 1, 2, 3, 4, 5].map((i) =>
+        new THREE.PlaneGeometry(0.02, 0.32 + (i % 3) * 0.06).translate(0, 0.16 + (i % 3) * 0.03, 0).rotateZ((i - 2.5) * 0.12).rotateY(i * 1.1).translate((i % 2) * 0.04, 0, (i % 3) * 0.03).toNonIndexed(),
+      ),
+    )!;
+    const fernGeo = mergeGeometries(
+      [0, 1, 2, 3, 4].map((i) => new THREE.PlaneGeometry(0.05, 0.2).translate(0, 0.1, 0).rotateX(-0.9).rotateY((i / 5) * Math.PI * 2).toNonIndexed()),
+    )!;
 
     // Conteggio delle istanze
     const conifers: THREE.Matrix4[] = [];
@@ -556,6 +578,17 @@ export class TerrainView {
     const rocks: Array<[THREE.Matrix4, number]> = [];
     const tufts: Array<[THREE.Matrix4, number]> = [];
     const flowers: Array<[THREE.Matrix4, number]> = [];
+    const conifers2: THREE.Matrix4[] = [];
+    const birches: THREE.Matrix4[] = [];
+    const reeds: Array<[THREE.Matrix4, number]> = [];
+    const ferns: Array<[THREE.Matrix4, number]> = [];
+    const nearWater = (x: number, z: number) => {
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const n = tileAt(t, x + dx, z + dz);
+        if (n === Tile.River || n === Tile.Sea) return true;
+      }
+      return false;
+    };
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     const up = new THREE.Vector3(0, 1, 0);
@@ -576,15 +609,19 @@ export class TerrainView {
           for (let k = 0; k < nTrees; k++) {
             const s = 0.7 + rand() * 0.65;
             const mat = place(x + 0.15 + rand() * 0.7, z + 0.15 + rand() * 0.7, s, s * (0.85 + rand() * 0.4));
-            (rand() < 0.55 ? conifers : decid).push(mat);
+            const r = rand();
+            (r < 0.35 ? conifers : r < 0.55 ? conifers2 : r < 0.88 ? decid : birches).push(mat);
           }
           if (rand() < 0.5) bushes.push([place(x + rand(), z + rand(), 0.8 + rand() * 0.6), key]);
+          for (let k = 0; k < 3; k++) if (rand() < 0.6) ferns.push([place(x + rand(), z + rand(), 0.8 + rand() * 0.7), key]);
         } else if (tile === Tile.Grass) {
           if (rand() < 0.05) bushes.push([place(x + 0.2 + rand() * 0.6, z + 0.2 + rand() * 0.6, 0.7 + rand() * 0.6), key]);
           if (rand() < 0.012) decid.push(place(x + 0.5, z + 0.5, 0.8 + rand() * 0.4));
           if (rand() < 0.03) rocks.push([place(x + rand(), z + rand(), 0.3 + rand() * 0.4), key]);
           for (let k = 0; k < this.tuftsPerTile; k++) tufts.push([place(x + rand(), z + rand(), 0.7 + rand() * 0.8), key]);
-          if (rand() < 0.5) for (let k = 0; k < 3; k++) flowers.push([place(x + rand(), z + rand(), 0.8 + rand() * 0.5), key]);
+          if (rand() < 0.6) for (let k = 0; k < 4; k++) flowers.push([place(x + rand(), z + rand(), 0.8 + rand() * 0.5), key]);
+          if (nearWater(x, z)) for (let k = 0; k < 4; k++) reeds.push([place(x + rand(), z + rand(), 0.8 + rand() * 0.6), key]);
+          else if (rand() < 0.008) birches.push(place(x + 0.5, z + 0.5, 0.8 + rand() * 0.3));
         } else if (tile === Tile.Rock || tile === Tile.Gold) {
           for (let k = 0; k < 2; k++) rocks.push([place(x + rand(), z + rand(), 0.6 + rand() * 1.0, 0.4 + rand() * 0.6), key]);
         } else if (tile === Tile.Sand && rand() < 0.15) {
@@ -617,6 +654,22 @@ export class TerrainView {
     const leaves = inst(leafGeo, this.leafMat, decid);
     tint(leaves, decid.length, 0.06);
     inst(branchGeo, bark, decid);
+    const con2 = inst(con2Geo, this.coniferMat, conifers2);
+    tint(con2, conifers2.length, 0.05);
+    inst(trunkGeo, bark, conifers2);
+    const birchLeaves = inst(birchGeo, this.leafMat, birches);
+    tint(birchLeaves, birches.length, 0.08);
+    inst(birchTrunk, new THREE.MeshStandardMaterial({ color: 0xe8e2d4, roughness: 0.9 }), birches);
+    const reedMat = new THREE.MeshStandardMaterial({ color: 0x8a9a4a, roughness: 1, side: THREE.DoubleSide });
+    addWind(reedMat, 0.05, 0.25);
+    const reed = inst(reedGeo, reedMat, reeds.map((r) => r[0]), false);
+    tint(reed, reeds.length, 0.06);
+    const fernMat = new THREE.MeshStandardMaterial({ color: 0x3f6a2a, roughness: 1, side: THREE.DoubleSide });
+    addWind(fernMat, 0.02, 0.15);
+    const fern = inst(fernGeo, fernMat, ferns.map((r) => r[0]), false);
+    tint(fern, ferns.length, 0.05);
+    reeds.forEach(([mx, key], i) => this.register(key, reed, i, mx));
+    ferns.forEach(([mx, key], i) => this.register(key, fern, i, mx));
     const bush = inst(bushGeo, this.bushMat, bushes.map((b) => b[0]));
     tint(bush, bushes.length, 0.05);
     const rock = inst(rockGeo, new THREE.MeshStandardMaterial({ color: 0x8a857d, roughness: 1, flatShading: true }), rocks.map((r) => r[0]));
