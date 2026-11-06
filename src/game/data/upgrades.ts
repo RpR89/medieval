@@ -1,4 +1,5 @@
 import type { Cost } from './resources';
+import { getBuilding } from './buildings';
 
 /**
  * Miglioramenti delle fortificazioni. Ogni edificio può averne diversi;
@@ -39,10 +40,11 @@ export const CASTLE_LEVELS = [
 ] as const;
 
 /** Costo e requisiti per trasformare la motta in mastio di pietra. */
-export const KEEP_EVOLVE = { cost: { stone: 300, wood: 80, coins: 200 }, minYear: 1050, minPop: 50 };
+export const KEEP_EVOLVE = { cost: { stone: 360, lime: 50, wood: 100, coins: 220 }, minYear: 1050, minPop: 50 };
 
-const WALLS = ['wall_stone'];
-const TOWERS = ['tower_square', 'tower_round'];
+const WALLS = ['wall_rubble', 'wall_stone', 'wall_curtain', 'wall_bastion'];
+const MORTAR_WALLS = ['wall_stone', 'wall_curtain', 'wall_bastion'];
+const TOWERS = ['tower_square', 'tower_round', 'tower_bastion'];
 const STONE_GATES = ['gate_stone', 'gatehouse'];
 
 export const UPGRADES: UpgradeDef[] = [
@@ -52,8 +54,8 @@ export const UPGRADES: UpgradeDef[] = [
     name: 'Terrapieno',
     icon: '⛰️',
     description: 'Terra battuta alla base della palizzata: più difficile da abbattere.',
-    appliesTo: ['palisade'],
-    cost: { coins: 4 },
+    appliesTo: ['palisade', 'palisade_double'],
+    cost: { coins: 6, wood: 2 },
     minYear: 900,
     hpMul: 1.6,
     resist: 1.2,
@@ -76,7 +78,7 @@ export const UPGRADES: UpgradeDef[] = [
     icon: '🚶',
     description: 'Camminamento merlato in cima alle mura: i difensori tirano al riparo dei merli.',
     appliesTo: WALLS,
-    cost: { stone: 4, wood: 2 },
+    cost: { stone: 6, lime: 1, wood: 3 },
     minYear: 1150,
     defense: 2,
     fire: 0.35,
@@ -89,7 +91,7 @@ export const UPGRADES: UpgradeDef[] = [
     description: 'Gallerie di legno sporgenti sul cammino di ronda: si colpisce chi scala o scava ai piedi del muro.',
     appliesTo: WALLS,
     requires: 'walkway',
-    cost: { wood: 10 },
+    cost: { wood: 12, coins: 2 },
     minYear: 1150,
     defense: 2,
     fire: 0.4,
@@ -101,7 +103,7 @@ export const UPGRADES: UpgradeDef[] = [
     icon: '🛖',
     description: 'Galleria di legno sporgente in cima alla torre: tiro piombante sugli assalitori.',
     appliesTo: [...TOWERS, 'tower_wood'],
-    cost: { wood: 25 },
+    cost: { wood: 30, coins: 5 },
     minYear: 1100,
     defense: 3,
     fire: 0.8,
@@ -112,8 +114,8 @@ export const UPGRADES: UpgradeDef[] = [
     name: 'Mura ispessite',
     icon: '🧱',
     description: 'Raddoppia lo spessore della muratura: resiste a trabucchi e arieti.',
-    appliesTo: [...WALLS, ...TOWERS, ...STONE_GATES, 'keep_stone'],
-    cost: { stone: 14, coins: 4 },
+    appliesTo: [...MORTAR_WALLS, ...TOWERS, ...STONE_GATES, 'keep_stone'],
+    cost: { stone: 20, lime: 5, coins: 6 },
     minYear: 1150,
     hpMul: 1.7,
     resist: 1.1,
@@ -124,7 +126,7 @@ export const UPGRADES: UpgradeDef[] = [
     icon: '🕳️',
     description: 'Aperture nel parapetto sporgente per colpire la base delle mura.',
     appliesTo: [...TOWERS, ...STONE_GATES, 'keep_stone'],
-    cost: { stone: 24, wood: 6 },
+    cost: { stone: 30, lime: 6, wood: 8 },
     minYear: 1250,
     defense: 4,
     fire: 1.2,
@@ -146,8 +148,8 @@ export const UPGRADES: UpgradeDef[] = [
     name: 'Saracinesca',
     icon: '🔱',
     description: 'Griglia di ferro e legno che cala davanti alla porta.',
-    appliesTo: ['gate_stone'],
-    cost: { wood: 20, coins: 30 },
+    appliesTo: ['gate_strong', 'gate_stone'],
+    cost: { wood: 25, coins: 40 },
     minYear: 1150,
     defense: 4,
     resist: 1.6,
@@ -157,7 +159,7 @@ export const UPGRADES: UpgradeDef[] = [
     name: 'Calderone della pece',
     icon: '🔥',
     description: 'Pece bollente versata su chi assale la porta. In battaglia consuma 10 di carbone.',
-    appliesTo: ['gate_wood', 'gate_stone', 'gatehouse'],
+    appliesTo: ['gate_wood', 'gate_strong', 'gate_stone', 'gatehouse'],
     cost: { coins: 40, charcoal: 20 },
     minYear: 1000,
     defense: 3,
@@ -168,7 +170,7 @@ export const UPGRADES: UpgradeDef[] = [
     name: 'Ponte levatoio',
     icon: '🌉',
     description: 'Si solleva sul fossato: gli assalitori devono colmarlo prima di arrivare alla porta.',
-    appliesTo: ['gate_wood', 'gate_stone', 'gatehouse'],
+    appliesTo: ['gate_wood', 'gate_strong', 'gate_stone', 'gatehouse'],
     cost: { wood: 40, coins: 30 },
     minYear: 1050,
     defense: 6,
@@ -193,7 +195,7 @@ export const UPGRADES: UpgradeDef[] = [
     description: 'Un vero baratro alla base delle mura.',
     appliesTo: ['moat'],
     requires: 'deep1',
-    cost: { coins: 16, stone: 2 },
+    cost: { coins: 16, stone: 4, lime: 1 },
     minYear: 1150,
     defense: 2,
   },
@@ -224,7 +226,7 @@ export const UPGRADES: UpgradeDef[] = [
     icon: '🏘️',
     description: 'Cortile recintato ai piedi della motta con sala, stalle e magazzini. Porta il castello al livello 2.',
     appliesTo: ['keep_wood'],
-    cost: { wood: 150, coins: 100 },
+    cost: { wood: 180, coins: 100 },
     minYear: 900,
     minPop: 25,
     defense: 6,
@@ -236,7 +238,7 @@ export const UPGRADES: UpgradeDef[] = [
     icon: '🏛️',
     description: 'Sala dei banchetti e cappella addossate al mastio: il castello sale al livello 4.',
     appliesTo: ['keep_stone'],
-    cost: { stone: 260, wood: 120, coins: 300 },
+    cost: { stone: 340, lime: 60, wood: 150, coins: 320 },
     minYear: 1150,
     minPop: 70,
     defense: 12,
@@ -249,7 +251,7 @@ export const UPGRADES: UpgradeDef[] = [
     description: 'Torri più alte, loggia e appartamenti del signore: livello 5, rocca signorile.',
     appliesTo: ['keep_stone'],
     requires: 'great_hall',
-    cost: { stone: 450, wood: 160, coins: 600, gold: 20 },
+    cost: { stone: 500, lime: 90, wood: 180, coins: 600, gold: 20 },
     minYear: 1250,
     minPop: 110,
     defense: 20,
@@ -278,5 +280,6 @@ export const UPGRADES: UpgradeDef[] = [
 export const UPGRADE_BY_ID: Record<string, UpgradeDef> = Object.fromEntries(UPGRADES.map((u) => [u.id, u]));
 
 export function upgradesFor(defId: string): UpgradeDef[] {
-  return UPGRADES.filter((u) => u.appliesTo.includes(defId));
+  const built = getBuilding(defId).builtIn ?? [];
+  return UPGRADES.filter((u) => u.appliesTo.includes(defId) && !built.includes(u.id));
 }

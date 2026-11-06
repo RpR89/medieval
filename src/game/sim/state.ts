@@ -21,6 +21,23 @@ export interface PlacedBuilding {
   owner?: number;
 }
 
+/** Lavoro in corso dei costruttori: nuovo edificio, miglioramento o evoluzione. */
+export interface BuildJob {
+  id: number;
+  kind: 'build' | 'upgrade' | 'evolve';
+  /** Edificio (o cantiere, per 'build') su cui si lavora. */
+  uid: number;
+  /** Miglioramento da costruire. */
+  upId?: string;
+  /** Tipo in cui si trasforma (evoluzione). */
+  to?: string;
+  /** Giornate di lavoro necessarie e già svolte. */
+  work: number;
+  done: number;
+  /** Materiali già pagati (rimborsati se si annulla). */
+  cost: Cost;
+}
+
 /** Rapporto dell'ultimo assedio, per l'interfaccia. */
 export interface SiegeReport {
   day: number;
@@ -147,6 +164,13 @@ export interface GameState {
   /** Reparti sul campo. */
   companies?: Company[];
   incoming?: IncomingAttack[];
+  /** Edifici in costruzione (occupano il terreno ma non funzionano ancora). */
+  sites?: PlacedBuilding[];
+  /** Coda dei lavori, in ordine di priorità. */
+  jobs?: BuildJob[];
+  nextJobId?: number;
+  /** Costruttori desiderati (assente = quanti più possibile). */
+  builders?: number;
   /** Ultimi rapporti delle spedizioni concluse. */
   campaignLog?: Array<{ day: number; text: string; outcome: Outcome; log: string[] }>;
 }
@@ -169,10 +193,10 @@ export const TAX_PER_PERSON = 0.05;
 /** Epoche da cui si può cominciare, con le risorse di partenza. */
 export const START_ERAS = [
   { year: 900, name: 'Motte e palizzate', pop: 20, res: { coins: 300, wood: 220, stone: 60 }, intro: 'costruisci una motta e proteggi la gente' },
-  { year: 1050, name: 'Mastio in pietra', pop: 30, res: { coins: 600, wood: 320, stone: 260 }, intro: 'erigi un mastio in pietra' },
-  { year: 1150, name: 'Cinte murarie', pop: 40, res: { coins: 900, wood: 420, stone: 450 }, intro: 'erigi il mastio e una cinta di mura in pietra' },
-  { year: 1250, name: 'Castello concentrico', pop: 50, res: { coins: 1300, wood: 520, stone: 650, gold: 20 }, intro: 'costruisci una rocca con torri circolari' },
-  { year: 1350, name: 'Tardo Medioevo', pop: 60, res: { coins: 1600, wood: 600, stone: 850, gold: 40 }, intro: 'fortifica la rocca contro eserciti sempre più grandi' },
+  { year: 1050, name: 'Mastio in pietra', pop: 30, res: { coins: 700, wood: 380, stone: 480, lime: 70 }, intro: 'erigi un mastio in pietra' },
+  { year: 1150, name: 'Cinte murarie', pop: 40, res: { coins: 1000, wood: 450, stone: 500, lime: 110 }, intro: 'erigi il mastio e una cinta di mura in pietra' },
+  { year: 1250, name: 'Castello concentrico', pop: 50, res: { coins: 1400, wood: 500, stone: 500, lime: 150, gold: 20 }, intro: 'costruisci una rocca con torri circolari' },
+  { year: 1350, name: 'Tardo Medioevo', pop: 60, res: { coins: 1800, wood: 500, stone: 500, lime: 200, gold: 40 }, intro: 'fortifica la rocca contro eserciti sempre più grandi' },
 ] as const;
 
 export function createInitialState(seed: number, castleName = 'Castello senza nome', opts: StateOptions = {}): GameState {
@@ -196,6 +220,9 @@ export function createInitialState(seed: number, castleName = 'Castello senza no
     resources,
     population: era.pop,
     buildings: [],
+    sites: [],
+    jobs: [],
+    nextJobId: 1,
     army: { infantry: 0, archers: 0, cavalry: 0 },
     nextUid: 1,
     nextRaidDay: day + DAYS_PER_YEAR * 2 + 120,
@@ -225,6 +252,8 @@ export function migrateState(raw: unknown): GameState {
     resources: { ...emptyResources(), ...s.resources },
     army: { ...base.army, ...s.army },
     buildings: s.buildings ?? [],
+    sites: s.sites ?? [],
+    jobs: s.jobs ?? [],
     log: s.log ?? [],
     version: 1,
   } as GameState;

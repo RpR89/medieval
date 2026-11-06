@@ -5,6 +5,9 @@ import { generateTerrain, isBuildableLand, tileAt, Tile } from '../src/game/worl
 import { PRESET_LIST } from '../src/game/world/presets';
 import { packBuildings } from '../src/net/match';
 
+// Nei test le costruzioni sono immediate, salvo dove si provano i cantieri
+Game.instantByDefault = true;
+
 describe('mappe', () => {
   it('ogni tipo di mappa a due giocatori lascia liberi entrambi i siti dei castelli', () => {
     for (const p of PRESET_LIST) {
@@ -36,7 +39,7 @@ describe('partita a due', () => {
   const make = (slot: 0 | 1) => {
     const st = createInitialState(7, 'C', { preset: 'pianura', match: { id: 'm1', slot } });
     const g = new Game(st);
-    Object.assign(g.state.resources, { wood: 1e4, coins: 1e4, stone: 1e4 });
+    Object.assign(g.state.resources, { wood: 1e4, coins: 1e4, stone: 1e4, lime: 1e4 });
     return g;
   };
 

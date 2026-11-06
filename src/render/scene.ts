@@ -11,7 +11,7 @@ import { mixNumber, seasonMix, type Season, type SeasonMix } from '../game/data/
 import { getBuilding } from '../game/data/buildings';
 import type { Game } from '../game/sim/game';
 import type { PlacedBuilding } from '../game/sim/state';
-import { animate, applySeason, buildModel, LINKED_TYPES, ROAD_FAMILY, updateHerd, WALL_FAMILY, type Link, type ModelCtx } from './models';
+import { animate, applySeason, buildModel, LINKED_TYPES, MASONRY_WALLS, ROAD_FAMILY, updateHerd, WALL_FAMILY, type Link, type ModelCtx } from './models';
 import { StaticBatches } from './batches';
 import { ArmyView, SIDE_COLORS } from './armies';
 import { mats } from './kit';
@@ -303,7 +303,7 @@ export class WorldRenderer {
   /** Collegamenti in 8 direzioni verso i vicini della stessa famiglia (diagonali solo se non c'è già un angolo). */
   private linksFor(b: PlacedBuilding, family: Set<string>, extend: boolean): Link[] {
     const fam = (x: number, z: number) => {
-      const o = this.game.buildingAt(x, z);
+      const o = this.game.structureAt(x, z);
       return o && o.uid !== b.uid && family.has(o.defId) ? o : null;
     };
     const extFor = (o: PlacedBuilding, diag: boolean) => {
@@ -331,9 +331,11 @@ export class WorldRenderer {
     const def = getBuilding(b.defId);
     const ctx: ModelCtx = {
       seed: b.uid * 7919 + b.x * 31 + b.z,
-      upgrades: b.upgrades ?? [],
+      upgrades: [...(def.builtIn ?? []), ...(b.upgrades ?? [])],
       state: this.game.hpState(b),
     };
+    if (this.game.siteByUid(b.uid)) ctx.site = this.game.siteStageOf(b.uid);
+    else if (!this.game.isForeign(b) && this.game.jobFor(b.uid)) ctx.works = true;
     if (def.id === 'road' || def.id === 'road_paved' || def.id === 'bridge') ctx.links = this.linksFor(b, ROAD_FAMILY, false);
     else if (LINKED_TYPES.has(def.id)) ctx.links = this.linksFor(b, WALL_FAMILY, true);
     if (def.fort === 'gate') {
@@ -345,7 +347,7 @@ export class WorldRenderer {
         if (this.game.isMoat(x, z)) ctx.moatDir = [dx, dz];
       }
     }
-    if (def.id === 'wall_stone') {
+    if (MASONRY_WALLS.has(def.id)) {
       // Verso l'esterno della cinta: dove le caselle vicine sono raggiungibili da fuori
       let ox = 0;
       let oz = 0;
@@ -420,7 +422,7 @@ export class WorldRenderer {
   }
 
   private allBuildings(): PlacedBuilding[] {
-    return this.game.others.length ? [...this.game.state.buildings, ...this.game.others] : this.game.state.buildings;
+    return [...this.game.state.buildings, ...this.game.sites(), ...this.game.others];
   }
 
   private syncBuildings() {
@@ -640,7 +642,7 @@ export class WorldRenderer {
       this.envKey = envKey;
       this.shadowDirty = true;
       for (const [uid, obj] of this.buildingObjs) {
-        const b = this.game.byUid(uid);
+        const b = this.game.byUid(uid) ?? this.game.siteByUid(uid);
         if (b) applySeason(obj, b.defId, this.mix);
       }
     }

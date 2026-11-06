@@ -4,6 +4,9 @@ import { createInitialState, type Force, type IncomingAttack } from '../src/game
 import { mulberry32, Tile } from '../src/game/world/terrain';
 import { packBuildings } from '../src/net/match';
 
+// Nei test le costruzioni sono immediate, salvo dove si provano i cantieri
+Game.instantByDefault = true;
+
 /** Due castelli nella stessa partita, collegati "a mano" come farebbe la rete. */
 function duel(year = 1100) {
   const mk = (slot: 0 | 1) => {
@@ -13,7 +16,7 @@ function duel(year = 1100) {
     const g = new Game(st, mulberry32(10 + slot));
     g.terrain.tiles.fill(Tile.Grass);
     g.levelOverride = 5;
-    Object.assign(g.state.resources, { wood: 1e5, stone: 1e5, coins: 5000, charcoal: 500, grain: 2000 });
+    Object.assign(g.state.resources, { wood: 1e5, stone: 1e5, lime: 1e5, coins: 5000, charcoal: 500, grain: 2000 });
     g.storageCap = () => 1e9;
     return g;
   };

@@ -116,9 +116,9 @@ export function lordCastle(terrain: Terrain, site: [number, number], level: numb
     const tower = level >= 4 ? 'tower_round' : 'tower_square';
     for (const [x, z] of [[cx - r - 1, cz - r - 1], [cx + r, cz - r - 1], [cx - r - 1, cz + r], [cx + r, cz + r]]) put(tower, x, z, level >= 5 ? ['machicolation'] : []);
   }
-  const wall = level >= 3 ? 'wall_stone' : 'palisade';
-  const wallUps = level >= 4 ? ['walkway', 'thicken'] : level >= 3 ? ['walkway'] : level >= 2 ? ['earthbank'] : [];
-  const gate = level >= 4 ? 'gatehouse' : level >= 3 ? 'gate_stone' : 'gate_wood';
+  const wall = level >= 5 ? 'wall_curtain' : level >= 3 ? 'wall_stone' : level >= 2 ? 'palisade_double' : 'palisade';
+  const wallUps = level >= 5 ? ['thicken'] : level >= 4 ? ['walkway', 'thicken'] : level >= 3 ? ['walkway'] : level >= 2 ? ['earthbank'] : [];
+  const gate = level >= 4 ? 'gatehouse' : level >= 3 ? 'gate_stone' : level >= 2 ? 'gate_strong' : 'gate_wood';
   // Porte a est e a ovest (il corpo di guardia occupa due caselle)
   if (gate === 'gatehouse') {
     put(gate, cx + r - 1, cz - 1);

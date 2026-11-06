@@ -17,7 +17,7 @@ import {
   sphere,
 } from './kit';
 import { addWind } from './effects';
-import { bridge, gatehouse, gateStone, gateWood, keepStone, keepWood, moat, palisade, road, stoneWall, towerRound, towerSquare, towerWood, type ModelCtx } from './fortModels';
+import { bridge, gatehouse, gateStone, gateStrong, gateWood, keepStone, keepWood, moat, palisade, road, scaffold, stoneWall, towerBastion, towerRound, towerSquare, towerWood, type ModelCtx } from './fortModels';
 export type { Link, ModelCtx } from './fortModels';
 import { timberFrame, windowShutters, door, chimney, barrel, crate, sack, logPile, fence } from './parts';
 
@@ -397,6 +397,52 @@ function charcoalKiln(g: G) {
   g.add(t);
 }
 
+/** Fornace da calce: forno di pietra a tronco di cono, legna e pietre calcaree. */
+function limeKiln(g: G) {
+  const k = mats();
+  g.add(cyl(0.48, 0.66, 1.05, k.stone, -0.15, 0, -0.1, 14));
+  g.add(cyl(0.5, 0.5, 0.08, k.stoneDark, -0.15, 1.05, -0.1, 14));
+  g.add(cyl(0.3, 0.3, 0.1, k.dark, -0.15, 1.08, -0.1, 12));
+  // Bocca del forno con il fuoco
+  g.add(box(0.3, 0.3, 0.12, k.dark, -0.15, 0, 0.52));
+  g.add(box(0.16, 0.12, 0.06, k.fire, -0.15, 0.04, 0.56));
+  g.add(box(0.46, 0.08, 0.2, k.stoneDark, -0.15, 0.3, 0.52));
+  g.add(smoke(-0.15, 1.12, -0.1, 6, 1.2));
+  // Tettoia e mucchi di calce e pietre
+  for (const [x, z] of [[0.55, 0.25], [0.95, 0.25], [0.55, 0.85], [0.95, 0.85]]) g.add(box(0.05, 0.6, 0.05, k.beam, x, 0, z));
+  g.add(gableRoof(0.6, 0.75, 0.25, k.shingle, k.darkPlanks, 0.75, 0.6, 0.55, 0.05));
+  const lime = cone(0.2, 0.22, k.plaster, 0.75, 0, 0.55, 10);
+  g.add(lime);
+  for (let i = 0; i < 6; i++) g.add(box(0.12, 0.09, 0.1, k.stoneLight, 0.45 + (i % 3) * 0.16, (i > 2 ? 0.09 : 0), -0.65));
+  logPile(g, -0.65, 0.55, Math.PI / 2, 3);
+}
+
+/** Loggia dei muratori: tettoia di lavoro, blocchi squadrati e gru a ruota. */
+function masonLodge(g: G) {
+  const k = mats();
+  g.add(box(1.7, 0.05, 1.0, k.planks, 0, 0, -0.35));
+  for (const x of [-0.8, 0, 0.8]) for (const z of [-0.8, 0.1]) g.add(box(0.07, 0.75, 0.07, k.beam, x, 0, z));
+  g.add(box(1.7, 0.55, 0.06, k.wattle, 0, 0, -0.85));
+  g.add(gableRoof(1.85, 1.15, 0.5, k.shingle, k.darkPlanks, 0, 0.75, -0.35, 0.06));
+  // Banchi e blocchi squadrati
+  g.add(box(0.6, 0.3, 0.3, k.darkPlanks, -0.4, 0, -0.4));
+  g.add(box(0.3, 0.2, 0.22, k.stoneLight, -0.4, 0.3, -0.4));
+  for (let i = 0; i < 5; i++) g.add(box(0.22, 0.16, 0.18, k.stoneLight, 0.2 + (i % 3) * 0.24, i > 2 ? 0.16 : 0, 0.45));
+  // Gru a ruota
+  const crane = new THREE.Group();
+  crane.add(box(0.06, 1.5, 0.06, k.beam, 0, 0, 0));
+  const jib = box(0.9, 0.05, 0.05, k.beam, 0.35, 1.45, 0);
+  jib.rotation.z = 0.25;
+  crane.add(jib);
+  const wheel = cyl(0.32, 0.32, 0.1, k.planks, 0, 0.35, 0.15, 12);
+  wheel.rotation.x = Math.PI / 2;
+  crane.add(wheel);
+  crane.add(box(0.015, 0.8, 0.015, k.rope, 0.75, 0.75, 0));
+  crane.position.set(-0.7, 0, 0.55);
+  g.add(crane);
+  for (const x of [0.6, 0.85]) g.add(cyl(0.05, 0.05, 0.5, k.log, x, 0, -0.1, 6));
+}
+
 function granary(g: G) {
   const k = mats();
   for (const [x, z] of [[-0.6, -0.5], [0.6, -0.5], [-0.6, 0.5], [0.6, 0.5], [0, -0.5], [0, 0.5]]) {
@@ -620,22 +666,31 @@ function fisher(g: G) {
 /** Tipi che formano una cinta continua e si collegano tra loro. */
 export const WALL_FAMILY = new Set([
   'palisade',
+  'palisade_double',
+  'wall_rubble',
   'wall_stone',
+  'wall_curtain',
+  'wall_bastion',
   'gate_wood',
+  'gate_strong',
   'gate_stone',
   'tower_wood',
   'tower_square',
   'tower_round',
+  'tower_bastion',
   'gatehouse',
   'keep_wood',
   'keep_stone',
 ]);
 
 /** Tipi della rete stradale (le porte ne fanno parte). */
-export const ROAD_FAMILY = new Set(['road', 'road_paved', 'bridge', 'gate_wood', 'gate_stone', 'gatehouse']);
+export const ROAD_FAMILY = new Set(['road', 'road_paved', 'bridge', 'gate_wood', 'gate_strong', 'gate_stone', 'gatehouse']);
 
 /** Tipi il cui aspetto dipende dai vicini. */
-export const LINKED_TYPES = new Set(['palisade', 'wall_stone', 'gate_wood', 'gate_stone', 'road', 'road_paved', 'bridge']);
+export const LINKED_TYPES = new Set(['palisade', 'palisade_double', 'wall_rubble', 'wall_stone', 'wall_curtain', 'wall_bastion', 'gate_wood', 'gate_strong', 'gate_stone', 'road', 'road_paved', 'bridge']);
+
+/** Mura in muratura: hanno un lato esterno (merli, bertesche). */
+export const MASONRY_WALLS = new Set(['wall_rubble', 'wall_stone', 'wall_curtain', 'wall_bastion']);
 
 /**
  * Costruisce il modello di un edificio, centrato sull'ingombro, con il terreno a y=0.
@@ -647,7 +702,15 @@ export function buildModel(def: BuildingDef, ctx: ModelCtx = {}): THREE.Group {
   const seed = ctx.seed ?? 1;
   switch (def.id) {
     case 'palisade': palisade(g, ctx); break;
+    case 'palisade_double': palisade(g, ctx, true); break;
+    case 'wall_rubble': stoneWall(g, ctx, 'rubble'); break;
     case 'wall_stone': stoneWall(g, ctx); break;
+    case 'wall_curtain': stoneWall(g, ctx, 'curtain'); break;
+    case 'wall_bastion': stoneWall(g, ctx, 'bastion'); break;
+    case 'gate_strong': gateStrong(g, ctx); break;
+    case 'tower_bastion': towerBastion(g, ctx); break;
+    case 'lime_kiln': limeKiln(g); break;
+    case 'mason_lodge': masonLodge(g); break;
     case 'moat': moat(g, ctx); break;
     case 'gate_wood': gateWood(g, ctx); break;
     case 'gate_stone': gateStone(g, ctx); break;
@@ -683,6 +746,10 @@ export function buildModel(def: BuildingDef, ctx: ModelCtx = {}): THREE.Group {
     default:
       g.add(box(w * 0.8, 0.8, d * 0.8, mats().planks, 0, 0, 0));
       g.add(hipRoof(w * 0.9, d * 0.9, 0.6, mats().thatch, 0, 0.8, 0));
+  }
+  if (ctx.site !== undefined || ctx.works) {
+    const stone = (def.cost.stone ?? 0) + (def.cost.lime ?? 0) > 0;
+    scaffold(g, w, d, ctx.site, stone, seed);
   }
   return bake(g);
 }

@@ -5,6 +5,9 @@ import { dateFromDays, DAYS_PER_YEAR, formatDate, formatDuration } from '../src/
 import { generateTerrain, isBuildableLand, MAP_SIZE, Tile, tileAt } from '../src/game/world/terrain';
 import { getBuilding } from '../src/game/data/buildings';
 
+// Nei test le costruzioni sono immediate, salvo dove si provano i cantieri
+Game.instantByDefault = true;
+
 function findSpot(game: Game, defId: string): [number, number] {
   for (let z = 0; z < MAP_SIZE; z++) {
     for (let x = 0; x < MAP_SIZE; x++) {

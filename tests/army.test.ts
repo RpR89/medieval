@@ -5,6 +5,9 @@ import { mulberry32, Tile } from '../src/game/world/terrain';
 import { mixNumber, seasonMix } from '../src/game/data/calendar';
 import { packBuildings } from '../src/net/match';
 
+// Nei test le costruzioni sono immediate, salvo dove si provano i cantieri
+Game.instantByDefault = true;
+
 const F = (f: Partial<Force>): Force => ({ infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0, ...f });
 
 function world(slot: 0 | 1 = 0, match = true) {
@@ -14,7 +17,7 @@ function world(slot: 0 | 1 = 0, match = true) {
   const g = new Game(st, mulberry32(7 + slot));
   g.terrain.tiles.fill(Tile.Grass);
   g.levelOverride = 5;
-  Object.assign(g.state.resources, { wood: 1e5, stone: 1e5, coins: 1e5, grain: 5000 });
+  Object.assign(g.state.resources, { wood: 1e5, stone: 1e5, lime: 1e5, coins: 1e5, grain: 5000 });
   g.storageCap = () => 1e9;
   return g;
 }

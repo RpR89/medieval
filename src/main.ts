@@ -309,7 +309,7 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
         } else {
           if (!e.shiftKey) selectCompanies([]);
           const t = view.pick(e.clientX, e.clientY);
-          select(t ? game.buildingAt(t.x, t.z) ?? null : null);
+          select(t ? game.structureAt(t.x, t.z) ?? null : null);
         }
       }
     }

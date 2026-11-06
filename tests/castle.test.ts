@@ -5,6 +5,9 @@ import { resolveSiege, type AttackerArmy } from '../src/game/sim/siege';
 import { Tile } from '../src/game/world/terrain';
 import { mulberry32 } from '../src/game/world/terrain';
 
+// Nei test le costruzioni sono immediate, salvo dove si provano i cantieri
+Game.instantByDefault = true;
+
 /** Mondo tutto prato, risorse abbondanti, per costruire castelli di prova. */
 function flatGame(year = 900) {
   const st = createInitialState(1);
@@ -12,7 +15,7 @@ function flatGame(year = 900) {
   const g = new Game(st, mulberry32(42));
   g.terrain.tiles.fill(Tile.Grass);
   g.levelOverride = 5; // questi test riguardano le fortificazioni, non i livelli del castello
-  Object.assign(g.state.resources, { wood: 1e5, stone: 1e5, coins: 1e5, charcoal: 1000 });
+  Object.assign(g.state.resources, { wood: 1e5, stone: 1e5, lime: 1e5, coins: 1e5, charcoal: 1000 });
   g.storageCap = () => 1e9;
   return g;
 }
@@ -101,14 +104,14 @@ describe('punti vita e miglioramenti', () => {
   it('ispessire le mura aumenta i punti vita, la riparazione li ripristina', () => {
     const g = flatGame(1200);
     const w = g.place('wall_stone', 10, 10)!;
-    expect(g.maxHp(w)).toBe(220);
+    expect(g.maxHp(w)).toBe(280);
     expect(g.upgrade(w, 'thicken')).toBe(true);
-    expect(g.maxHp(w)).toBe(374);
-    expect(w.hp).toBe(374);
+    expect(g.maxHp(w)).toBe(476);
+    expect(w.hp).toBe(476);
     w.hp = 100;
     expect(g.hpState(w)).toBe('damaged');
     expect(g.repair(w)).toBe(true);
-    expect(w.hp).toBe(374);
+    expect(w.hp).toBe(476);
   });
 
   it('rispetta i requisiti: bertesche dopo il cammino di ronda, ponte levatoio con fossato', () => {
@@ -230,7 +233,7 @@ describe('livelli del castello', () => {
     st.day = 100;
     const g = new Game(st, mulberry32(1));
     g.terrain.tiles.fill(Tile.Grass);
-    Object.assign(g.state.resources, { wood: 1e5, stone: 1e5, coins: 1e5, gold: 100 });
+    Object.assign(g.state.resources, { wood: 1e5, stone: 1e5, lime: 1e5, coins: 1e5, gold: 100 });
     g.storageCap = () => 1e9;
     expect(g.castleLevel()).toBe(0);
     expect(g.canPlace('market', 10, 10).reason).toMatch(/livello 2/);

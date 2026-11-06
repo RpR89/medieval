@@ -33,6 +33,10 @@ export interface ModelCtx {
   /** Profondità del fossato (1-3) e se è allagato. */
   depth?: number;
   flooded?: boolean;
+  /** Cantiere: stadio dei lavori (0-3). */
+  site?: number;
+  /** Lavori in corso su un edificio finito (impalcature). */
+  works?: boolean;
 }
 
 const has = (c: ModelCtx, u: string) => !!c.upgrades?.includes(u);
@@ -66,7 +70,7 @@ function rubble(g: G, seed: number, n: number, m: THREE.Material, spread = 0.45)
 
 // ───────────── Palizzata ─────────────
 
-export function palisade(g: G, c: ModelCtx) {
+export function palisade(g: G, c: ModelCtx, double = false) {
   const k = mats();
   const rand = mulberry32(c.seed ?? 1);
   const ruin = c.state === 'ruin';
@@ -81,12 +85,25 @@ export function palisade(g: G, c: ModelCtx) {
     sub.add(s);
     if (!ruin) sub.add(cone(r, 0.18, k.log, x, h, z, 7));
   };
-  stake(g, 0, 0);
+  const rows = double ? [-0.15, 0.15] : [0];
+  for (const z of rows) stake(g, 0, z);
+  if (double && !ruin) {
+    g.add(box(0.3, 0.55, 0.3, k.earth, 0, 0, 0));
+    g.add(box(0.34, 0.04, 0.34, k.planks, 0, 0.78, 0));
+  }
   for (const l of linksOrDefault(c)) {
     along(g, l, (sub, len) => {
       const n = Math.max(1, Math.round(len * 6));
-      for (let i = 0; i < n; i++) stake(sub, ((i + 0.5) * len) / n, 0);
+      for (const z of rows) for (let i = 0; i < n; i++) stake(sub, ((i + 0.5) * len) / n, z);
       if (ruin) return;
+      if (double) {
+        // Riempimento di terra tra le due file e ballatoio in cima
+        sub.add(box(len, 0.55, 0.26, k.earth, len / 2, 0, 0));
+        sub.add(box(len, 0.04, 0.3, k.planks, len / 2, 0.78, 0));
+        sub.add(box(len, 0.06, 0.05, k.beam, len / 2, 0.7, 0.2));
+        sub.add(box(len, 0.06, 0.05, k.beam, len / 2, 0.7, -0.2));
+        return;
+      }
       sub.add(box(len, 0.06, 0.05, k.beam, len / 2, 0.7, 0.1));
       if (has(c, 'earthbank')) {
         const bank = box(len, 0.28, 0.42, k.earth, len / 2, -0.05, 0);
@@ -104,7 +121,16 @@ export function palisade(g: G, c: ModelCtx) {
 
 // ───────────── Mura in pietra ─────────────
 
-export function stoneWall(g: G, c: ModelCtx) {
+export type WallStyle = 'rubble' | 'mortar' | 'curtain' | 'bastion';
+
+const WALL_STYLES: Record<WallStyle, { W: number; H: number; batter: number; batterH: number }> = {
+  rubble: { W: 0.5, H: 1.05, batter: 0.14, batterH: 0.3 },
+  mortar: { W: 0.5, H: 1.35, batter: 0.12, batterH: 0.25 },
+  curtain: { W: 0.58, H: 1.7, batter: 0.4, batterH: 0.6 },
+  bastion: { W: 0.72, H: 1.55, batter: 0.55, batterH: 0.85 },
+};
+
+export function stoneWall(g: G, c: ModelCtx, style: WallStyle = 'mortar') {
   const k = mats();
   const ruin = c.state === 'ruin';
   const damaged = c.state === 'damaged';
@@ -112,12 +138,16 @@ export function stoneWall(g: G, c: ModelCtx) {
   const thick = has(c, 'thicken');
   const walk = has(c, 'walkway');
   const hoard = has(c, 'hoarding_wall');
-  const W = thick ? 0.66 : 0.5;
-  const H = ruin ? 0.45 + rand() * 0.25 : walk ? 1.5 : 1.35;
+  const S = WALL_STYLES[style];
+  const rough = style === 'rubble';
+  const body = rough ? k.stoneDark : k.stone;
+  const W = S.W + (thick ? 0.16 : 0);
+  const H = ruin ? 0.45 + rand() * 0.25 : S.H + (walk && style === 'mortar' ? 0.15 : 0);
   // Pilastro centrale (giunto)
-  g.add(box(W + 0.12, H + (ruin ? 0 : 0.15), W + 0.12, k.stone, 0, 0, 0));
-  g.add(box(W + 0.22, 0.25, W + 0.22, k.stoneDark, 0, 0, 0));
-  if (!ruin) crenels(g, W + 0.12, W + 0.12, H + 0.15, k.stoneLight, 0.11, 0.17);
+  g.add(box(W + 0.12, H + (ruin ? 0 : 0.15), W + 0.12, body, 0, 0, 0));
+  g.add(box(W + 0.12 + S.batter, S.batterH, W + 0.12 + S.batter, k.stoneDark, 0, 0, 0));
+  if (!ruin && !rough) crenels(g, W + 0.12, W + 0.12, H + 0.15, k.stoneLight, style === 'bastion' ? 0.15 : 0.11, 0.17);
+  if (!ruin && rough) g.add(box(W + 0.1, 0.04, W + 0.1, k.planks, 0, H + 0.15, 0));
   for (const l of linksOrDefault(c)) {
     // Lato esterno nel sistema locale del segmento (z locale = (sinθ, cosθ) nel mondo)
     const th = Math.atan2(-l.dz, l.dx);
@@ -125,12 +155,26 @@ export function stoneWall(g: G, c: ModelCtx) {
     const out = o ? (o[0] * Math.sin(th) + o[1] * Math.cos(th) >= 0 ? 1 : -1) : -1;
     along(g, l, (sub, len) => {
       const h = ruin ? H * (0.6 + rand() * 0.5) : H;
-      sub.add(box(len, h, W, k.stone, len / 2, 0, 0));
-      // Scarpa alla base
-      sub.add(box(len, 0.25, W + (thick ? 0.22 : 0.12), k.stoneDark, len / 2, 0, 0));
-      if (thick) sub.add(box(len, 0.5, W + 0.12, k.stoneDark, len / 2, 0, 0));
+      sub.add(box(len, h, W, body, len / 2, 0, 0));
+      // Scarpa alla base (molto pronunciata nella cortina e nelle mura bastionate)
+      sub.add(box(len, S.batterH, W + S.batter + (thick ? 0.1 : 0), k.stoneDark, len / 2, 0, 0));
+      if (S.batter > 0.3) sub.add(box(len, S.batterH * 0.5, W + S.batter * 1.5, k.stoneDark, len / 2, 0, 0));
+      if (thick && S.batter < 0.3) sub.add(box(len, 0.5, W + 0.12, k.stoneDark, len / 2, 0, 0));
       if (ruin) return;
+      if (rough) {
+        // Pietrame: blocchi irregolari in facciata e parapetto di tavole
+        for (let i = 0; i < Math.round(len * 5); i++) {
+          const bx = rand() * len;
+          const by = 0.25 + rand() * (h - 0.4);
+          sub.add(box(0.14 + rand() * 0.1, 0.09 + rand() * 0.06, W + 0.03, rand() < 0.5 ? k.stone : k.stoneDark, bx, by, 0));
+        }
+        sub.add(box(len, 0.22, 0.05, k.darkPlanks, len / 2, h, out * (W / 2 - 0.03)));
+        sub.add(box(len, 0.03, W - 0.1, k.planks, len / 2, h - 0.02, 0));
+        for (let i = 0; i <= Math.round(len * 3); i++) sub.add(box(0.04, 0.3, 0.04, k.beam, (i * len) / Math.max(1, Math.round(len * 3)), h - 0.05, out * (W / 2 - 0.03)));
+        return;
+      }
       sub.add(box(len, 0.05, W + 0.04, k.stoneLight, len / 2, h - 0.05, 0));
+      if (style !== 'mortar') sub.add(box(len, 0.06, W + 0.06, k.stoneLight, len / 2, S.batterH, 0));
       const n = Math.max(1, Math.round(len * 3.2));
       for (let i = 0; i < n; i++) {
         if (damaged && rand() < 0.4) continue;
@@ -267,6 +311,106 @@ export function towerRound(g: G, c: ModelCtx) {
   if (c.state === 'damaged') rubble(g, c.seed ?? 7, 5, k.stone, 0.9);
 }
 
+/** Torrione: torre bassa e massiccia, scarpata, con cannoniere e piattaforma. */
+export function towerBastion(g: G, c: ModelCtx) {
+  const k = mats();
+  const ruin = c.state === 'ruin';
+  const r = 0.9;
+  const H = ruin ? 1.0 : 2.5;
+  g.add(cyl(r + 0.02, r + 0.12, 1.0, k.stoneDark, 0, 0, 0, 22));
+  g.add(cyl(r, r + 0.02, H, k.stone, 0, 0.2, 0, 22));
+  if (ruin) {
+    rubble(g, c.seed ?? 9, 16, k.stone, 0.95);
+    return;
+  }
+  g.add(cyl(r + 0.05, r + 0.05, 0.07, k.stoneLight, 0, 1.0, 0, 22));
+  // Cannoniere e feritoie su due ordini
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * PI * 2;
+    const gp = box(0.16, 0.12, 0.08, k.dark, Math.cos(a) * (r + 0.01), 1.3, Math.sin(a) * (r + 0.01));
+    gp.rotation.y = -a + PI / 2;
+    g.add(gp);
+    const a2 = a + PI / 6;
+    g.add(slit(Math.cos(a2) * (r + 0.02), 2.0, Math.sin(a2) * (r + 0.02), 0.06, 0.24, -a2 + PI / 2));
+  }
+  if (has(c, 'machicolation')) {
+    for (let i = 0; i < 18; i++) {
+      const a = (i / 18) * PI * 2;
+      const cb = box(0.07, 0.12, 0.1, k.stoneDark, Math.cos(a) * (r + 0.06), 2.58, Math.sin(a) * (r + 0.06));
+      cb.rotation.y = -a;
+      g.add(cb);
+    }
+  }
+  g.add(cyl(r + 0.12, r + 0.04, 0.16, k.stoneDark, 0, 2.7, 0, 22));
+  if (has(c, 'hoarding')) hoardingRing(g, r + 0.04, 2.86, true);
+  else roundCrenels(g, r + 0.07, 2.86, k.stoneLight, 20);
+  // Piattaforma con una macchina da lancio
+  g.add(cyl(r - 0.05, r - 0.05, 0.04, k.planks, 0, 2.84, 0, 22));
+  g.add(box(0.34, 0.16, 0.5, k.darkPlanks, 0.1, 2.88, 0));
+  const arm = box(0.05, 0.05, 0.7, k.log, 0.1, 3.1, 0);
+  arm.rotation.x = 0.5;
+  g.add(arm);
+  if (c.state === 'damaged') rubble(g, c.seed ?? 9, 6, k.stone, 0.95);
+  g.add(flag(k.flag, 0, 2.86, 0, 0.45));
+}
+
+// ───────────── Impalcature dei cantieri ─────────────
+
+/**
+ * Trasforma il modello di un edificio in cantiere: la struttura cresce con lo stadio
+ * dei lavori (0-3), circondata da impalcature e materiali. Con `site` assente
+ * aggiunge solo le impalcature (lavori su un edificio finito).
+ */
+export function scaffold(g: G, w: number, d: number, site: number | undefined, stone: boolean, seed: number) {
+  const k = mats();
+  const rand = mulberry32(seed);
+  g.updateMatrixWorld(true);
+  const bounds = new THREE.Box3().setFromObject(g);
+  const fullH = Math.max(0.1, bounds.max.y);
+  const frac = site === undefined ? 1 : 0.15 + site * 0.22;
+  if (site !== undefined) {
+    // La struttura non è ancora finita: si mostra solo fino all'altezza raggiunta
+    const sub = new THREE.Group();
+    for (const ch of [...g.children]) sub.add(ch);
+    sub.scale.y = frac;
+    g.add(sub);
+    // Niente bandiere né fumo sui cantieri
+    sub.traverse((o) => {
+      if (o.userData.flag || o.userData.smoke || o.userData.wander) o.visible = false;
+    });
+    // Tracciato delle fondamenta
+    g.add(box(w * 0.98, 0.04, d * 0.98, stone ? k.stoneDark : k.earth, 0, 0, 0));
+  }
+  if (fullH < 0.35) {
+    // Edifici bassi (campi, recinti, strade): solo picchetti e corde
+    for (const [x, z] of [[-w / 2, -d / 2], [w / 2, -d / 2], [-w / 2, d / 2], [w / 2, d / 2]]) g.add(box(0.04, 0.3, 0.04, k.planks, x * 0.95, 0, z * 0.95));
+    return;
+  }
+  const h = fullH * frac + 0.25;
+  const hw = w / 2 + 0.06;
+  const hd = d / 2 + 0.06;
+  const poles: Array<[number, number]> = [];
+  const nx = Math.max(1, Math.round(w * 1.5));
+  const nz = Math.max(1, Math.round(d * 1.5));
+  for (let i = 0; i <= nx; i++) for (const z of [-hd, hd]) poles.push([-hw + (i * 2 * hw) / nx, z]);
+  for (let i = 1; i < nz; i++) for (const x of [-hw, hw]) poles.push([x, -hd + (i * 2 * hd) / nz]);
+  for (const [x, z] of poles) g.add(cyl(0.025, 0.03, h, k.log, x, 0, z, 5));
+  for (let y = 0.45; y < h; y += 0.5) {
+    g.add(box(hw * 2, 0.03, 0.12, k.planks, 0, y, -hd));
+    g.add(box(hw * 2, 0.03, 0.12, k.planks, 0, y, hd));
+    g.add(box(0.12, 0.03, hd * 2, k.planks, -hw, y, 0));
+    g.add(box(0.12, 0.03, hd * 2, k.planks, hw, y, 0));
+  }
+  // Materiali ammucchiati accanto al cantiere
+  if (site !== undefined && w * d >= 2) {
+    for (let i = 0; i < 4; i++) {
+      const s = 0.08 + rand() * 0.06;
+      const m = stone ? (rand() < 0.5 ? k.stoneLight : k.stone) : k.log;
+      g.add(box(s * 1.5, s, s, m, (rand() - 0.5) * w * 0.6, 0, d / 2 - 0.2 + rand() * 0.1));
+    }
+  }
+}
+
 // ───────────── Porte ─────────────
 
 /** Calderone della pece sopra la porta, con fuoco e fumo. */
@@ -364,6 +508,37 @@ export function gateWood(g: G, c: ModelCtx) {
     }
     if (has(c, 'pitch')) pitchCauldron(inner, 0.2, 1.62, 0);
   } else rubble(inner, c.seed ?? 2, 6, k.log, 0.4);
+  const angle = gateAngle(c);
+  inner.rotation.y = angle;
+  g.add(inner);
+  if (!ruin) gateStubs(g, c, angle, false);
+  if (has(c, 'drawbridge') && c.moatDir && !ruin) drawbridge(g, c.moatDir, 0.7, 0.1);
+}
+
+/** Porta ferrata: piloni in pietrame, battenti di quercia con bande di ferro e tettoia. */
+export function gateStrong(g: G, c: ModelCtx) {
+  const k = mats();
+  const inner = new THREE.Group();
+  const ruin = c.state === 'ruin';
+  for (const s of [-1, 1]) {
+    inner.add(box(0.26, ruin ? 0.6 : 1.75, 0.34, k.stoneDark, s * 0.44, 0, 0));
+    if (!ruin) inner.add(box(0.3, 0.08, 0.38, k.stone, s * 0.44, 1.75, 0));
+  }
+  if (!ruin) {
+    inner.add(box(1.15, 0.14, 0.3, k.log, 0, 1.5, 0));
+    inner.add(box(1.1, 0.05, 0.4, k.planks, 0, 1.64, 0));
+    inner.add(gableRoof(1.2, 0.5, 0.32, k.shingle, k.darkPlanks, 0, 1.69, 0, 0.05));
+    for (const s of [-1, 1]) {
+      const leaf = new THREE.Group();
+      leaf.add(box(0.33, 1.3, 0.08, k.darkPlanks, -s * 0.165, 0, 0));
+      for (const y of [0.15, 0.6, 1.05]) leaf.add(box(0.31, 0.05, 0.09, k.iron, -s * 0.165, y, 0));
+      leaf.position.x = s * 0.33;
+      leaf.rotation.y = s * -0.2;
+      inner.add(leaf);
+    }
+    if (has(c, 'portcullis')) inner.add(box(0.7, 0.9, 0.04, k.iron, 0, 0.55, 0.12));
+    if (has(c, 'pitch')) pitchCauldron(inner, 0.2, 1.68, 0);
+  } else rubble(inner, c.seed ?? 2, 7, k.stoneDark, 0.4);
   const angle = gateAngle(c);
   inner.rotation.y = angle;
   g.add(inner);

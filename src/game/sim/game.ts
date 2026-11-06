@@ -39,6 +39,7 @@ import {
   FOOD_PER_PERSON,
   TAX_PER_PERSON,
   type AttackResult,
+  type BuildJob,
   type Company,
   type EventKind,
   type Expedition,
@@ -54,6 +55,14 @@ const EATING_ORDER: ResourceId[] = [...FOOD_IDS].sort(
 );
 
 const MAX_LOG = 60;
+
+/** Giornate di lavoro per unità di materiale (la pietra e la calce richiedono più fatica). */
+const WORK_PER_UNIT: Partial<Record<ResourceId, number>> = { wood: 0.3, stone: 0.55, lime: 0.5, coins: 0.03, gold: 0.5, charcoal: 0.1 };
+/** Paga giornaliera e cibo in più per ogni costruttore al lavoro. */
+export const BUILDER_WAGE = 0.06;
+export const BUILDER_FOOD = 0.05;
+/** Costruttori disponibili senza loggia dei muratori. */
+export const BASE_BUILDERS = 4;
 
 export interface PlaceCheck {
   ok: boolean;
@@ -161,10 +170,23 @@ export class Game {
   locked = false;
   /** Solo per i test: forza il livello del castello. */
   levelOverride?: number;
+  /** Valore iniziale di `instantBuild` (i test lo attivano). */
+  static instantByDefault = false;
+  /** Costruzioni, miglioramenti ed evoluzioni immediati (test). */
+  instantBuild = Game.instantByDefault;
+  /** Costruttori assegnati a ogni lavoro nell'ultimo passo. */
+  lastCrew = new Map<number, number>();
+  /** Costruttori al lavoro nell'ultimo passo. */
+  lastBuilders = 0;
+  private siteStage = new Map<number, number>();
+  private visualDirty = false;
 
   constructor(public state: GameState, private random: () => number = Math.random) {
     this.terrain = generateTerrain(state.seed, { preset: state.preset, players: state.match ? 2 : 1 + (state.lords?.length ?? 0) });
     this.occupancy = new Int32Array(this.terrain.size * this.terrain.size);
+    state.sites ??= [];
+    state.jobs ??= [];
+    for (const b of state.sites) this.mark(b, b.uid);
     for (const b of state.buildings) {
       this.mark(b, b.uid);
       const def = getBuilding(b.defId);
@@ -561,8 +583,12 @@ export class Game {
     const u = UPGRADE_BY_ID[upId];
     if (!u || !u.appliesTo.includes(b.defId)) return { ok: false, reason: 'Non applicabile' };
     if (b.upgrades?.includes(upId)) return { ok: false, reason: 'Già costruito' };
+    const pending = this.jobFor(b.uid);
+    if (pending) return { ok: false, reason: pending.upId === upId ? 'In costruzione' : 'Lavori già in corso' };
     if (this.date.year < u.minYear) return { ok: false, reason: `Disponibile dal ${u.minYear}` };
-    if (u.requires && !b.upgrades?.includes(u.requires)) {
+    const built = getBuilding(b.defId).builtIn ?? [];
+    if (built.includes(upId)) return { ok: false, reason: 'Già compreso' };
+    if (u.requires && !b.upgrades?.includes(u.requires) && !built.includes(u.requires)) {
       return { ok: false, reason: `Richiede: ${UPGRADE_BY_ID[u.requires].name}` };
     }
     if (u.needsMoat && !this.gateHasMoat(b)) return { ok: false, reason: 'Serve un fossato davanti alla porta' };
@@ -577,18 +603,31 @@ export class Game {
   }
 
   private upgradeImpl(b: PlacedBuilding, upId: string): boolean {
+    if (!this.startUpgrade(b, upId)) return false;
+    this.changed();
+    return true;
+  }
+
+  /** Paga il miglioramento e lo mette in coda ai costruttori (o lo applica subito). */
+  private startUpgrade(b: PlacedBuilding, upId: string): boolean {
     if (!this.canUpgrade(b, upId).ok) return false;
+    const u = UPGRADE_BY_ID[upId];
+    pay(this.state.resources, u.cost);
+    if (this.instantBuild) this.applyUpgrade(b, upId);
+    else this.jobs().push({ id: this.newJobId(), kind: 'upgrade', uid: b.uid, upId, work: Game.workFor(u.cost), done: 0, cost: { ...u.cost } });
+    return true;
+  }
+
+  private applyUpgrade(b: PlacedBuilding, upId: string) {
+    if (b.upgrades?.includes(upId)) return;
     if (['bailey', 'great_hall', 'palace'].includes(upId)) {
       const next = { bailey: 2, great_hall: 4, palace: 5 }[upId as 'bailey'];
       this.log(`Il castello sale al livello ${next}: ${CASTLE_LEVELS[next].name}!`, 'good');
     }
     const before = this.maxHp(b);
-    pay(this.state.resources, UPGRADE_BY_ID[upId].cost);
     b.upgrades = [...(b.upgrades ?? []), upId];
     // I punti vita in più si aggiungono a quelli attuali
     if (before) b.hp = (b.hp ?? before) + (this.maxHp(b) - before);
-    this.changed();
-    return true;
   }
 
   /** Applica il miglioramento a tutti gli edifici dello stesso tipo, finché bastano le risorse. */
@@ -600,11 +639,7 @@ export class Game {
     let n = 0;
     for (const b of this.state.buildings) {
       if (b.defId !== defId || !this.canUpgrade(b, upId).ok) continue;
-      const before = this.maxHp(b);
-      pay(this.state.resources, UPGRADE_BY_ID[upId].cost);
-      b.upgrades = [...(b.upgrades ?? []), upId];
-      if (before) b.hp = (b.hp ?? before) + (this.maxHp(b) - before);
-      n++;
+      if (this.startUpgrade(b, upId)) n++;
     }
     if (n) this.changed();
     return n;
@@ -683,8 +718,8 @@ export class Game {
     if (def.minLevel && this.castleLevel() < def.minLevel) {
       return { ok: false, reason: `Richiede il castello al livello ${def.minLevel} (${CASTLE_LEVELS[def.minLevel].name})` };
     }
-    if (def.unique && this.count(def.id) > 0) return { ok: false, reason: 'Ne puoi avere uno solo' };
-    if (def.fort === 'keep' && this.state.buildings.some((b) => getBuilding(b.defId).fort === 'keep')) {
+    if (def.unique && this.count(def.id) + this.sites().filter((b) => b.defId === def.id).length > 0) return { ok: false, reason: 'Ne puoi avere uno solo' };
+    if (def.fort === 'keep' && [...this.state.buildings, ...this.sites()].some((b) => getBuilding(b.defId).fort === 'keep')) {
       return { ok: false, reason: 'Hai già un castello: fallo evolvere' };
     }
     const [w, d] = def.size;
@@ -740,8 +775,12 @@ export class Game {
     const b: PlacedBuilding = { uid: this.state.nextUid++, defId, x, z, upgrades: [] };
     if (def.herd) b.herd = def.herd.start;
     if (def.hp) b.hp = def.hp;
-    this.state.buildings.push(b);
     this.mark(b, b.uid);
+    if (this.instantBuild) this.state.buildings.push(b);
+    else {
+      this.sites().push(b);
+      this.jobs().push({ id: this.newJobId(), kind: 'build', uid: b.uid, work: this.buildWork(def), done: 0, cost: { ...def.cost } });
+    }
     return b;
   }
 
@@ -785,6 +824,9 @@ export class Game {
 
   private demolishImpl(uid: number): boolean {
     if (this.locked) return false;
+    const pending = this.jobFor(uid);
+    if (pending && pending.kind === 'build') return this.cancelJobImpl(pending.id);
+    if (pending) this.cancelJobImpl(pending.id);
     const i = this.state.buildings.findIndex((b) => b.uid === uid);
     if (i < 0) return false;
     const b = this.state.buildings[i];
@@ -923,7 +965,10 @@ export class Game {
 
     const a = this.analysis();
     const pop0 = s.population;
-    const staffing = a.jobs > 0 ? Math.min(1, pop0 / a.jobs) : 1;
+    // I costruttori lasciano i campi e le botteghe: meno braccia per la produzione
+    const builders = this.stepJobs(dt);
+    if (builders) this.track('Paga dei costruttori', () => (r.coins = Math.max(0, r.coins - builders * BUILDER_WAGE * dt)));
+    const staffing = a.jobs > 0 ? Math.min(1, Math.max(0, pop0 - builders) / a.jobs) : 1;
 
     // Produzione degli edifici (le strade aumentano la resa)
     for (const { b, def } of this.defsPlaced()) {
@@ -933,7 +978,7 @@ export class Game {
     // Alimentazione
     const pop = s.population;
     const away = this.troopsAway();
-    let need = (pop * FOOD_PER_PERSON + (this.soldiers() + away.infantry + away.archers + away.cavalry) * SOLDIER_FOOD) * dt;
+    let need = (pop * FOOD_PER_PERSON + builders * BUILDER_FOOD + (this.soldiers() + away.infantry + away.archers + away.cavalry) * SOLDIER_FOOD) * dt;
     const needed = need;
     let variety = 0;
     const soldiersEating = (this.soldiers() + away.infantry + away.archers + away.cavalry) * SOLDIER_FOOD;
@@ -941,6 +986,7 @@ export class Game {
       [
         ['Abitanti (cibo)', pop * FOOD_PER_PERSON],
         ['Soldati (cibo)', soldiersEating],
+        ['Costruttori (cibo in più)', builders * BUILDER_FOOD],
       ],
       () => {
         for (const id of EATING_ORDER) {
@@ -1027,6 +1073,10 @@ export class Game {
     this.track('Bottino riportato dai reparti', () => this.stepCompanies(dt), 'event');
     if (s.lords?.length) this.stepLords(dt);
     this.updateFlowRates(dt);
+    if (this.visualDirty) {
+      this.visualDirty = false;
+      this.changed();
+    }
   }
 
   /** Produzione di un edificio (e dei suoi animali) in un passo. */
@@ -1454,7 +1504,7 @@ export class Game {
         role: def.fort,
         hp: b.hp ?? this.maxHp(b),
         maxHp: this.maxHp(b),
-        upgrades: [...(b.upgrades ?? [])],
+        upgrades: [...(def.builtIn ?? []), ...(b.upgrades ?? [])],
         defense: def.defense ?? 0,
         moatAhead: def.fort === 'gate' ? this.gateHasMoat(b) : undefined,
       });
@@ -2593,7 +2643,7 @@ export class Game {
   }
 
   /** Bilancio mensile delle monete: entrate, uscite, saldo e resa per abitante. */
-  budget(): { taxes: number; tribute: number; army: number; engines: number; net: number; perPerson: number } {
+  budget(): { taxes: number; tribute: number; army: number; engines: number; builders: number; net: number; perPerson: number } {
     const month = 30;
     const taxes = this.taxPerDay() * month;
     const tribute = this.lords().filter((l) => l.status === 'vassal').reduce((s, l) => s + (1 + l.level), 0) * month;
@@ -2603,7 +2653,8 @@ export class Game {
     let engines = 0;
     for (const id of Object.keys(ENGINES) as EngineType[]) engines += (ENGINES[id].upkeep.coins ?? 0) * ((this.state.engines?.[id] ?? 0) + away[id]) * month;
     const perPerson = this.state.population > 0 ? taxes / this.state.population : TAX_PER_PERSON * TAX_LEVELS[this.taxLevel()].mul * month;
-    return { taxes, tribute, army, engines, net: taxes + tribute - army - engines, perPerson };
+    const builders = this.lastBuilders * BUILDER_WAGE * month;
+    return { taxes, tribute, army, engines, builders, net: taxes + tribute - army - engines - builders, perPerson };
   }
 
   happiness(): number {
@@ -2651,30 +2702,348 @@ export class Game {
   /** Si può trasformare la motta in mastio di pietra (dal livello 2 al 3)? */
   canEvolveKeep(): PlaceCheck {
     const k = this.ownKeep();
-    if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
     if (!k || k.defId !== 'keep_wood') return { ok: false, reason: 'Serve la motta' };
-    if (!k.upgrades?.includes('bailey')) return { ok: false, reason: 'Prima il cortile fortificato (livello 2)' };
-    if (this.date.year < KEEP_EVOLVE.minYear) return { ok: false, reason: `Disponibile dal ${KEEP_EVOLVE.minYear}` };
-    if (this.state.population < KEEP_EVOLVE.minPop) return { ok: false, reason: `Servono ${KEEP_EVOLVE.minPop} abitanti` };
-    if (!canAfford(this.state.resources, KEEP_EVOLVE.cost)) return { ok: false, reason: 'Risorse insufficienti' };
-    return { ok: true };
+    return this.canEvolve(k);
   }
 
   /** La motta diventa mastio di pietra, sullo stesso posto (cisterna e armeria restano). */
   evolveKeep(): boolean {
-    return this.track('Evoluzione del castello', () => this.evolveKeepImpl(), 'event');
+    const k = this.ownKeep();
+    return !!k && this.evolve(k);
   }
 
-  private evolveKeepImpl(): boolean {
-    if (!this.canEvolveKeep().ok) return false;
-    const k = this.ownKeep()!;
-    pay(this.state.resources, KEEP_EVOLVE.cost);
-    k.defId = 'keep_stone';
-    k.upgrades = (k.upgrades ?? []).filter((u) => UPGRADE_BY_ID[u]?.appliesTo.includes('keep_stone'));
-    k.hp = this.maxHp(k);
-    this.log(`Il castello sale al livello 3: la motta è diventata un ${CASTLE_LEVELS[3].name.toLowerCase()}!`, 'good');
+  // ───────────── Evoluzione delle fortificazioni ─────────────
+
+  /** In cosa si trasforma l'edificio, se può evolvere. */
+  evolveTarget(b: PlacedBuilding): BuildingDef | undefined {
+    const to = getBuilding(b.defId).evolvesTo;
+    return to ? getBuilding(to) : undefined;
+  }
+
+  /** Costo dell'evoluzione: si riusa parte del vecchio materiale. */
+  evolveCost(b: PlacedBuilding): Cost {
+    if (b.defId === 'keep_wood') return { ...KEEP_EVOLVE.cost };
+    const to = this.evolveTarget(b);
+    if (!to) return {};
+    const out: Cost = {};
+    for (const [id, n] of Object.entries(to.cost)) out[id as ResourceId] = Math.ceil((n ?? 0) * 0.85);
+    return out;
+  }
+
+  /** Giornate di lavoro dell'evoluzione. */
+  evolveWork(b: PlacedBuilding): number {
+    const to = this.evolveTarget(b);
+    return to ? Math.max(1, Math.round(this.buildWork(to) * 0.8 * 10) / 10) : 0;
+  }
+
+  canEvolve(b: PlacedBuilding): PlaceCheck {
+    if (this.isForeign(b)) return { ok: false, reason: 'Appartiene all\'altro giocatore' };
+    if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
+    const to = this.evolveTarget(b);
+    if (!to) return { ok: false, reason: 'Non può evolvere' };
+    if (this.jobFor(b.uid)) return { ok: false, reason: 'Lavori già in corso' };
+    if (this.date.year < to.minYear) return { ok: false, reason: `Disponibile dal ${to.minYear}` };
+    if (b.defId === 'keep_wood') {
+      if (!b.upgrades?.includes('bailey')) return { ok: false, reason: 'Prima il cortile fortificato (livello 2)' };
+      if (this.state.population < KEEP_EVOLVE.minPop) return { ok: false, reason: `Servono ${KEEP_EVOLVE.minPop} abitanti` };
+    } else if (to.minLevel && this.castleLevel() < to.minLevel) {
+      return { ok: false, reason: `Richiede il castello al livello ${to.minLevel} (${CASTLE_LEVELS[to.minLevel].name})` };
+    }
+    if (this.hpState(b) === 'ruin') return { ok: false, reason: 'Prima va riparato' };
+    if (!canAfford(this.state.resources, this.evolveCost(b))) return { ok: false, reason: 'Risorse insufficienti' };
+    return { ok: true };
+  }
+
+  evolve(b: PlacedBuilding): boolean {
+    return this.track('Evoluzione delle fortificazioni', () => {
+      if (!this.startEvolve(b)) return false;
+      this.changed();
+      return true;
+    }, 'event');
+  }
+
+  /** Fa evolvere tutti gli edifici dello stesso tipo, finché bastano le risorse. */
+  evolveAll(defId: string): number {
+    return this.track('Evoluzione delle fortificazioni', () => {
+      let n = 0;
+      for (const b of this.state.buildings) if (b.defId === defId && this.startEvolve(b)) n++;
+      if (n) this.changed();
+      return n;
+    }, 'event');
+  }
+
+  private startEvolve(b: PlacedBuilding): boolean {
+    if (!this.canEvolve(b).ok) return false;
+    const cost = this.evolveCost(b);
+    const to = this.evolveTarget(b)!;
+    pay(this.state.resources, cost);
+    if (this.instantBuild) this.applyEvolution(b, to.id);
+    else this.jobs().push({ id: this.newJobId(), kind: 'evolve', uid: b.uid, to: to.id, work: this.evolveWork(b), done: 0, cost });
+    return true;
+  }
+
+  private applyEvolution(b: PlacedBuilding, to: string) {
+    const def = getBuilding(to);
+    b.defId = to;
+    b.upgrades = (b.upgrades ?? []).filter((u) => UPGRADE_BY_ID[u]?.appliesTo.includes(to) && !def.builtIn?.includes(u));
+    b.hp = this.maxHp(b);
+    if (def.fort === 'keep') this.log(`Il castello sale al livello 3: la motta è diventata un ${CASTLE_LEVELS[3].name.toLowerCase()}!`, 'good');
+  }
+
+  // ───────────── Cantieri e costruttori ─────────────
+
+  sites(): PlacedBuilding[] {
+    return (this.state.sites ??= []);
+  }
+
+  jobs(): BuildJob[] {
+    return (this.state.jobs ??= []);
+  }
+
+  private newJobId(): number {
+    const id = this.state.nextJobId ?? 1;
+    this.state.nextJobId = id + 1;
+    return id;
+  }
+
+  siteByUid(uid: number): PlacedBuilding | undefined {
+    return this.sites().find((b) => b.uid === uid);
+  }
+
+  siteAt(x: number, z: number): PlacedBuilding | undefined {
+    if (x < 0 || z < 0 || x >= this.terrain.size || z >= this.terrain.size) return undefined;
+    const uid = this.occupancy[z * this.terrain.size + x];
+    return uid && uid < FOREIGN ? this.siteByUid(uid) : undefined;
+  }
+
+  /** Edificio finito o cantiere sulla casella. */
+  structureAt(x: number, z: number): PlacedBuilding | undefined {
+    return this.buildingAt(x, z) ?? this.siteAt(x, z);
+  }
+
+  /** Lavoro in corso su un edificio o cantiere. */
+  jobFor(uid: number): BuildJob | undefined {
+    return this.jobs().find((j) => j.uid === uid);
+  }
+
+  /** Giornate di lavoro necessarie per dei materiali. */
+  static workFor(cost: Cost): number {
+    let w = 0;
+    for (const [id, n] of Object.entries(cost)) w += (n ?? 0) * (WORK_PER_UNIT[id as ResourceId] ?? 0.1);
+    return Math.max(1, Math.round(w * 10) / 10);
+  }
+
+  buildWork(def: BuildingDef): number {
+    return def.work ?? Game.workFor(def.cost);
+  }
+
+  /** Quanti costruttori possono lavorare insieme sullo stesso edificio. */
+  crewCap(defId: string): number {
+    const [w, d] = getBuilding(defId).size;
+    return 2 + 2 * w * d;
+  }
+
+  private lodges(): number {
+    return this.count('mason_lodge');
+  }
+
+  /** Posti per costruttori: pochi senza loggia dei muratori. */
+  builderCap(): number {
+    let n = BASE_BUILDERS;
+    for (const b of this.state.buildings) n += getBuilding(b.defId).builders ?? 0;
+    return n;
+  }
+
+  /** Costruttori che si vogliono impiegare (al massimo metà della popolazione). */
+  desiredBuilders(): number {
+    return Math.max(0, Math.min(this.state.builders ?? Infinity, this.builderCap(), Math.floor(this.state.population * 0.5)));
+  }
+
+  setBuilders(n: number | undefined) {
+    this.state.builders = n === undefined ? undefined : Math.max(0, Math.min(500, Math.round(n)));
+    this.emit();
+  }
+
+  /** Giornate di lavoro che un costruttore svolge in un giorno, con le cause. */
+  builderRate(stone: boolean): { rate: number; parts: Array<[string, number]> } {
+    const parts: Array<[string, number]> = [];
+    const lodge = 1 + 0.1 * Math.min(3, this.lodges());
+    if (lodge > 1) parts.push(['Loggia dei muratori', lodge]);
+    const fed = 0.3 + 0.7 * this.lastFed;
+    if (fed < 0.99) parts.push(['Poco cibo', fed]);
+    const prod = this.productivity();
+    parts.push(['Contento', prod]);
+    if (this.state.resources.coins < 1) parts.push(['Senza paga', 0.5]);
+    if (seasonIndex(this.date.season) === 3) parts.push([stone ? 'Inverno: la malta gela' : 'Inverno', stone ? 0.35 : 0.75]);
+    return { rate: parts.reduce((r, [, v]) => r * v, 1), parts };
+  }
+
+  private jobDef(j: BuildJob): string | undefined {
+    if (j.kind === 'build') return this.siteByUid(j.uid)?.defId;
+    return this.byUid(j.uid)?.defId;
+  }
+
+  private isStoneJob(j: BuildJob): boolean {
+    return (j.cost.stone ?? 0) + (j.cost.lime ?? 0) > 0;
+  }
+
+  /** Avanza i lavori nell'ordine della coda; restituisce i costruttori impiegati. */
+  private stepJobs(dt: number): number {
+    const jobs = this.jobs();
+    this.lastCrew.clear();
+    if (!jobs.length) {
+      this.lastBuilders = 0;
+      return 0;
+    }
+    let free = this.desiredBuilders();
+    const rateStone = this.builderRate(true).rate;
+    const rateWood = this.builderRate(false).rate;
+    let used = 0;
+    const finished: BuildJob[] = [];
+    for (const j of jobs) {
+      if (free <= 0) break;
+      const defId = this.jobDef(j);
+      if (!defId) {
+        finished.push(j);
+        continue;
+      }
+      const crew = Math.min(free, this.crewCap(defId));
+      free -= crew;
+      used += crew;
+      this.lastCrew.set(j.id, crew);
+      j.done += crew * (this.isStoneJob(j) ? rateStone : rateWood) * dt;
+      if (j.done >= j.work) finished.push(j);
+      else {
+        const stage = Math.min(3, Math.floor((j.done / j.work) * 4));
+        if (this.siteStage.get(j.uid) !== stage) {
+          this.siteStage.set(j.uid, stage);
+          if (j.kind === 'build') this.visualDirty = true;
+        }
+      }
+    }
+    for (const j of finished) this.finishJob(j);
+    this.lastBuilders = used;
+    return used;
+  }
+
+  private finishJob(j: BuildJob) {
+    this.state.jobs = this.jobs().filter((x) => x !== j);
+    this.lastCrew.delete(j.id);
+    this.siteStage.delete(j.uid);
+    this.visualDirty = true;
+    if (j.kind === 'build') {
+      const b = this.siteByUid(j.uid);
+      if (!b) return;
+      this.state.sites = this.sites().filter((x) => x !== b);
+      const def = getBuilding(b.defId);
+      if (def.hp) b.hp = this.maxHp(b);
+      this.state.buildings.push(b);
+      if (!def.draggable) this.log(`🏗️ Costruzione completata: ${def.name}.`, 'good');
+      else if (!this.jobs().some((x) => x.kind === 'build' && this.siteByUid(x.uid)?.defId === def.id)) this.log(`🏗️ Completato il tratto di ${def.name.toLowerCase()}.`, 'good');
+      return;
+    }
+    const b = this.byUid(j.uid);
+    if (!b) return;
+    if (j.kind === 'upgrade' && j.upId) {
+      this.applyUpgrade(b, j.upId);
+      if (!getBuilding(b.defId).draggable) this.log(`🏗️ Completato: ${UPGRADE_BY_ID[j.upId].name} (${getBuilding(b.defId).name}).`, 'good');
+    } else if (j.kind === 'evolve' && j.to) {
+      const from = getBuilding(b.defId);
+      this.applyEvolution(b, j.to);
+      if (!from.draggable) this.log(`🏗️ ${from.name} → ${getBuilding(j.to).name}: lavori completati.`, 'good');
+      else if (!this.jobs().some((x) => x.kind === 'evolve' && x.to === j.to)) this.log(`🏗️ Tratto di mura trasformato in ${getBuilding(j.to).name.toLowerCase()}.`, 'good');
+    }
+  }
+
+  /** Avanzamento (0-1) del lavoro su un edificio o cantiere. */
+  progressOf(uid: number): number | undefined {
+    const j = this.jobFor(uid);
+    return j ? Math.min(1, j.done / j.work) : undefined;
+  }
+
+  /** Stadio visivo del cantiere (0-3). */
+  siteStageOf(uid: number): number {
+    const p = this.progressOf(uid) ?? 0;
+    return Math.min(3, Math.floor(p * 4));
+  }
+
+  /** Stima dei giorni per finire un lavoro, tenendo conto della coda. */
+  jobEta(j: BuildJob): number | null {
+    const rate = (this.isStoneJob(j) ? this.builderRate(true) : this.builderRate(false)).rate;
+    const crew = this.lastCrew.get(j.id) ?? 0;
+    if (crew > 0) return (j.work - j.done) / (crew * rate);
+    const total = this.desiredBuilders();
+    if (!total || rate <= 0) return null;
+    let before = 0;
+    for (const x of this.jobs()) {
+      before += x.work - x.done;
+      if (x === j) break;
+    }
+    return before / (total * rate);
+  }
+
+  /** Giorni stimati per costruire un edificio con i costruttori attuali (se non c'è coda). */
+  estimateDays(defId: string): number {
+    const def = getBuilding(defId);
+    return this.daysFor(this.buildWork(def), defId, (def.cost.stone ?? 0) + (def.cost.lime ?? 0) > 0);
+  }
+
+  /** Giorni per svolgere un certo lavoro su un edificio, se i costruttori sono liberi. */
+  daysFor(work: number, defId: string, stone: boolean): number {
+    const crew = Math.max(1, Math.min(this.desiredBuilders(), this.crewCap(defId)));
+    return work / (crew * Math.max(0.05, this.builderRate(stone).rate));
+  }
+
+  /** Nome leggibile del lavoro. */
+  jobName(j: BuildJob): string {
+    const defId = this.jobDef(j);
+    const name = defId ? getBuilding(defId).name : '?';
+    if (j.kind === 'build') return `${defId ? getBuilding(defId).icon : ''} ${name}`;
+    if (j.kind === 'upgrade') return `${UPGRADE_BY_ID[j.upId ?? '']?.icon ?? ''} ${UPGRADE_BY_ID[j.upId ?? '']?.name ?? ''} · ${name}`;
+    return `⬆️ ${name} → ${getBuilding(j.to ?? defId ?? '').name}`;
+  }
+
+  /** Annulla un lavoro: rimborso pieno se non è iniziato, metà dei materiali se è finito a metà. */
+  cancelJob(id: number): boolean {
+    return this.track('Lavori annullati (rimborso)', () => this.cancelJobImpl(id), 'event');
+  }
+
+  private cancelJobImpl(id: number): boolean {
+    if (this.locked) return false;
+    const j = this.jobs().find((x) => x.id === id);
+    if (!j) return false;
+    const keep = 1 - 0.5 * Math.min(1, j.done / j.work);
+    for (const [rid, n] of Object.entries(j.cost)) this.state.resources[rid as ResourceId] += Math.floor((n ?? 0) * keep);
+    this.state.jobs = this.jobs().filter((x) => x !== j);
+    this.siteStage.delete(j.uid);
+    if (j.kind === 'build') {
+      const b = this.siteByUid(j.uid);
+      if (b) {
+        this.mark(b, 0);
+        this.state.sites = this.sites().filter((x) => x !== b);
+      }
+    }
     this.changed();
     return true;
+  }
+
+  /** Porta un lavoro in cima alla coda. */
+  prioritizeJob(id: number) {
+    const j = this.jobs().find((x) => x.id === id);
+    if (!j) return;
+    this.state.jobs = [j, ...this.jobs().filter((x) => x !== j)];
+    this.emit();
+  }
+
+  /** Porta in cima alla coda tutti i lavori dello stesso tipo (es. un intero tratto di mura). */
+  prioritizeSimilar(id: number) {
+    const j = this.jobs().find((x) => x.id === id);
+    if (!j) return;
+    const key = (x: BuildJob) => `${x.kind}|${this.jobDef(x)}|${x.upId ?? ''}|${x.to ?? ''}`;
+    const k = key(j);
+    const same = this.jobs().filter((x) => key(x) === k);
+    this.state.jobs = [...same, ...this.jobs().filter((x) => key(x) !== k)];
+    this.emit();
   }
 
   /** Giorni al prossimo assalto (per l'interfaccia). */

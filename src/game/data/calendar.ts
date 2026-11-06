@@ -52,7 +52,10 @@ export function formatDate(date: GameDate): string {
 /** Durata leggibile: giorni se brevissima, poi settimane, poi mesi. */
 export function formatDuration(days: number): string {
   const d = Math.max(0, days);
-  if (d < 10) return `${Math.max(1, Math.round(d))} ${Math.round(d) === 1 ? 'giorno' : 'giorni'}`;
+  if (d < 10) {
+    const n = Math.max(1, Math.round(d));
+    return `${n} ${n === 1 ? 'giorno' : 'giorni'}`;
+  }
   if (d < 45) return `${Math.round(d / 7)} settimane`;
   if (d >= 720) {
     const y = Math.round(d / 360);

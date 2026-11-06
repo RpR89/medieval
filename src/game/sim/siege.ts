@@ -79,6 +79,12 @@ const has = (s: SiegeSegment, id: string) => s.upgrades.includes(id);
 /** Quanto danno fa ogni fante, per turno, ai diversi materiali (la pietra si scalfisce appena). */
 const INFANTRY_BREACH: Record<string, number> = {
   palisade: 1.0,
+  palisade_double: 0.6,
+  gate_strong: 0.45,
+  wall_rubble: 0.25,
+  wall_curtain: 0.07,
+  wall_bastion: 0.04,
+  tower_bastion: 0.05,
   gate_wood: 0.7,
   tower_wood: 0.6,
   wall_stone: 0.12,
@@ -90,6 +96,12 @@ const INFANTRY_BREACH: Record<string, number> = {
 /** Danno per turno di ogni ariete (micidiale sulle porte). */
 const RAM_BREACH: Record<string, number> = {
   palisade: 10,
+  palisade_double: 8,
+  gate_strong: 13,
+  wall_rubble: 6,
+  wall_curtain: 3.5,
+  wall_bastion: 2,
+  tower_bastion: 1.5,
   gate_wood: 16,
   gate_stone: 14,
   gatehouse: 12,
@@ -340,6 +352,12 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
 
 const NAMES: Record<string, string> = {
   palisade: 'la palizzata',
+  palisade_double: 'la doppia palizzata',
+  gate_strong: 'la porta ferrata',
+  wall_rubble: 'il muro in pietrame',
+  wall_curtain: 'la cortina',
+  wall_bastion: 'le mura bastionate',
+  tower_bastion: 'il torrione',
   wall_stone: 'le mura',
   gate_wood: 'la porta lignea',
   gate_stone: 'la porta in pietra',

@@ -13,7 +13,7 @@ import { canAfford, formatCost, RESOURCE_IDS, RESOURCES, TAX_LEVELS, type Resour
 import { BEHAVIORS, ENGINES, FORMATIONS, UNITS, type Behavior, type EngineType, type Formation, type Stance } from '../game/data/units';
 import type { Force } from '../game/sim/state';
 import { CASTLE_LEVELS, KEEP_EVOLVE, UPGRADE_BY_ID } from '../game/data/upgrades';
-import { Game } from '../game/sim/game';
+import { BUILDER_FOOD, BUILDER_WAGE, Game } from '../game/sim/game';
 import { PERSONALITIES } from '../game/sim/lords';
 import { SIDE_COLORS } from '../render/armies';
 import type { PlacedBuilding } from '../game/sim/state';
@@ -56,7 +56,7 @@ export interface HudCallbacks {
   };
 }
 
-type Tab = 'castle' | 'army' | 'market' | 'realm' | 'diplomacy';
+type Tab = 'castle' | 'works' | 'army' | 'market' | 'realm' | 'diplomacy';
 const SPEEDS = [0, 1, 2, 4, 8];
 
 export class Hud {
@@ -171,7 +171,7 @@ export class Hud {
 
     // ───── Pannello laterale ─────
     const tabs = el('div', { class: 'tabs' });
-    const tabNames: Record<Tab, string> = { castle: '🏰 Castello', army: '⚔️ Esercito', market: '⚖️ Mercato', diplomacy: '🤝 Diplomazia', realm: '👥 Regno' };
+    const tabNames: Record<Tab, string> = { castle: '🏰 Castello', works: '🏗️ Cantieri', army: '⚔️ Esercito', market: '⚖️ Mercato', diplomacy: '🤝 Diplomazia', realm: '👥 Regno' };
     for (const t of Object.keys(tabNames) as Tab[]) {
       if (t === 'diplomacy' && !game.lords().length) continue;
       if (t === 'realm' && game.lords().length) continue;
@@ -242,6 +242,7 @@ export class Hud {
     if (d.defense) parts.push(`🛡️${d.defense}`);
     if (d.produces) parts.push('→ ' + Object.keys(d.produces).map((r) => RESOURCES[r as ResourceId].icon).join(''));
     if (d.herd) parts.push(`${SPECIES_NAMES[d.herd.species]} max ${d.herd.capacity}`);
+    parts.push(`⏱ ${formatDuration(this.game.estimateDays(id))}`);
     return parts.join(' · ');
   }
 
@@ -284,13 +285,17 @@ export class Hud {
   private selDyn: HTMLElement = el('div');
   private selKey = '';
 
+  private selWasSite = false;
+
   select(b: PlacedBuilding | null) {
     this.selected = b;
     this.selKey = '';
     this.selPanel.classList.toggle('hidden', !b);
     if (!b) return;
     const def = getBuilding(b.defId);
-    const demolish = el('button', { class: 'danger', text: 'Demolisci (rimborso 50%)' });
+    const isSite = !!this.game.siteByUid(b.uid);
+    this.selWasSite = isSite;
+    const demolish = el('button', { class: 'danger', text: isSite ? 'Annulla il cantiere (rimborso)' : 'Demolisci (rimborso 50%)' });
     demolish.onclick = () => {
       this.game.demolish(b.uid);
       this.cb.onDeselect();
@@ -323,22 +328,65 @@ export class Hud {
   private refreshSelection() {
     const b = this.selected;
     if (!b) return;
-    if (!this.game.byUid(b.uid)) {
+    const isSite = !!this.game.siteByUid(b.uid);
+    if (!this.game.byUid(b.uid) && !isSite) {
       this.cb.onDeselect();
+      return;
+    }
+    if (isSite !== this.selWasSite) {
+      this.select(b);
       return;
     }
     const g = this.game;
     const def = getBuilding(b.defId);
+    const job = g.jobFor(b.uid);
+    const eta = job ? g.jobEta(job) : null;
+    const to = isSite ? undefined : g.evolveTarget(b);
+    const evo = to ? g.canEvolve(b) : null;
     const ups = g.upgradeOptions(b);
     const checks = ups.map((u) => g.canUpgrade(b, u.id));
     const repairCost = g.repairCost(b);
     const key = JSON.stringify([
       Math.round(b.hp ?? 0), b.upgrades, Math.round(b.herd ?? 0), checks.map((c) => c.ok),
-      canAfford(g.state.resources, repairCost), g.structureVersion,
+      canAfford(g.state.resources, repairCost), g.structureVersion, b.defId,
+      job && [Math.round((job.done / job.work) * 100), g.lastCrew.get(job.id) ?? 0, eta === null ? -1 : Math.round(eta)],
+      evo?.ok, evo?.reason, g.desiredBuilders(),
     ]);
     if (key === this.selKey) return;
     this.selKey = key;
     const parts: Node[] = [];
+    if (job) {
+      const pct = Math.round((job.done / job.work) * 100);
+      const crew = g.lastCrew.get(job.id) ?? 0;
+      parts.push(
+        el('h4', { text: job.kind === 'build' ? '🏗️ In costruzione' : `🏗️ Lavori: ${g.jobName(job)}` }),
+        el('div', { class: 'hp' }, el('div', { class: 'hp-bar build', style: `width:${pct}%` })),
+        el('p', {
+          class: 'small',
+          text: `${pct}% · ${crew ? `👷 ${crew} costruttori al lavoro` : '⏳ in coda: nessun costruttore libero'}${eta !== null ? ` · fine tra circa ${formatDuration(eta)}` : ' · lavori fermi'}`,
+        }),
+      );
+      const row = el('div', { class: 'row' });
+      const prio = el('button', { text: '⏫ Priorità', title: 'Porta questo lavoro in cima alla coda dei costruttori' });
+      prio.onclick = () => g.prioritizeJob(job.id);
+      row.append(prio);
+      if (def.draggable) {
+        const all = el('button', { text: '⏫ Tutto il tratto', title: 'Porta in cima tutti i lavori uguali (es. tutto il tratto di mura)' });
+        all.onclick = () => g.prioritizeSimilar(job.id);
+        row.append(all);
+      }
+      if (job.kind !== 'build') {
+        const stop = el('button', { text: '✕ Annulla', title: 'Interrompe i lavori: rimborso pieno se non sono iniziati, metà se sono a metà' });
+        stop.onclick = () => g.cancelJob(job.id);
+        row.append(stop);
+      }
+      parts.push(row);
+      if (isSite) {
+        parts.push(el('p', { class: 'small muted', text: `Materiali già pagati: ${formatCost(job.cost)}. L'edificio funzionerà solo a lavori finiti.` }));
+        this.selDyn.replaceChildren(...parts);
+        return;
+      }
+    }
     if (def.herd) parts.push(el('p', { text: `${SPECIES_NAMES[def.herd.species]}: ${Math.round(b.herd ?? 0)} / ${def.herd.capacity} capi` }));
     if (!def.fort && !def.road && (def.produces || def.herd)) {
       const bonus = g.roadBonus(b);
@@ -371,6 +419,38 @@ export class Hud {
       }
       parts.push(el('p', { class: 'small', text: `🛡️ Difesa: ${fmt(g.defenseOf(b))}${!g.analysis().closed && def.fort !== 'keep' && def.fort !== 'moat' ? ' (dimezzata: cinta aperta)' : ''}` }));
     }
+    if (to && evo) {
+      const cost = g.evolveCost(b);
+      const stone = (cost.stone ?? 0) + (cost.lime ?? 0) > 0;
+      const days = g.daysFor(g.evolveWork(b), b.defId, stone);
+      const row = el('div', { class: 'upgrade evolve' });
+      row.append(
+        el('div', { class: 'row' }, el('strong', { text: `⬆️ Trasforma in ${to.icon} ${to.name}` })),
+        el('div', { class: 'small muted', text: to.description }),
+        el('div', {
+          class: 'small',
+          text: `${formatCost(cost)} · ⏱ ${formatDuration(days)}${to.hp && def.hp ? ` · ❤️ ${def.hp} → ${to.hp}` : ''}${to.defense !== undefined ? ` · 🛡️ ${def.defense ?? 0} → ${to.defense}` : ''}`,
+        }),
+      );
+      const btns = el('div', { class: 'row' });
+      const one = el('button', { text: 'Trasforma' });
+      one.disabled = !evo.ok;
+      one.onclick = () => g.evolve(b);
+      btns.append(one);
+      const same = g.state.buildings.filter((x) => x.defId === b.defId && !g.jobFor(x.uid)).length;
+      if (same > 1) {
+        const all = el('button', { text: `Tutti (${same})`, title: 'Trasforma tutti gli edifici di questo tipo, finché bastano le risorse' });
+        all.disabled = !evo.ok;
+        all.onclick = () => {
+          const n = g.evolveAll(b.defId);
+          this.toast(`${n} ${def.name.toLowerCase()} in trasformazione: ${to.name.toLowerCase()}.`, 'good');
+        };
+        btns.append(all);
+      }
+      if (!evo.ok && evo.reason) btns.append(el('span', { class: 'small muted', text: evo.reason }));
+      row.append(btns);
+      parts.push(el('h4', { text: 'Evoluzione' }), row);
+    }
     if (ups.length) {
       parts.push(el('h4', { text: 'Miglioramenti' }));
       ups.forEach((u, i) => {
@@ -378,7 +458,7 @@ export class Hud {
         const c = checks[i];
         const row = el('div', { class: `upgrade ${done ? 'done' : ''}` });
         row.append(
-          el('div', { class: 'row' }, el('strong', { text: `${u.icon} ${u.name}` }), el('span', { class: 'spacer' }), el('span', { class: 'small', text: done ? '✓' : formatCost(u.cost) })),
+          el('div', { class: 'row' }, el('strong', { text: `${u.icon} ${u.name}` }), el('span', { class: 'spacer' }), el('span', { class: 'small', text: done ? '✓' : `${formatCost(u.cost)} · ⏱ ${formatDuration(g.daysFor(Game.workFor(u.cost), b.defId, (u.cost.stone ?? 0) + (u.cost.lime ?? 0) > 0))}` })),
           el('div', { class: 'small muted', text: u.description }),
         );
         if (!done) {
@@ -387,7 +467,7 @@ export class Hud {
           one.disabled = !c.ok;
           one.onclick = () => g.upgrade(b, u.id);
           btns.append(one);
-          const same = g.state.buildings.filter((x) => x.defId === b.defId && !x.upgrades?.includes(u.id)).length;
+          const same = g.state.buildings.filter((x) => x.defId === b.defId && !x.upgrades?.includes(u.id) && !g.jobFor(x.uid)).length;
           if (same > 1) {
             const all = el('button', { text: `Su tutti (${same})` });
             all.disabled = !c.ok;
@@ -501,6 +581,7 @@ export class Hud {
     for (const [k, b] of this.tabBtns) b.classList.toggle('active', k === t);
     this.panelBody.replaceChildren();
     if (t === 'castle') this.buildCastleTab();
+    else if (t === 'works') this.buildWorksTab();
     else if (t === 'army') this.buildArmyTab();
     else if (t === 'market') this.buildMarketTab();
     else if (t === 'diplomacy') this.buildDiplomacyTab();
@@ -565,7 +646,12 @@ export class Hud {
       if (levelInfo.innerHTML !== lvlHtml) levelInfo.innerHTML = lvlHtml;
       const step = nextStep();
       levelBtn.classList.toggle('hidden', !step);
-      if (step) {
+      const keepJob = g.ownKeep() ? g.jobFor(g.ownKeep()!.uid) : undefined;
+      if (keepJob) {
+        const eta = g.jobEta(keepJob);
+        levelBtn.classList.add('hidden');
+        levelWhy.textContent = `🏗️ ${g.jobName(keepJob)}: ${Math.round((keepJob.done / keepJob.work) * 100)}%${eta !== null ? `, fine tra circa ${formatDuration(eta)}` : ''}`;
+      } else if (step) {
         levelBtn.textContent = step.label;
         levelBtn.disabled = !step.check.ok;
         levelWhy.textContent = step.check.ok ? '' : step.check.reason ?? '';
@@ -585,6 +671,7 @@ export class Hud {
           ${bud.tribute ? `<tr><td>👑 Tributi dei vassalli</td><td>+${fmt(bud.tribute)}/mese</td></tr>` : ''}
           <tr><td>⚔️ Paga dei soldati</td><td>−${fmt(bud.army)}/mese</td></tr>
           ${bud.engines ? `<tr><td>🪵 Macchine d'assedio</td><td>−${fmt(bud.engines)}/mese</td></tr>` : ''}
+          ${bud.builders ? `<tr><td>🏗️ Paga dei costruttori</td><td>−${fmt(bud.builders)}/mese</td></tr>` : ''}
           <tr class="${bud.net < 0 ? 'bad' : 'good'}"><td><strong>Saldo</strong></td><td><strong>${money(bud.net)}/mese</strong></td></tr>
         </table>
         ${bud.net < 0 ? `<p class="small bad">Le spese superano le entrate: con ${fmt(g.state.resources.coins)} monete resisti circa ${Math.max(0, Math.floor(g.state.resources.coins / -bud.net))} mesi, poi i soldati diserteranno.</p>` : ''}`,
@@ -624,6 +711,80 @@ export class Hud {
           <tr><td>📦 Magazzini</td><td>${s.storage} per risorsa</td></tr>
         </table>
         <p class="small muted">Il cibo si consuma partendo da quello più deperibile. Una dieta varia fa crescere la popolazione più in fretta.</p>`);
+    };
+  }
+
+  private buildWorksTab() {
+    const g = this.game;
+    const crew = el('div');
+    const list = el('div', { class: 'works' });
+    const minus = el('button', { text: '−', title: 'Meno costruttori: più braccia nei campi' });
+    const plus = el('button', { text: '+', title: 'Più costruttori (servono posti nella loggia dei muratori)' });
+    const max = el('button', { text: 'Massimo' });
+    const count = el('strong');
+    minus.onclick = () => g.setBuilders(Math.max(0, g.desiredBuilders() - 1));
+    plus.onclick = () => g.setBuilders(g.desiredBuilders() + 1);
+    max.onclick = () => g.setBuilders(undefined);
+    list.onpointerdown = (e) => {
+      const t = (e.target as HTMLElement).closest<HTMLElement>('[data-act]');
+      if (!t) return;
+      const ids = (t.dataset.ids ?? '').split(',').map(Number);
+      if (t.dataset.act === 'prio') g.prioritizeSimilar(ids[0]);
+      else if (t.dataset.act === 'cancel') {
+        let n = 0;
+        for (const id of ids) if (g.cancelJob(id)) n++;
+        this.toast(`${n} lavori annullati: materiali rimborsati.`, 'info');
+      }
+    };
+    this.panelBody.append(
+      el('h4', { text: '👷 Costruttori' }),
+      el('div', { class: 'row' }, minus, count, plus, max),
+      crew,
+      list,
+    );
+    this.refreshTab = () => {
+      const cap = g.builderCap();
+      const want = g.state.builders;
+      count.textContent = `${g.desiredBuilders()} / ${cap}${want === undefined ? ' (massimo)' : ''}`;
+      const rate = (stone: boolean) => {
+        const r = g.builderRate(stone);
+        return `×${r.rate.toFixed(2)}${r.parts.length ? ` <span class="muted">(${r.parts.map(([n, v]) => `${escapeHtml(n)} ×${v.toFixed(2)}`).join(', ')})</span>` : ''}`;
+      };
+      setHtml(
+        crew,
+        `<p class="small">Al lavoro: <strong>${g.lastBuilders}</strong> · posti ${cap} (${4} di base + 6 per ogni loggia dei muratori) · al massimo metà degli abitanti.</p>
+        <p class="small muted">Ogni costruttore lascia i campi e le botteghe, prende ${fmt(BUILDER_WAGE * 30)} monete e mangia ${fmt(BUILDER_FOOD * 30)} di cibo in più al mese.</p>
+        <p class="small">Rendimento lavori in pietra: ${rate(true)}<br>Rendimento lavori in legno: ${rate(false)}</p>`,
+      );
+      // Lavori raggruppati per tipo (un tratto di mura è un gruppo solo)
+      const groups = new Map<string, { name: string; ids: number[]; work: number; done: number; crew: number; eta: number | null }>();
+      for (const j of g.jobs()) {
+        const name = g.jobName(j);
+        const k = `${j.kind}|${name}`;
+        const e = groups.get(k) ?? { name, ids: [], work: 0, done: 0, crew: 0, eta: 0 };
+        e.ids.push(j.id);
+        e.work += j.work;
+        e.done += j.done;
+        e.crew += g.lastCrew.get(j.id) ?? 0;
+        const t = g.jobEta(j);
+        e.eta = t === null || e.eta === null ? null : Math.max(e.eta, t);
+        groups.set(k, e);
+      }
+      const rows = [...groups.values()].map((e) => {
+        const pct = Math.round((e.done / e.work) * 100);
+        return `<div class="work">
+          <div class="row"><strong>${escapeHtml(e.name)}${e.ids.length > 1 ? ` ×${e.ids.length}` : ''}</strong><span class="spacer"></span>
+            <button data-act="prio" data-ids="${e.ids.join(',')}" title="Porta in cima alla coda">⏫</button>
+            <button data-act="cancel" data-ids="${e.ids.join(',')}" title="Annulla (rimborso dei materiali non ancora usati)">✕</button></div>
+          <div class="hp"><div class="hp-bar build" style="width:${pct}%"></div></div>
+          <p class="small muted">${pct}% · ${e.crew ? `👷 ${e.crew}` : '⏳ in coda'}${e.eta !== null ? ` · fine tra circa ${formatDuration(e.eta)}` : ' · fermo'}</p>
+        </div>`;
+      });
+      setHtml(
+        list,
+        `<h4>🏗️ Lavori in corso (${g.jobs().length})</h4>${rows.length ? rows.join('') : '<p class="small muted">Nessun lavoro. Scegli un edificio dal menu Costruisci, oppure seleziona una fortificazione per trasformarla o migliorarla.</p>'}
+        <p class="small muted">I lavori procedono nell'ordine della coda. D'inverno la malta gela: le opere in pietra quasi si fermano.</p>`,
+      );
     };
   }
 

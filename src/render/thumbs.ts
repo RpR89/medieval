@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BUILDINGS, type BuildingDef } from '../game/data/buildings';
-import { buildModel, type ModelCtx } from './models';
+import { buildModel, LINKED_TYPES, type ModelCtx } from './models';
 
 /**
  * Miniature degli edifici per il menu di costruzione, disegnate dai modelli 3D veri
@@ -11,8 +11,9 @@ const SIZE = 96;
 
 /** Contesto per far apparire bene mura e strade anche da sole (collegate in fila). */
 function ctxFor(def: BuildingDef): ModelCtx {
-  if (['palisade', 'wall_stone', 'road', 'road_paved', 'bridge', 'gate_wood', 'gate_stone'].includes(def.id)) {
-    return { links: [{ dx: 1, dz: 0, ext: 0 }, { dx: -1, dz: 0, ext: 0 }], seed: 3, upgrades: def.id === 'wall_stone' ? ['walkway'] : [] };
+  if (LINKED_TYPES.has(def.id)) {
+    const upgrades = [...(def.builtIn ?? []), ...(def.id === 'wall_stone' ? ['walkway'] : [])];
+    return { links: [{ dx: 1, dz: 0, ext: 0 }, { dx: -1, dz: 0, ext: 0 }], seed: 3, upgrades };
   }
   if (def.id === 'moat') return { upgrades: ['stakes'], depth: 1, seed: 3 };
   return { seed: 3 };

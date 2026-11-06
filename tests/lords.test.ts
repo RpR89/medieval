@@ -4,6 +4,9 @@ import { createInitialState, type Force } from '../src/game/sim/state';
 import { mulberry32 } from '../src/game/world/terrain';
 import { getBuilding } from '../src/game/data/buildings';
 
+// Nei test le costruzioni sono immediate, salvo dove si provano i cantieri
+Game.instantByDefault = true;
+
 const F = (f: Partial<Force>): Force => ({ infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0, ...f });
 
 function single(lords: number, year = 1000) {
@@ -11,7 +14,7 @@ function single(lords: number, year = 1000) {
   st.day = (year - 900) * 360 + 100;
   st.nextRaidDay = 1e9;
   const g = new Game(st, mulberry32(4));
-  Object.assign(g.state.resources, { wood: 1e5, stone: 1e5, coins: 1e5, grain: 1e5 });
+  Object.assign(g.state.resources, { wood: 1e5, stone: 1e5, lime: 1e5, coins: 1e5, grain: 1e5 });
   g.storageCap = () => 1e9;
   const [x, z] = g.homeSite();
   g.place('keep_wood', x - 1, z - 1);

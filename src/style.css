@@ -135,6 +135,10 @@ td:last-child { text-align: right; }
 .hp-bar { height: 100%; background: var(--good); transition: width 0.3s; }
 .hp-bar.damaged { background: var(--accent); }
 .hp-bar.ruin { background: var(--bad); }
+.hp-bar.build { background: linear-gradient(90deg, #b8894a, var(--accent)); }
+.upgrade.evolve { border: 1px solid var(--accent); border-radius: 8px; padding: 6px 8px; background: rgba(217, 164, 65, 0.08); }
+.works .work { border-top: 1px solid var(--line); padding: 6px 0 2px; }
+.works .work button { padding: 1px 6px; }
 .upgrade { border-top: 1px solid var(--line); padding: 6px 0; }
 .upgrade.done strong { color: var(--good); }
 .upgrade .row { margin-top: 3px; }
