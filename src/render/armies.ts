@@ -293,7 +293,8 @@ export class ArmyView {
       color?: number,
       envoy = false,
     ) => {
-      const key = `${id}:${JSON.stringify(f)}:${formation}:${color}:${envoy}`;
+      // Chiave con numeri interi: le truppe calano di frazioni (assedi, fame) e non serve ricostruire a ogni fotogramma
+      const key = `${id}:${Math.round(f.infantry)},${Math.round(f.archers)},${Math.round(f.cavalry)},${f.rams},${f.trebuchets}:${formation}:${color}:${envoy}`;
       seen.add(id);
       let a = this.armies.get(id);
       if (!a || a.key !== key) {
@@ -324,6 +325,13 @@ export class ArmyView {
         if (ch.userData.ring) ch.visible = this.selected.has(id);
       }
     };
+    // Predoni che assediano il castello (senza un reparto di un signore): accampati davanti alle mura
+    const sg = g.state.siege;
+    if (sg && sg.lord === undefined) {
+      const [kx, kz] = g.keepCenter();
+      const r = (n: number) => Math.round(n);
+      place('siege-raiders', { infantry: r(sg.troops.infantry), archers: r(sg.troops.archers), cavalry: r(sg.troops.cavalry), rams: sg.troops.rams, trebuchets: 0 }, sg.camp[0] + 0.5 + Math.cos(Math.atan2(kz - sg.camp[1], kx - sg.camp[0])) * 1.5, sg.camp[1] + 0.5 + Math.sin(Math.atan2(kz - sg.camp[1], kx - sg.camp[0])) * 1.5, Math.atan2(-(kz - sg.camp[1]), kx - sg.camp[0]), false, true, 'line', 0x6a5a4a);
+    }
     for (const c of g.state.companies ?? []) place(c.id, c.troops, c.x, c.z, c.heading ?? 0, !!c.path?.length, false, c.formation, c.scout ? 0x3f8a4a : undefined, !!c.envoy || !!c.scout);
     this.updatePaths(g.state.companies ?? []);
     for (const c of g.enemyCompanies) {

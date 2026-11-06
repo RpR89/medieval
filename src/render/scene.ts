@@ -7,6 +7,7 @@ import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { addFog, makeWater, shared } from './effects';
+import { SiegeView } from './siegeView';
 import { mixNumber, seasonMix, type Season, type SeasonMix } from '../game/data/calendar';
 import { getBuilding } from '../game/data/buildings';
 import type { Game } from '../game/sim/game';
@@ -139,6 +140,8 @@ export class WorldRenderer {
     this.updateFog();
     this.armyView = new ArmyView(game, this.terrainView);
     this.scene.add(this.armyView.group);
+    this.siegeView = new SiegeView(game, this.terrainView);
+    this.scene.add(this.siegeView.group);
 
     // Acqua animata con mappa delle normali procedurale
     const normals = textures().waterNormals;
@@ -515,10 +518,6 @@ export class WorldRenderer {
     if (this.linePreview.instanceColor) this.linePreview.instanceColor.needsUpdate = true;
   }
 
-  /** Draw call degli edifici statici (per la diagnostica). */
-  get batchDrawCalls(): number {
-    return this.batches.drawCalls;
-  }
 
   // ───────────── Interazione ─────────────
 
@@ -646,6 +645,7 @@ export class WorldRenderer {
   }
 
   private fogTex: THREE.DataTexture;
+  private siegeView: SiegeView;
   /** Risoluzione adattiva: se il computer fatica si abbassa un po' la risoluzione interna. */
   private basePixelRatio = 1;
   private renderScale = 1;
@@ -675,15 +675,19 @@ export class WorldRenderer {
   private updateFog() {
     this.game.updateVision();
     const { vis, exp } = this.game.fogGrids();
+    // Si ricarica la texture sulla scheda video solo se qualcosa è cambiato
     const d = this.fogTex.image.data as Uint8Array;
+    let changed = false;
     for (let i = 0; i < vis.length; i++) {
       const v = vis[i] ? 255 : exp[i] ? 128 : 0;
+      if (d[i * 4] === v && d[i * 4 + 3] === 255) continue;
       d[i * 4] = v;
       d[i * 4 + 1] = v;
       d[i * 4 + 2] = v;
       d[i * 4 + 3] = 255;
+      changed = true;
     }
-    this.fogTex.needsUpdate = true;
+    if (changed) this.fogTex.needsUpdate = true;
     if (this.game.revealVersion !== this.revealVersion) {
       this.revealVersion = this.game.revealVersion;
       this.syncBuildings();
@@ -733,6 +737,8 @@ export class WorldRenderer {
     }
     this.armyView.update(t);
     for (const o of this.armyView.objects()) animate(o, t, dt);
+    this.siegeView.update(dt);
+    for (const o of this.siegeView.group.children) animate(o, t, dt);
     const n = this.water.material as THREE.MeshStandardMaterial;
     n.normalMap!.offset.set(t * 0.012, t * 0.008);
 

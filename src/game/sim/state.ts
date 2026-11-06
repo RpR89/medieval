@@ -99,7 +99,7 @@ export interface Company {
   x: number;
   z: number;
   /** Ordine corrente. */
-  order: 'idle' | 'move' | 'attack' | 'home';
+  order: 'idle' | 'move' | 'attack' | 'home' | 'siege';
   /** Caselle ancora da percorrere. */
   path?: Array<[number, number]>;
   /** Bersaglio dell'attacco (casella di un edificio nemico). */
@@ -119,9 +119,43 @@ export interface Company {
   envoy?: { lord: number; mission: DiploMission; gift?: Cost };
   /** Esploratore a cavallo (nessun soldato): vede lontano. */
   scout?: boolean;
+  /** Viveri portati dietro (unità di cibo): fuori dal territorio i soldati mangiano questi. */
+  food?: number;
 }
 
 export type DiploMission = 'alliance' | 'pact' | 'peace' | 'gift' | 'tribute' | 'war';
+
+/** Assedio in corso al nostro castello: dura giorni, a fasi, un giro di mura alla volta. */
+export interface ActiveSiege {
+  attacker: string;
+  /** Signore che assedia (assente per i predoni). */
+  lord?: number;
+  companyId?: string;
+  troops: Force;
+  startTroops: number;
+  /** Morale degli assedianti (0-1). */
+  morale: number;
+  startDay: number;
+  phase: 'prepare' | 'bombard' | 'assault';
+  /** Giorno in cui finisce la fase corrente. */
+  nextDay: number;
+  /** Giri di mura già caduti. */
+  breached: number;
+  assaults: number;
+  /** Scale e macchine costruite sul posto. */
+  ladders: number;
+  mangonels: number;
+  camp: [number, number];
+  /** Tratto di mura preso di mira dal bombardamento. */
+  target?: number;
+  /** Scorte rimaste fuori dalle mura (granai esterni): non si possono usare. */
+  isolated: Cost;
+  /** Giorni passati senza cibo dentro le mura. */
+  starving: number;
+  /** Giorno da cui si può tentare un'altra sortita. */
+  sortieReady: number;
+  log: Array<{ day: number; text: string }>;
+}
 
 /** Esercito nemico in marcia verso il proprio castello. */
 export interface IncomingAttack {
@@ -164,6 +198,8 @@ export interface GameState {
   faction?: FactionId;
   /** Caselle già esplorate (bit per casella, in base64). */
   explored?: string;
+  /** Assedio in corso. */
+  siege?: ActiveSiege;
   /** Partita multigiocatore: id e posto (0 = chi l'ha creata, 1 = chi si è unito). */
   match?: { id: string; slot: 0 | 1 };
   /** Signori controllati dal gioco (solo in giocatore singolo). */

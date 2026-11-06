@@ -79,9 +79,4 @@ export class StaticBatches {
     this.dirty.clear();
   }
 
-  get drawCalls(): number {
-    let n = 0;
-    for (const m of this.chunks.values()) n += m.length;
-    return n;
-  }
 }

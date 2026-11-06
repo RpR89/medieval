@@ -49,6 +49,7 @@ import {
   type Force,
   type GameState,
   type IncomingAttack,
+  type Outcome,
   type PlacedBuilding,
 } from './state';
 
@@ -109,6 +110,10 @@ interface Analysis {
   closed: boolean;
   /** Caselle raggiungibili dal bordo della mappa (fuori dalla cinta). */
   outside: Uint8Array;
+  /** Giri di mura tra il bordo della mappa e ogni casella (le mura del giro k hanno profondità k). */
+  depth: Uint8Array;
+  /** Giri di mura attorno al mastio. */
+  rings: number;
   flooded: Set<number>;
   connected: Map<number, number>;
   housing: number;
@@ -118,6 +123,40 @@ interface Analysis {
 }
 
 const D4 = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
+
+/**
+ * Giri di mura tra il bordo della mappa e ogni casella (BFS 0-1). Entrare in un muro da terreno
+ * libero costa 1; muro→muro (mura spesse, porte, torri) e muro→libero costano 0.
+ */
+function depthFromEdges(wall: Uint8Array, size: number): Uint8Array {
+  const depth = new Uint8Array(size * size).fill(255);
+  const dq = new Int32Array(size * size * 4);
+  let head = size * size * 2;
+  let tail = head;
+  const relax = (k: number, d: number, front: boolean) => {
+    if (d >= depth[k]) return;
+    depth[k] = d;
+    if (front) dq[--head] = k;
+    else dq[tail++] = k;
+  };
+  for (let i = 0; i < size; i++) {
+    for (const k of [i, (size - 1) * size + i, i * size, i * size + size - 1]) relax(k, wall[k], wall[k] === 0);
+  }
+  while (head < tail) {
+    const k = dq[head++];
+    const x = k % size;
+    const z = (k - x) / size;
+    for (const [dx, dz] of D4) {
+      const nx = x + dx;
+      const nz = z + dz;
+      if (nx < 0 || nz < 0 || nx >= size || nz >= size) continue;
+      const nk = nz * size + nx;
+      const cost = wall[nk] && !wall[k] ? 1 : 0;
+      relax(nk, depth[k] + cost, cost === 0);
+    }
+  }
+  return depth;
+}
 /** Gli uid degli edifici dell'altro giocatore partono da qui. */
 export const FOREIGN = 1_000_000;
 const D8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] as const;
@@ -340,7 +379,41 @@ export class Game {
   }
 
   storageCap(): number {
-    return this.analysis().storage;
+    return this.state.siege ? this.siegeStorage() : this.analysis().storage;
+  }
+
+  /** Giri di mura tra il bordo della mappa e un edificio. */
+  depthOf(b: PlacedBuilding): number {
+    const a = this.analysis();
+    const [w, d] = getBuilding(b.defId).size;
+    let best = 0;
+    for (let z = b.z; z < b.z + d; z++) for (let x = b.x; x < b.x + w; x++) best = Math.max(best, a.depth[this.tileIndex(x, z)] % 255);
+    return best;
+  }
+
+  /** Giri di mura attorno al mastio. */
+  rings(): number {
+    return this.analysis().rings;
+  }
+
+  /** Durante un assedio gli edifici fuori dalle mura rimaste in piedi sono tagliati fuori. */
+  isCutOff(b: PlacedBuilding): boolean {
+    const sg = this.state.siege;
+    if (!sg) return false;
+    const def = getBuilding(b.defId);
+    if (def.fort) return false;
+    return this.depthOf(b) <= sg.breached;
+  }
+
+  /** Magazzini utilizzabili durante l'assedio: solo quelli dentro le mura (mastio, granai interni). */
+  siegeStorage(): number {
+    let cap = BASE_STORAGE * 0.5 + CASTLE_LEVELS[this.castleLevel()].storage;
+    for (const b of this.state.buildings) {
+      const def = getBuilding(b.defId);
+      if (!def.storage || this.isCutOff(b)) continue;
+      cap += Math.round(def.storage * levelEffects(b.level ?? 1).storage);
+    }
+    return Math.round(cap);
   }
 
   armyPower(): number {
@@ -415,42 +488,46 @@ export class Game {
     storage += lv.storage;
     taxMul += lv.tax;
 
-    // Riempimento dal bordo della mappa: ciò che non si raggiunge è dentro la cinta
+    // Profondità: quanti giri di mura separano ogni casella dal bordo della mappa (BFS 0-1).
+    // Entrare in un muro da terreno libero costa 1; muro→muro (mura spesse, porte) e muro→libero costano 0.
+    // Due conti: la struttura delle cinte (anche le mura in rovina contano come giro, finché non
+    // vengono conquistate in un assalto) e lo stato attuale (una breccia apre la cinta).
+    const wall = new Uint8Array(size * size);
+    const live = new Uint8Array(size * size);
+    for (let z = 0; z < size; z++) {
+      for (let x = 0; x < size; x++) {
+        const k = z * size + x;
+        if (this.blocks(x, z)) live[k] = wall[k] = 1;
+        else {
+          const b = this.buildingAt(x, z);
+          const f = b && !this.isForeign(b) ? getBuilding(b.defId).fort : undefined;
+          if (f && f !== 'moat') wall[k] = 1;
+        }
+      }
+    }
+    const depth = depthFromEdges(wall, size);
+    const liveDepth = depthFromEdges(live, size);
     const outside = new Uint8Array(size * size);
-    const queue: number[] = [];
-    const push = (x: number, z: number) => {
-      if (x < 0 || z < 0 || x >= size || z >= size) return;
-      const k = this.tileIndex(x, z);
-      if (outside[k] || this.blocks(x, z)) return;
-      outside[k] = 1;
-      queue.push(k);
-    };
-    for (let i = 0; i < size; i++) {
-      push(i, 0);
-      push(i, size - 1);
-      push(0, i);
-      push(size - 1, i);
-    }
-    while (queue.length) {
-      const k = queue.pop()!;
-      const x = k % size;
-      const z = (k - x) / size;
-      for (const [dx, dz] of D4) push(x + dx, z + dz);
-    }
-    let closed = false;
+    for (let k = 0; k < size * size; k++) if (liveDepth[k] === 0) outside[k] = 1;
+    // Giri di mura attorno al mastio: la massima profondità del terreno libero che lo circonda
+    let rings = 0;
+    let liveRings = 0;
     for (const b of this.state.buildings) {
       const def = getBuilding(b.defId);
       if (def.fort !== 'keep' || this.hpState(b) === 'ruin') continue;
       const [w, d] = def.size;
-      // La cinta è chiusa se accanto al mastio c'è terreno libero non raggiungibile da fuori
-      for (let z = b.z - 1; z <= b.z + d && !closed; z++) {
-        for (let x = b.x - 1; x <= b.x + w && !closed; x++) {
+      for (let z = b.z - 1; z <= b.z + d; z++) {
+        for (let x = b.x - 1; x <= b.x + w; x++) {
           if (x < 0 || z < 0 || x >= size || z >= size) continue;
           if (x >= b.x && x < b.x + w && z >= b.z && z < b.z + d) continue;
-          if (!this.blocks(x, z) && !outside[this.tileIndex(x, z)]) closed = true;
+          const k = this.tileIndex(x, z);
+          if (!wall[k] && depth[k] !== 255) rings = Math.max(rings, depth[k]);
+          if (!live[k] && liveDepth[k] !== 255) liveRings = Math.max(liveRings, liveDepth[k]);
         }
       }
     }
+    // Chiusa davvero solo se non ci sono brecce aperte
+    const closed = liveRings > 0;
 
     // Fossati allagati: componenti connesse che toccano fiume o mare, o con l'allagamento
     const flooded = new Set<number>();
@@ -534,7 +611,7 @@ export class Game {
       if (best > 0) connected.set(b.uid, best);
     }
 
-    this.cache = { version: this.analysisVersion, closed, outside, flooded, connected, housing, jobs, storage, taxMul };
+    this.cache = { version: this.analysisVersion, closed, outside, depth, rings, flooded, connected, housing, jobs, storage, taxMul };
     return this.cache;
   }
 
@@ -1019,16 +1096,19 @@ export class Game {
 
     // Produzione degli edifici (le strade aumentano la resa)
     for (const { b, def } of this.defsPlaced()) {
-      if (def.produces || def.herd) this.track(def.name, () => this.produce(b, def, a, si, staffing, dt));
+      if ((def.produces || def.herd) && !this.isCutOff(b)) this.track(def.name, () => this.produce(b, def, a, si, staffing, dt));
     }
 
     // Alimentazione
     const pop = s.population;
     const away = this.troopsAway();
-    let need = (pop * FOOD_PER_PERSON + builders * BUILDER_FOOD + (this.soldiers() + away.infantry + away.archers + away.cavalry) * SOLDIER_FOOD) * dt;
+    // I reparti fuori dal territorio mangiano i viveri che si portano dietro
+    const abroad = this.abroadSoldiers();
+    const soldiersHome = this.soldiers() + away.infantry + away.archers + away.cavalry - abroad;
+    let need = (pop * FOOD_PER_PERSON + builders * BUILDER_FOOD + soldiersHome * SOLDIER_FOOD) * dt;
     const needed = need;
     let variety = 0;
-    const soldiersEating = (this.soldiers() + away.infantry + away.archers + away.cavalry) * SOLDIER_FOOD;
+    const soldiersEating = soldiersHome * SOLDIER_FOOD;
     this.track(
       [
         ['Abitanti (cibo)', pop * FOOD_PER_PERSON],
@@ -1124,6 +1204,8 @@ export class Game {
     });
 
     if (s.day >= s.nextRaidDay) this.track('Assedi dei predoni', () => this.resolveRaid(), 'event');
+    if (s.siege) this.track('Assedi dei predoni', () => this.stepSiege(dt), 'event');
+    this.stepSupplies(dt);
     this.track('Assedi e spedizioni', () => this.stepWar(), 'event');
     this.track('Bottino riportato dai reparti', () => this.stepCompanies(dt), 'event');
     if (s.lords?.length) this.stepLords(dt);
@@ -1542,7 +1624,11 @@ export class Game {
   // ───────────── Assedi ─────────────
 
   /** Fotografia delle difese, usata dalla simulazione dell'assedio (anche per gli attacchi tra giocatori). */
-  siegeSnapshot(): DefenderSnapshot {
+  /**
+   * Difese per un assalto. Con `ring` si considera solo quel giro di mura (più il mastio e i
+   * fossati appena fuori): negli assedi a fasi i giri cadono uno alla volta.
+   */
+  siegeSnapshot(ringNo?: number): DefenderSnapshot {
     const a = this.analysis();
     const segments: SiegeSegment[] = [];
     let moatTiles = 0;
@@ -1553,6 +1639,10 @@ export class Game {
     for (const b of this.state.buildings) {
       const def = getBuilding(b.defId);
       if (!def.fort) continue;
+      if (ringNo !== undefined && def.fort !== 'keep') {
+        const d = this.depthOf(b);
+        if (def.fort === 'moat' ? d !== ringNo - 1 : d !== ringNo) continue;
+      }
       if (def.fort === 'moat') {
         moatTiles++;
         depth += this.moatDepth(b);
@@ -1574,7 +1664,9 @@ export class Game {
     }
     return {
       segments,
-      closed: a.closed,
+      closed: ringNo === undefined ? a.closed : a.rings >= ringNo,
+      ladders: this.state.siege?.ladders,
+      starving: this.state.siege?.starving,
       moat: {
         tiles: moatTiles,
         coverage: Math.min(1, moatTiles / Math.max(8, ring * 0.8)),
@@ -1623,7 +1715,16 @@ export class Game {
     const s = this.state;
     const army = this.raiderArmy();
     s.nextRaidDay = s.day + (1000 + this.random() * 1000) / (this.fx().raids ?? 1);
-    this.besiege(army);
+    if (s.siege || !this.ownKeep()) {
+      // Senza castello (o durante un altro assedio) i predoni razziano e se ne vanno
+      this.besiege(army);
+      return;
+    }
+    const n = this.terrain.size;
+    const [kx, kz] = this.keepCenter();
+    const a = this.random() * Math.PI * 2;
+    const from: [number, number] = [Math.round(Math.min(n - 3, Math.max(2, kx + Math.cos(a) * 40))), Math.round(Math.min(n - 3, Math.max(2, kz + Math.sin(a) * 40)))];
+    this.startSiege(army.name, { infantry: army.infantry, archers: army.archers, cavalry: army.cavalry, rams: army.rams, trebuchets: army.trebuchets }, from, army.morale);
   }
 
   /** Risolve un assedio e ne applica le conseguenze. Restituisce l'esito. */
@@ -1640,6 +1741,13 @@ export class Game {
     }
     this.applyDefenderLosses(result.defenderLosses);
     s.resources.charcoal = Math.max(0, s.resources.charcoal - result.charcoalUsed);
+    this.siegeConsequences(army, result, visual);
+    return result;
+  }
+
+  /** Esito finale di un assedio: bottino o saccheggio, rapporto per l'interfaccia. */
+  private siegeConsequences(army: AttackerArmy, result: ReturnType<typeof resolveSiege>, visual: boolean, extraLog: string[] = []) {
+    const s = this.state;
     const cistern = this.state.buildings.some((b) => b.upgrades?.includes('cistern'));
     let loot = 0;
     const atkLost = result.attackerLosses.infantry + result.attackerLosses.archers + result.attackerLosses.cavalry;
@@ -1664,13 +1772,429 @@ export class Game {
       day: s.day,
       attacker: army.name,
       outcome: result.outcome,
-      log: result.log,
+      log: [...extraLog, ...result.log],
       attackerLosses: atkLost,
       defenderLosses: defLost,
       loot,
     };
     if (visual) this.changed();
-    return result;
+  }
+
+  // ───────────── Rifornimenti dei reparti ─────────────
+
+  /** Giorni di viveri con cui parte un reparto (e che si reintegrano nel proprio territorio). */
+  static readonly SUPPLY_DAYS = 40;
+
+  /** Preleva cibo dai magazzini (prima quello che deperisce): restituisce quanto preso. */
+  private takeFood(amount: number): number {
+    let left = amount;
+    const r = this.state.resources;
+    for (const id of EATING_ORDER) {
+      const t = Math.min(r[id], left);
+      r[id] -= t;
+      left -= t;
+      if (left <= 0) break;
+    }
+    return amount - left;
+  }
+
+  private abroadSoldiers(): number {
+    let n = 0;
+    for (const c of this.companies()) {
+      if (c.envoy || c.scout || this.ownsTile(Math.floor(c.x), Math.floor(c.z))) continue;
+      n += c.troops.infantry + c.troops.archers + c.troops.cavalry;
+    }
+    return n;
+  }
+
+  /** Giorni di viveri rimasti a un reparto. */
+  supplyDays(c: Company): number {
+    const n = c.troops.infantry + c.troops.archers + c.troops.cavalry;
+    return n > 0 ? (c.food ?? 0) / (n * SOLDIER_FOOD) : Infinity;
+  }
+
+  /** Fuori dal territorio i reparti consumano i viveri; senza, disertano. Dentro si riforniscono. */
+  private stepSupplies(dt: number) {
+    for (const c of this.companies()) {
+      if (c.envoy || c.scout) continue;
+      const n = c.troops.infantry + c.troops.archers + c.troops.cavalry;
+      if (n <= 0) continue;
+      const full = n * SOLDIER_FOOD * Game.SUPPLY_DAYS;
+      if (this.ownsTile(Math.floor(c.x), Math.floor(c.z))) {
+        // Nel proprio territorio i carri tornano a riempirsi dai granai
+        const want = Math.min(full - (c.food ?? 0), n * SOLDIER_FOOD * 4 * dt);
+        if (want > 0) c.food = (c.food ?? 0) + this.track('Viveri dei reparti', () => this.takeFood(want));
+        continue;
+      }
+      const eat = n * SOLDIER_FOOD * dt;
+      if ((c.food ?? 0) >= eat) {
+        c.food = (c.food ?? 0) - eat;
+        continue;
+      }
+      c.food = 0;
+      // Senza viveri: fame e diserzioni
+      const k = 1 - 0.012 * dt;
+      c.troops.infantry *= k;
+      c.troops.archers *= k;
+      c.troops.cavalry *= k;
+      if (!this.alerted.has(`hungry|${c.id}`)) {
+        this.alerted.add(`hungry|${c.id}`);
+        this.log('🍞 Un reparto lontano da casa ha finito i viveri: i soldati cominciano a disertare. Riportalo nel territorio o rifornisci la marcia.', 'bad');
+      }
+    }
+    for (const c of this.companies()) {
+      for (const k of ['infantry', 'archers', 'cavalry'] as const) if (c.troops[k] < 0.5 && c.troops[k] > 0 && (c.food ?? 1) === 0) c.troops[k] = 0;
+    }
+    this.pruneCompanies();
+  }
+
+  /** Giorni stimati per arrivare in fondo al percorso. */
+  etaDays(c: Company): number | null {
+    if (!c.path?.length) return null;
+    const v = this.companySpeed(c);
+    if (v <= 0) return null;
+    let cost = 0;
+    let px = c.x;
+    let pz = c.z;
+    for (const [x, z] of c.path) {
+      const d = Math.hypot(x + 0.5 - px, z + 0.5 - pz);
+      const m = c.envoy ? this.envoyMoveCost(x, z) : this.moveCost(x, z);
+      cost += d * (isFinite(m) ? m : 1);
+      px = x + 0.5;
+      pz = z + 0.5;
+    }
+    return cost / v;
+  }
+
+  // ───────────── Assedio a fasi ─────────────
+
+  /** Inizia un assedio: l'esercito si accampa davanti alle mura dalla parte da cui arriva. */
+  startSiege(name: string, troops: Force, from: [number, number], morale: number, lord?: number, companyId?: string) {
+    const s = this.state;
+    const [kx, kz] = this.keepCenter();
+    // Il campo: oltre le mura più esterne, verso la direzione di arrivo
+    let reach = 6;
+    for (const b of s.buildings) {
+      const def = getBuilding(b.defId);
+      if (def.fort) reach = Math.max(reach, Math.hypot(b.x + def.size[0] / 2 - kx, b.z + def.size[1] / 2 - kz));
+    }
+    const dx = from[0] - kx;
+    const dz = from[1] - kz;
+    const dl = Math.hypot(dx, dz) || 1;
+    const n = this.terrain.size;
+    let camp: [number, number] = [Math.round(kx + (dx / dl) * (reach + 6)), Math.round(kz + (dz / dl) * (reach + 6))];
+    camp = [Math.min(n - 3, Math.max(2, camp[0])), Math.min(n - 3, Math.max(2, camp[1]))];
+    const size = troops.infantry + troops.archers + troops.cavalry;
+    s.siege = {
+      attacker: name,
+      lord,
+      companyId,
+      troops,
+      startTroops: size,
+      morale,
+      startDay: s.day,
+      phase: 'prepare',
+      nextDay: s.day + 6 + this.random() * 6,
+      breached: 0,
+      assaults: 0,
+      ladders: 0,
+      mangonels: 0,
+      camp,
+      isolated: {},
+      starving: 0,
+      sortieReady: s.day,
+      log: [],
+    };
+    this.siegeLog(`${name} si accampa davanti al castello con ${Math.round(size)} soldati: comincia l'assedio.`);
+    this.isolateStores();
+    // Ciò che è fuori dalle mura si ferma: campi, pascoli, botteghe
+    const cut = s.buildings.filter((b) => this.isCutOff(b) && (getBuilding(b.defId).produces || getBuilding(b.defId).herd)).length;
+    if (cut) this.siegeLog(`${cut} edifici fuori dalle mura sono tagliati fuori: niente raccolti finché dura l'assedio.`);
+    this.log(`⚔️ Assedio! ${name} circonda il castello. Resisti con le scorte dentro le mura, tenta una sortita o paga un riscatto.`, 'bad');
+    this.changedVisual();
+  }
+
+  private siegeLog(text: string) {
+    const sg = this.state.siege;
+    if (!sg) return;
+    sg.log.push({ day: this.state.day, text });
+    if (sg.log.length > 40) sg.log.splice(0, sg.log.length - 40);
+  }
+
+  /** Le scorte che non entrano nei magazzini dentro le mura restano fuori, isolate. */
+  private isolateStores() {
+    const sg = this.state.siege;
+    if (!sg) return;
+    const cap = this.siegeStorage();
+    const r = this.state.resources;
+    let moved = 0;
+    for (const id of RESOURCE_IDS) {
+      if (id === 'coins' || r[id] <= cap) continue;
+      const extra = r[id] - cap;
+      sg.isolated[id] = (sg.isolated[id] ?? 0) + extra;
+      r[id] = cap;
+      moved += extra;
+    }
+    if (moved > 1) this.siegeLog(`Le scorte dei granai fuori dalle mura (${Math.round(moved)} unità) restano isolate: dentro c'è posto solo per ${cap} per risorsa.`);
+  }
+
+  /** Cibo dentro le mura e per quanti giorni basta. */
+  siegeFood(): { food: number; days: number } {
+    const r = this.state.resources;
+    const food = FOOD_IDS.reduce((t, id) => t + r[id], 0);
+    const perDay = this.state.population * FOOD_PER_PERSON + this.soldiers() * SOLDIER_FOOD;
+    return { food, days: perDay > 0 ? food / perDay : Infinity };
+  }
+
+  /** Nome e durata residua della fase in corso. */
+  siegePhase(): { name: string; days: number } | null {
+    const sg = this.state.siege;
+    if (!sg) return null;
+    const names = { prepare: 'Preparazione: costruiscono scale e macchine', bombard: 'Bombardamento delle mura', assault: 'Assalto!' };
+    return { name: names[sg.phase], days: Math.max(0, sg.nextDay - this.state.day) };
+  }
+
+  /** Un passo dell'assedio: logoramento, fame, fasi, assalti. */
+  private stepSiege(dt: number) {
+    const s = this.state;
+    const sg = s.siege;
+    if (!sg) return;
+    // Il reparto del signore e l'assedio condividono le truppe (anche dopo un caricamento)
+    if (sg.lord !== undefined && sg.companyId) {
+      const c = this.lord(sg.lord)?.companies.find((x) => x.id === sg.companyId);
+      if (c) c.troops = sg.troops;
+    }
+    // Malattie e diserzioni nel campo; il morale cala col tempo
+    const k = 1 - 0.003 * dt;
+    sg.troops.infantry *= k;
+    sg.troops.archers *= k;
+    sg.troops.cavalry *= k;
+    sg.morale = Math.max(0, sg.morale - 0.0025 * dt);
+    sg.starving = this.lastFed < 0.6 ? sg.starving + dt : Math.max(0, sg.starving - dt * 0.5);
+    const size = sg.troops.infantry + sg.troops.archers + sg.troops.cavalry;
+    if (sg.morale < 0.2 || size < sg.startTroops * 0.3 || size < 3) {
+      this.endSiege('lifted', [`${sg.attacker} toglie l'assedio: troppe perdite e morale a terra.`]);
+      return;
+    }
+    if (sg.starving > 30) {
+      this.endSiege('surrender', ['Senza più cibo dentro le mura, il castello si arrende.']);
+      return;
+    }
+    if (sg.phase === 'prepare') {
+      // Scale: più uomini, più scale; mangani dal 1100
+      sg.ladders = Math.min(30, sg.ladders + size * 0.02 * dt);
+      if (this.date.year >= 1100) sg.mangonels = Math.min(4, sg.mangonels + (size / 60) * 0.06 * dt);
+    } else if (sg.phase === 'bombard') {
+      this.bombard(dt);
+    }
+    if (s.day < sg.nextDay) return;
+    if (sg.phase === 'prepare') {
+      const engines = Math.floor(sg.mangonels) + sg.troops.trebuchets;
+      if (engines > 0 && this.analysis().rings > sg.breached) {
+        sg.phase = 'bombard';
+        sg.nextDay = s.day + 8 + this.random() * 8;
+        this.siegeLog(`Le macchine (${engines}) cominciano a bersagliare le mura.`);
+      } else {
+        sg.phase = 'assault';
+        sg.nextDay = s.day;
+      }
+    } else if (sg.phase === 'bombard') {
+      sg.phase = 'assault';
+      sg.nextDay = s.day;
+    } else {
+      this.siegeAssault();
+    }
+  }
+
+  /** Bombardamento: le macchine colpiscono il tratto più debole del giro di mura sotto attacco. */
+  private bombard(dt: number) {
+    const sg = this.state.siege!;
+    const ring = sg.breached + 1;
+    let target = sg.target !== undefined ? this.byUid(sg.target) : undefined;
+    if (!target || this.hpState(target) === 'ruin' || this.depthOf(target) !== ring) {
+      let best: PlacedBuilding | undefined;
+      let score = Infinity;
+      for (const b of this.state.buildings) {
+        const def = getBuilding(b.defId);
+        if (!def.fort || def.fort === 'moat' || def.fort === 'keep' || this.hpState(b) === 'ruin' || this.depthOf(b) !== ring) continue;
+        const sc = (b.hp ?? this.maxHp(b)) * (def.fort === 'tower' ? 2 : 1);
+        if (sc < score) {
+          score = sc;
+          best = b;
+        }
+      }
+      target = best;
+      sg.target = best?.uid;
+    }
+    if (!target) return;
+    const engines = Math.floor(sg.mangonels) + sg.troops.trebuchets * 2.5;
+    const before = this.hpState(target);
+    target.hp = Math.max(0, (target.hp ?? this.maxHp(target)) - engines * 9 * dt);
+    if (this.hpState(target) !== before) {
+      this.changed();
+      if (this.hpState(target) === 'ruin' && sg.nextDay > this.state.day + 2) {
+        this.siegeLog(`Breccia! ${getBuilding(target.defId).name} crolla sotto i colpi: assalto tra un paio di giorni (riparala, se puoi).`);
+        this.log(`🧱 Breccia nelle mura: ripara ${getBuilding(target.defId).name.toLowerCase()} prima dell'assalto!`, 'bad');
+        sg.nextDay = Math.min(sg.nextDay, this.state.day + 2);
+      }
+    }
+  }
+
+  /** Assalto al giro di mura successivo. */
+  private siegeAssault() {
+    const s = this.state;
+    const sg = s.siege!;
+    const ring = sg.breached + 1;
+    const rings = this.analysis().rings;
+    const army: AttackerArmy = {
+      name: sg.attacker,
+      infantry: Math.round(sg.troops.infantry),
+      archers: Math.round(sg.troops.archers),
+      cavalry: Math.round(sg.troops.cavalry),
+      rams: sg.troops.rams,
+      trebuchets: sg.troops.trebuchets,
+      morale: Math.max(0.3, sg.morale),
+    };
+    const result = resolveSiege(this.siegeSnapshot(rings > sg.breached ? ring : undefined), army, this.random);
+    let visual = false;
+    for (const [uid, hp] of result.damage) {
+      const b = this.byUid(uid);
+      if (!b) continue;
+      const was = this.hpState(b);
+      b.hp = Math.max(0, Math.round(hp));
+      if (this.hpState(b) !== was) visual = true;
+    }
+    this.applyDefenderLosses(result.defenderLosses);
+    s.resources.charcoal = Math.max(0, s.resources.charcoal - result.charcoalUsed);
+    for (const k of ['infantry', 'archers', 'cavalry'] as const) sg.troops[k] = Math.max(0, sg.troops[k] - result.attackerLosses[k]);
+    sg.assaults++;
+    const lost = result.attackerLosses.infantry + result.attackerLosses.archers + result.attackerLosses.cavalry;
+    if (result.outcome === 'repelled') {
+      sg.morale -= 0.18;
+      sg.ladders *= 0.4;
+      sg.phase = 'prepare';
+      sg.nextDay = s.day + 5 + this.random() * 6;
+      this.siegeLog(`Assalto n. ${sg.assaults} respinto! Caduti ${lost} assalitori.`);
+      this.log(`🛡️ Assalto respinto: ${sg.attacker} perde ${lost} uomini.`, 'good');
+      if (visual) this.changed();
+      return;
+    }
+    if (rings > ring) {
+      // Cade un giro, ma ce n'è un altro: l'assedio continua più dentro
+      sg.breached = ring;
+      sg.target = undefined;
+      sg.ladders = 0;
+      sg.phase = 'prepare';
+      sg.nextDay = s.day + 6 + this.random() * 6;
+      this.siegeLog(`Il ${ring === 1 ? 'primo' : `${ring}°`} giro di mura è caduto! Si resiste dietro il successivo.`);
+      this.log(`🔥 Le mura esterne sono cadute: gli edifici tra le cinte sono perduti finché dura l'assedio.`, 'bad');
+      this.isolateStores();
+      this.changed();
+      return;
+    }
+    this.endSiege(result.outcome, result.log, result, visual);
+  }
+
+  /** Fine dell'assedio: ritirata, resa o caduta del castello. */
+  private endSiege(how: Outcome | 'lifted' | 'surrender', lines: string[], result?: ReturnType<typeof resolveSiege>, visual = true) {
+    const s = this.state;
+    const sg = s.siege;
+    if (!sg) return;
+    s.siege = undefined;
+    const won = how === 'repelled' || how === 'lifted';
+    // Le scorte isolate tornano disponibili (se il nemico ha vinto, le ha prese lui)
+    if (won) for (const [id, n] of Object.entries(sg.isolated)) s.resources[id as ResourceId] += n ?? 0;
+    const army: AttackerArmy = { name: sg.attacker, infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0, morale: 0.5 };
+    const days = Math.round(s.day - sg.startDay);
+    const story = [...sg.log.map((l) => l.text), `L'assedio è durato ${formatDuration(days)}.`];
+    if (how === 'lifted') {
+      s.lastSiege = { day: s.day, attacker: sg.attacker, outcome: 'repelled', log: [...story, ...lines], attackerLosses: Math.round(sg.startTroops), defenderLosses: 0, loot: 0 };
+      this.log(`🏰 ${sg.attacker} toglie l'assedio dopo ${formatDuration(days)}!`, 'good');
+    } else if (how === 'surrender') {
+      const r = { outcome: 'sacked' as const, log: lines, attackerLosses: { infantry: 0, archers: 0, cavalry: 0 }, defenderLosses: { infantry: 0, archers: 0, cavalry: 0 }, damage: new Map(), charcoalUsed: 0, rounds: 0 };
+      this.siegeConsequences(army, r as unknown as ReturnType<typeof resolveSiege>, false, story);
+    } else if (result) {
+      this.siegeConsequences(army, result, visual, story);
+    }
+    // Il signore riporta a casa i superstiti
+    if (sg.lord !== undefined) {
+      const l = this.lord(sg.lord);
+      const c = l?.companies.find((x) => x.id === sg.companyId);
+      if (l && c) {
+        c.troops = { ...sg.troops, infantry: Math.round(sg.troops.infantry), archers: Math.round(sg.troops.archers), cavalry: Math.round(sg.troops.cavalry) };
+        c.order = 'home';
+        const [sx, sz] = this.lordKeep(l);
+        c.path = findPath(this.terrain.size, [Math.floor(c.x), Math.floor(c.z)], [sx, sz + 4], (x, z) => this.lordMoveCost(x, z));
+        if (!won) l.wealth += 150 + l.level * 50;
+        else l.relation -= 5;
+      }
+    }
+    this.changed();
+  }
+
+  /** Sortita: la guarnigione esce e colpisce il campo nemico (macchine e scale bruciano). */
+  canSortie(): PlaceCheck {
+    const sg = this.state.siege;
+    if (!sg) return { ok: false, reason: 'Nessun assedio' };
+    if (this.state.day < sg.sortieReady) return { ok: false, reason: `I soldati si riprendono (${formatDuration(sg.sortieReady - this.state.day)})` };
+    if (this.soldiers() < 4) return { ok: false, reason: 'Servono almeno 4 soldati' };
+    return { ok: true };
+  }
+
+  sortie(): string {
+    const sg = this.state.siege;
+    if (!sg || !this.canSortie().ok) return '';
+    const a = this.state.army;
+    // Esce metà della guarnigione: la cavalleria conta di più, il nemico è sorpreso nel campo
+    const out = { infantry: Math.floor(a.infantry / 2), archers: Math.floor(a.archers / 3), cavalry: a.cavalry };
+    const mine = (out.infantry * 3 + out.archers * 1.5 + out.cavalry * 6) * 1.3;
+    const theirs = (sg.troops.infantry * 3 + sg.troops.archers * 1.5 + sg.troops.cavalry * 5) * 0.55 * (0.6 + sg.morale);
+    const ratio = mine / Math.max(1, mine + theirs);
+    const kill = Math.max(1, (sg.troops.infantry + sg.troops.archers + sg.troops.cavalry) * 0.18 * ratio * 2);
+    const tot = Math.max(1, sg.troops.infantry + sg.troops.archers + sg.troops.cavalry);
+    for (const k of ['infantry', 'archers', 'cavalry'] as const) sg.troops[k] = Math.max(0, sg.troops[k] - kill * (sg.troops[k] / tot));
+    const lossK = 0.35 * (1 - ratio);
+    let ourLost = 0;
+    for (const k of ['infantry', 'archers', 'cavalry'] as const) {
+      const l = Math.round(out[k] * lossK);
+      a[k] -= l;
+      ourLost += l;
+    }
+    sg.sortieReady = this.state.day + 12;
+    let text: string;
+    if (ratio > 0.45) {
+      sg.ladders *= 0.3;
+      sg.mangonels = Math.floor(sg.mangonels * 0.5);
+      sg.morale -= 0.1;
+      if (sg.phase !== 'prepare') {
+        sg.phase = 'prepare';
+        sg.nextDay = this.state.day + 6;
+      }
+      text = `Sortita riuscita! Bruciate scale e macchine, ${Math.round(kill)} nemici a terra (nostri caduti: ${ourLost}).`;
+      this.log(`🔥 ${text}`, 'good');
+    } else {
+      text = `Sortita respinta: ${Math.round(kill)} nemici a terra, ma noi perdiamo ${ourLost} uomini.`;
+      this.log(`⚔️ ${text}`, 'bad');
+    }
+    this.siegeLog(text);
+    return text;
+  }
+
+  /** Riscatto: si pagano gli assedianti perché se ne vadano. */
+  ransomCost(): number {
+    const sg = this.state.siege;
+    if (!sg) return 0;
+    const size = sg.troops.infantry + sg.troops.archers + sg.troops.cavalry;
+    return Math.round((size * 6 + 40) * (0.6 + sg.morale * 0.8));
+  }
+
+  payRansom(): boolean {
+    const cost = this.ransomCost();
+    if (!this.state.siege || this.state.resources.coins < cost) return false;
+    this.track('Riscatto agli assedianti', () => (this.state.resources.coins -= cost), 'event');
+    this.siegeLog(`Pagato un riscatto di ${cost} monete.`);
+    this.endSiege('lifted', [`Il riscatto è stato pagato: ${this.state.siege?.attacker ?? 'il nemico'} se ne va.`]);
+    return true;
   }
 
 
@@ -1771,6 +2295,7 @@ export class Game {
     const [x, z] = this.spawnPoint();
     const slot = this.state.match?.slot ?? 0;
     const c: Company = { id: `c${slot}-${this.state.nextUid++}`, troops: { ...f }, x, z, order: 'idle', formation: 'line', behavior: 'defensive' };
+    c.food = this.track('Viveri dei reparti', () => this.takeFood((f.infantry + f.archers + f.cavalry) * SOLDIER_FOOD * Game.SUPPLY_DAYS));
     this.companies().push(c);
     return c;
   }
@@ -2902,6 +3427,7 @@ export class Game {
 
   private stepLordCompanies(l: Lord, dt: number) {
     for (const c of [...l.companies]) {
+      if (c.order === 'siege') continue; // accampati: l'assedio decide
       let budget = this.companySpeed(c) * dt;
       while (budget > 1e-6 && c.path?.length) {
         const [nx, nz] = c.path[0];
@@ -2941,17 +3467,21 @@ export class Game {
           const [sx, sz] = this.lordKeep(l);
           c.path = findPath(this.terrain.size, [Math.floor(c.x), Math.floor(c.z)], [sx, sz + 4], (x, z) => this.lordMoveCost(x, z));
         } else if (nearWalls || atKeep) {
-          const army: AttackerArmy = { name: `L'esercito di ${l.name}`, ...c.troops, morale: l.personality === 'aggressive' ? 0.6 : 0.5 };
-          const res = this.besiege(army);
-          const lost = res.attackerLosses;
-          c.troops.infantry = Math.max(0, c.troops.infantry - lost.infantry);
-          c.troops.archers = Math.max(0, c.troops.archers - lost.archers);
-          c.troops.cavalry = Math.max(0, c.troops.cavalry - lost.cavalry);
-          if (res.outcome !== 'repelled') l.wealth += 150 + l.level * 50;
-          if (res.outcome === 'repelled') l.relation -= 5;
-          c.order = 'home';
-          const [sx, sz] = this.lordKeep(l);
-          c.path = findPath(this.terrain.size, [Math.floor(c.x), Math.floor(c.z)], [sx, sz + 4], (x, z) => this.lordMoveCost(x, z));
+          if (this.state.siege) {
+            // C'è già un assedio: si unisce al campo
+            const sg = this.state.siege;
+            for (const k of Object.keys(sg.troops) as Array<keyof Force>) sg.troops[k] += c.troops[k];
+            l.companies = l.companies.filter((x) => x !== c);
+            continue;
+          }
+          // Non attacca subito: si accampa e comincia l'assedio
+          c.order = 'siege';
+          c.path = [];
+          this.startSiege(`L'esercito di ${l.name}`, c.troops, [Math.floor(c.x), Math.floor(c.z)], l.personality === 'aggressive' ? 0.75 : 0.65, l.id, c.id);
+          const [cx, cz] = this.state.siege!.camp;
+          c.x = cx + 0.5;
+          c.z = cz + 0.5;
+          c.troops = this.state.siege!.troops;
         }
       } else if (c.order === 'home' && !c.path?.length) {
         l.army.infantry += c.troops.infantry;
@@ -3406,6 +3936,8 @@ export class Game {
     }
     for (const b of this.sites()) out.push([b.x + 0.5, b.z + 0.5, 2]);
     for (const c of this.companies()) out.push([c.x, c.z, c.scout ? 9 : c.envoy ? 4 : 5]);
+    // Dalle mura si vede bene il campo degli assedianti
+    if (this.state.siege) out.push([this.state.siege.camp[0] + 0.5, this.state.siege.camp[1] + 0.5, 6]);
     if (!this.state.buildings.length) {
       const [hx, hz] = this.homeSite();
       out.push([hx, hz, 10]);

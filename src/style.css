@@ -223,3 +223,8 @@ button.multi { background: #6b2a1e; border-color: #a3402f; color: var(--ink); }
 .traits .good { color: var(--good); }
 .traits .bad { color: var(--bad); }
 .faction-box { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; margin: 8px 0; }
+
+/* Assedio */
+.siege-panel { position: absolute; top: 70px; left: 50%; transform: translateX(-50%); width: min(460px, 92vw); padding: 10px 14px; z-index: 5; border-color: rgba(226, 114, 91, 0.6); }
+.siege-panel .hp.grow { flex: 1; height: 8px; }
+.siege-panel .siege-log { margin: 6px 0 0; padding-left: 18px; max-height: 80px; overflow-y: auto; }

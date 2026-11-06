@@ -81,7 +81,7 @@ describe('spedizioni', () => {
     expect(a.state.campaignLog?.length).toBe(1);
     expect(a.state.campaignLog![0].outcome).not.toBe('repelled');
     expect(a.state.army.infantry).toBeGreaterThan(5); // i superstiti sono tornati
-    expect(a.state.resources.coins).toBeGreaterThan(coinsBefore - 1500); // il bottino compensa buona parte della paga
+    expect(a.state.resources.coins).toBeGreaterThan(coinsBefore - 2500); // il bottino compensa buona parte della paga (le marce ora sono lunghe)
   });
 
   it('un castello ben fortificato respinge un attacco con forze pari', () => {

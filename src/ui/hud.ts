@@ -85,6 +85,8 @@ export class Hud {
   selected: PlacedBuilding | null = null;
   private logEl: HTMLElement;
   private compPanel: HTMLElement = el('div', { class: 'companies-panel panel hidden' });
+  private siegePanel: HTMLElement = el('div', { class: 'siege-panel panel hidden' });
+  private siegeStart = -1;
   private compIds: string[] = [];
   private compKey = '';
   private logKey = '';
@@ -195,7 +197,18 @@ export class Hud {
       text: 'Trascina: sposta · Tasto destro: ruota · Rotella: zoom · WASD: muovi · Spazio: pausa',
     });
 
-    root.append(this.resTip);
+    root.append(this.resTip, this.siegePanel);
+    this.siegePanel.onpointerdown = (e) => {
+      const t = (e.target as HTMLElement).closest<HTMLElement>('[data-act]');
+      if (!t) return;
+      const g = this.game;
+      if (t.dataset.act === 'sortie') {
+        const r = g.sortie();
+        if (!r) this.toast(g.canSortie().reason ?? 'Impossibile', 'bad');
+      } else if (t.dataset.act === 'ransom') {
+        if (!g.payRansom()) this.toast('Non hai abbastanza monete per il riscatto.', 'bad');
+      } else if (t.dataset.act === 'focus' && g.state.siege) this.cb.focus?.(...g.state.siege.camp);
+    };
     root.append(this.top, build, this.panel, this.selPanel, this.compPanel, this.logEl, this.toastEl, this.hintEl);
     this.renderBuildList();
     this.setTab('castle');
@@ -394,6 +407,18 @@ export class Hud {
       }
     }
     if (def.herd) parts.push(el('p', { text: `${SPECIES_NAMES[def.herd.species]}: ${Math.round(b.herd ?? 0)} / ${g.herdCapacity(b)} capi` }));
+    if (!isSite && !def.fort && !def.road && !this.game.isForeign(b)) {
+      const depth = g.depthOf(b);
+      const cut = g.isCutOff(b);
+      const text = cut
+        ? '🔒 Tagliato fuori dall\'assedio: non produce e le sue scorte sono isolate.'
+        : depth > 0
+          ? `🏰 Dentro le mura (${depth === 1 ? 'primo giro' : `${depth}° giro`})${def.storage ? ': le sue scorte servono a resistere agli assedi.' : '.'}`
+          : def.storage
+            ? '⚠️ Fuori dalle mura: durante un assedio le scorte di questo granaio restano isolate.'
+            : 'Fuori dalle mura: durante un assedio si ferma.';
+      parts.push(el('p', { class: `small ${cut || (!depth && def.storage) ? 'bad' : depth ? 'good' : 'muted'}`, text }));
+    }
     if (levelable && lvl) {
       const level = g.levelOf(b);
       const max = g.maxLevel();
@@ -553,7 +578,9 @@ export class Hud {
     const comps = (g.state.companies ?? []).filter((c) => this.compIds.includes(c.id));
     this.compPanel.classList.toggle('hidden', !comps.length);
     if (!comps.length) return;
-    const key = JSON.stringify(comps.map((c) => [c.id, c.troops, c.order, c.engaged, c.cargo, c.formation, c.behavior]));
+    const eta = Math.max(...comps.map((c) => g.etaDays(c) ?? 0));
+    const supply = Math.min(...comps.map((c) => g.supplyDays(c)));
+    const key = JSON.stringify([comps.map((c) => [c.id, c.troops, c.order, c.engaged, c.cargo, c.formation, c.behavior]), Math.round(eta), Math.round(supply)]);
     if (key === this.compKey) return;
     this.compKey = key;
     const t = { infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0 };
@@ -617,6 +644,10 @@ export class Hud {
         text: `${t.infantry} 🛡️ fanti · ${t.archers} 🏹 arcieri · ${t.cavalry} 🐎 cavalieri${t.rams ? ` · ${t.rams} 🪵 arieti` : ''}${t.trebuchets ? ` · ${t.trebuchets} 🎯 trabucchi` : ''}${cargo ? ` · 💰 bottino ${Math.round(cargo)}` : ''}`,
       }),
       el('p', { class: 'small muted', text: comps.some((c) => c.engaged) ? 'In battaglia…' : `${FORMATIONS[curF].description}` }),
+      el('p', {
+        class: `small ${supply < 8 ? 'bad' : ''}`,
+        text: `${eta > 0 ? `⏱ Arrivo tra circa ${formatDuration(eta)} · ` : ''}${isFinite(supply) ? `🍞 Viveri per ${formatDuration(supply)}${supply < 1 ? ' — finiti: i soldati disertano!' : ''}` : ''}`,
+      }),
       el('div', { class: 'small strong', text: 'Formazione (F)' }),
       formRow,
       el('div', { class: 'small strong', text: 'Comportamento' }),
@@ -1012,7 +1043,7 @@ export class Hud {
       const key = JSON.stringify(comps.map((x) => [x.id, x.troops, x.order, !!x.engaged, x.cargo ? 1 : 0]));
       if (key === lastList) return;
       lastList = key;
-      const orders = { idle: 'fermo', move: 'in marcia', attack: 'all\'attacco', home: 'rientra' };
+      const orders = { idle: 'fermo', move: 'in marcia', attack: 'all\'attacco', home: 'rientra', siege: 'assedia' };
       list.replaceChildren(
         ...(comps.length
           ? comps.map((x) => {
@@ -1308,6 +1339,47 @@ export class Hud {
     }
   }
 
+  /** Pannello dell'assedio in corso. */
+  private refreshSiege() {
+    const g = this.game;
+    const sg = g.state.siege;
+    this.siegePanel.classList.toggle('hidden', !sg);
+    if (!sg) {
+      this.siegeStart = -1;
+      return;
+    }
+    if (this.siegeStart !== sg.startDay) {
+      // Inizio dell'assedio: si torna a velocità normale per seguirlo
+      this.siegeStart = sg.startDay;
+      this.cb.onSpeed(1);
+    }
+    const ph = g.siegePhase()!;
+    const t = sg.troops;
+    const size = Math.round(t.infantry + t.archers + t.cavalry);
+    const rings = g.rings();
+    const food = g.siegeFood();
+    const iso = Object.values(sg.isolated).reduce((a, b) => a + (b ?? 0), 0);
+    const sortie = g.canSortie();
+    const ransom = g.ransomCost();
+    const engines = Math.floor(sg.mangonels) + t.trebuchets;
+    setHtml(
+      this.siegePanel,
+      `<div class="row"><strong class="bad">⚔️ Assedio — ${escapeHtml(sg.attacker)}</strong><span class="spacer"></span><span class="small muted">giorno ${Math.floor(g.state.day - sg.startDay) + 1}</span></div>
+      <p class="small"><strong>${escapeHtml(ph.name)}</strong>${sg.phase !== 'assault' ? ` · assalto tra circa ${formatDuration(ph.days)}` : ''}</p>
+      <p class="small">Assedianti: ${size} (🛡️${Math.round(t.infantry)} 🏹${Math.round(t.archers)} 🐎${Math.round(t.cavalry)}) · 🪜 ${Math.floor(sg.ladders)} scale · ${engines ? `🎯 ${engines} macchine` : 'nessuna macchina'}</p>
+      <div class="row small"><span>Morale nemico</span><div class="hp grow"><div class="hp-bar ${sg.morale < 0.35 ? 'ruin' : sg.morale < 0.6 ? 'damaged' : ''}" style="width:${Math.round(sg.morale * 100)}%"></div></div></div>
+      <p class="small">🏰 Giri di mura in piedi: ${Math.max(0, rings - sg.breached)} su ${rings}${sg.breached ? ' (gli edifici tra le cinte cadute sono perduti)' : ''}</p>
+      <p class="small ${food.days < 20 ? 'bad' : ''}">🍞 Cibo dentro le mura: ${fmt(food.food)} (circa ${isFinite(food.days) ? formatDuration(food.days) : '—'})${iso > 1 ? ` · 🔒 isolato fuori: ${fmt(iso)}` : ''}${sg.starving > 0 ? ' · <span class="bad">la gente ha fame!</span>' : ''}</p>
+      <div class="row">
+        <button data-act="sortie" ${sortie.ok ? '' : 'disabled'} title="Metà della guarnigione e tutta la cavalleria escono e attaccano il campo: bruciano scale e macchine">🔥 Sortita</button>
+        <button data-act="ransom" ${g.state.resources.coins >= ransom ? '' : 'disabled'} title="Paghi e se ne vanno">💰 Riscatto (${ransom})</button>
+        <button data-act="focus" class="link">📍 Campo nemico</button>
+      </div>
+      ${sortie.ok ? '' : `<p class="small muted">${escapeHtml(sortie.reason ?? '')}</p>`}
+      <ol class="small siege-log">${sg.log.slice(-4).map((l) => `<li>${escapeHtml(l.text)}</li>`).join('')}</ol>`,
+    );
+  }
+
   refresh(speed: number) {
     const g = this.game;
     const d = g.date;
@@ -1333,6 +1405,7 @@ export class Hud {
       e.parentElement!.classList.toggle('full', id !== 'coins' && v >= cap - 0.5);
     }
     if (this.resHover) this.refreshResTip();
+    this.refreshSiege();
     this.refreshBuildList();
     this.refreshTab();
     this.refreshSelection();
@@ -1352,13 +1425,4 @@ export class Hud {
     return !!a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT');
   }
 
-  destroy() {
-    this.top.remove();
-    this.panel.remove();
-    this.selPanel.remove();
-    this.logEl.remove();
-    this.toastEl.remove();
-    this.hintEl.remove();
-    document.querySelector('.build')?.remove();
-  }
 }

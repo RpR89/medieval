@@ -1,0 +1,145 @@
+import { describe, expect, it } from 'vitest';
+import { Game } from '../src/game/sim/game';
+import { createInitialState } from '../src/game/sim/state';
+import { Tile } from '../src/game/world/terrain';
+
+Game.instantByDefault = true;
+
+function castle(year = 1200) {
+  const st = createInitialState(1);
+  st.day = (year - 900) * 360 + 100;
+  st.nextRaidDay = 1e9;
+  st.population = 80;
+  const g = new Game(st, () => 0.5);
+  g.terrain.tiles.fill(Tile.Grass);
+  g.levelOverride = 5;
+  Object.assign(g.state.resources, { wood: 1e4, stone: 1e4, lime: 1e4, coins: 1e4, charcoal: 300 });
+  return g;
+}
+
+function square(g: Game, wall: string, c: number, r: number, gate = 'gate_stone') {
+  for (let i = -r; i <= r; i++) for (const [x, z] of [[c + i, c - r], [c + i, c + r], [c - r, c + i], [c + r, c + i]]) {
+    if (x === c + r && z === c) g.place(gate, x, z);
+    else g.place(wall, x, z);
+  }
+}
+
+describe('giri di mura e granai', () => {
+  it('conta i giri e sa cosa è dentro e cosa è fuori', () => {
+    const g = castle();
+    g.place('keep_stone', 31, 31);
+    square(g, 'wall_stone', 32, 4);
+    square(g, 'wall_stone', 32, 9);
+    expect(g.rings()).toBe(2);
+    const inner = g.place('granary', 34, 34)!; // dentro il giro interno
+    const between = g.place('granary', 25, 25)!; // tra i due giri
+    const outside = g.place('granary', 50, 50)!; // fuori da tutto
+    expect(g.depthOf(inner)).toBe(2);
+    expect(g.depthOf(between)).toBe(1);
+    expect(g.depthOf(outside)).toBe(0);
+  });
+
+  it('durante l\'assedio i granai esterni sono isolati: si resiste con quelli dentro', () => {
+    const g = castle();
+    g.place('keep_stone', 31, 31);
+    square(g, 'wall_stone', 32, 5);
+    g.place('granary', 33, 33); // dentro
+    g.place('granary', 50, 50); // fuori
+    g.place('granary', 54, 50); // fuori
+    const capNormal = g.storageCap();
+    g.state.resources.grain = capNormal;
+    g.startSiege('Prova', { infantry: 40, archers: 10, cavalry: 0, rams: 0, trebuchets: 0 }, [60, 32], 0.6);
+    const capSiege = g.storageCap();
+    expect(capSiege).toBeLessThan(capNormal - 700);
+    expect(g.state.resources.grain).toBeLessThanOrEqual(capSiege);
+    expect(g.state.siege!.isolated.grain).toBeGreaterThan(700);
+    // Un campo fuori dalle mura non produce durante l'assedio
+    const f = g.place('field_grain', 45, 32)!;
+    expect(g.isCutOff(f)).toBe(true);
+  });
+});
+
+describe('assedio a fasi', () => {
+  it('i predoni si accampano, preparano, assaltano; un castello ben difeso resiste e torna il grano isolato', () => {
+    const g = castle(1100);
+    g.place('keep_stone', 31, 31);
+    square(g, 'wall_stone', 32, 5);
+    g.state.army = { infantry: 20, archers: 25, cavalry: 0 };
+    g.place('granary', 50, 50);
+    g.state.resources.grain = 1500;
+    g.state.nextRaidDay = g.state.day;
+    g.advance(0.3);
+    expect(g.state.siege).toBeTruthy();
+    expect(g.state.siege!.phase).toBe('prepare');
+    for (let i = 0; i < 400 && g.state.siege; i++) g.advance(0.5);
+    expect(g.state.siege).toBeUndefined();
+    expect(g.state.lastSiege?.log.join(' ')).toMatch(/accampa/);
+    expect(['repelled']).toContain(g.state.lastSiege?.outcome);
+    expect(g.state.nextRaidDay).toBeGreaterThan(g.state.day);
+  });
+
+  it('con due giri di mura il primo cade e l\'assedio prosegue dietro il secondo', () => {
+    const g = castle(1250);
+    g.place('keep_stone', 31, 31);
+    square(g, 'wall_stone', 32, 4);
+    square(g, 'palisade', 32, 8, 'gate_wood');
+    g.state.army = { infantry: 10, archers: 6, cavalry: 0 };
+    g.startSiege('Esercito enorme', { infantry: 140, archers: 40, cavalry: 20, rams: 3, trebuchets: 2 }, [60, 32], 0.9);
+    for (let i = 0; i < 200 && g.state.siege && g.state.siege.breached === 0; i++) g.advance(0.5);
+    expect(g.state.siege?.breached ?? 1).toBe(1);
+  });
+
+  it('sortita e riscatto', () => {
+    const g = castle();
+    g.place('keep_stone', 31, 31);
+    square(g, 'wall_stone', 32, 5);
+    g.state.army = { infantry: 30, archers: 10, cavalry: 15 };
+    g.startSiege('Prova', { infantry: 30, archers: 10, cavalry: 0, rams: 0, trebuchets: 0 }, [60, 32], 0.6);
+    const before = g.state.siege!.troops.infantry;
+    expect(g.sortie()).not.toBe('');
+    expect(g.state.siege!.troops.infantry).toBeLessThan(before);
+    expect(g.canSortie().ok).toBe(false);
+    const coins = g.state.resources.coins;
+    const cost = g.ransomCost();
+    expect(g.payRansom()).toBe(true);
+    expect(g.state.siege).toBeUndefined();
+    expect(g.state.resources.coins).toBe(coins - cost);
+  });
+
+  it('se finisce il cibo dentro le mura, il castello si arrende', () => {
+    const g = castle();
+    g.place('keep_stone', 31, 31);
+    square(g, 'wall_stone', 32, 5);
+    g.state.army = { infantry: 40, archers: 40, cavalry: 0 };
+    for (const id of ['grain', 'vegetables', 'meat', 'fish', 'cheese', 'milk'] as const) g.state.resources[id] = 0;
+    g.startSiege('Assedianti pazienti', { infantry: 60, archers: 10, cavalry: 0, rams: 0, trebuchets: 0 }, [60, 32], 0.95);
+    g.state.siege!.nextDay = 1e9; // non assaltano: aspettano la fame
+    for (let i = 0; i < 200 && g.state.siege; i++) g.advance(0.5);
+    expect(g.state.siege).toBeUndefined();
+    expect(g.state.lastSiege?.outcome).toBe('sacked');
+  });
+});
+
+describe('rifornimenti dei reparti', () => {
+  it('partono con i viveri, li consumano fuori dal territorio e senza disertano', () => {
+    const st = createInitialState(21, 'Rocca', { preset: 'pianura', lords: 1 });
+    st.nextRaidDay = 1e9;
+    const g = new Game(st, () => 0.5);
+    const [x, z] = g.homeSite();
+    g.place('keep_wood', x - 1, z - 1);
+    g.state.resources.grain = 5000;
+    g.state.army.infantry = 20;
+    const c = g.formCompany({ infantry: 20, archers: 0, cavalry: 0, rams: 0, trebuchets: 0 })!;
+    expect(g.supplyDays(c)).toBeCloseTo(Game.SUPPLY_DAYS, 0);
+    // Portato fuori dal territorio
+    const [kx, kz] = g.lordKeep(g.lords()[0]);
+    c.x = kx + 0.5;
+    c.z = kz + 12.5;
+    c.order = 'idle';
+    c.path = [];
+    g.advance(20);
+    expect(g.supplyDays(c)).toBeLessThan(Game.SUPPLY_DAYS - 15);
+    g.advance(40);
+    expect(c.troops.infantry).toBeLessThan(20);
+  });
+});

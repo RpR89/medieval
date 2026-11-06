@@ -38,6 +38,9 @@ export interface DefenderSnapshot {
   moat: { tiles: number; coverage: number; depth: number; flooded: number; stakes: number };
   army: Troops;
   armory: boolean;
+  /** Assedio a fasi: scale preparate (facilitano la scalata) e giorni di fame dei difensori. */
+  ladders?: number;
+  starving?: number;
   /** Moltiplicatori dello schieramento: forza della guarnigione e tiro degli arcieri. */
   defenseMul?: number;
   archerMul?: number;
@@ -165,7 +168,8 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
     damage.set(s.uid, s.hp);
   };
   const atkStart = total(atk);
-  const armoryMul = (def.armory ? 1.2 : 1) * (def.defenseMul ?? 1);
+  // La fame indebolisce i difensori
+  const armoryMul = (def.armory ? 1.2 : 1) * (def.defenseMul ?? 1) * Math.max(0.5, 1 - (def.starving ?? 0) * 0.02);
   const arrowsF = atkIn.arrows ?? 1;
   const meleeF = atkIn.melee ?? 1;
   let charcoal = def.charcoal;
@@ -289,7 +293,8 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
       // Salire sulle scale sotto il tiro costa caro prima ancora di arrivare in cima
       casualties(atk, total(atk) * UNIT_HP.infantry * (0.15 + 0.1 * walk), atkLoss);
       const d = guard(gar) * armoryMul * height + firepower(true);
-      const a = melee(atk, 0.2) * 0.6 * meleeF;
+      // Tante scale preparate durante l'assedio: si sale in più punti insieme
+      const a = melee(atk, 0.2) * 0.6 * meleeF * (1 + Math.min(0.5, (def.ladders ?? 0) * 0.025));
       const b = battle(d, a);
       if (b.aWins) {
         casualties(atk, total(atk) * UNIT_HP.infantry * 0.7, atkLoss);

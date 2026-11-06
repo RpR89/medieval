@@ -131,6 +131,8 @@ export function palisade(g: G, c: ModelCtx, double = false) {
     });
   }
   if (ruin || damaged) rubble(g, (c.seed ?? 1) + 3, ruin ? 6 : 2, k.log, 0.4);
+  // Le palizzate abbattute fumano ancora
+  if (ruin && (c.seed ?? 0) % 3 === 0) g.add(smoke(0, 0.2, 0, 3, 0.6));
 }
 
 // ───────────── Mura in pietra ─────────────
