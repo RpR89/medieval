@@ -40,6 +40,7 @@ import {
   BASE_STORAGE,
   createInitialState,
   FOOD_PER_PERSON,
+  MIN_POPULATION,
   TAX_PER_PERSON,
   type AttackResult,
   type BuildJob,
@@ -181,6 +182,7 @@ export class Game {
   lastCrew = new Map<number, number>();
   /** Costruttori al lavoro nell'ultimo passo. */
   lastBuilders = 0;
+  private hungerWarned = -1e9;
   private siteStage = new Map<number, number>();
   private visualDirty = false;
 
@@ -189,6 +191,8 @@ export class Game {
     this.occupancy = new Int32Array(this.terrain.size * this.terrain.size);
     state.sites ??= [];
     state.jobs ??= [];
+    // Partite rimaste senza abitanti: torna il seguito del signore
+    if (state.population < MIN_POPULATION) state.population = MIN_POPULATION;
     for (const b of state.sites) this.mark(b, b.uid);
     for (const b of state.buildings) {
       this.mark(b, b.uid);
@@ -1065,12 +1069,12 @@ export class Game {
     // Popolazione: cresce di più se la gente è contenta, se ne va se è scontenta
     const hm = this.happiness();
     if (fed < 0.99) {
-      s.population -= pop * 0.01 * (1 - fed) * dt;
+      s.population -= pop * 0.004 * (1 - fed) * dt;
     } else if (pop < a.housing && hm >= 30) {
       const growth = (0.03 + pop * 0.0008) * (1 + 0.08 * Math.max(0, variety - 1)) * Math.min(1.5, hm / 55) * (this.fx().growth ?? 1);
       s.population = Math.min(a.housing, pop + growth * dt);
     }
-    if (hm < 30) s.population -= pop * 0.004 * ((30 - hm) / 30) * dt;
+    if (hm < 30) s.population -= pop * 0.0015 * ((30 - hm) / 30) * dt;
     // Tumulti: con la gente molto scontenta, ogni giorno c'è il rischio di una rivolta
     if (hm < 20 && this.random() < 0.02 * dt) {
       const lostCoins = Math.round(r.coins * 0.1);
@@ -1080,8 +1084,16 @@ export class Game {
       }, 'event');
       this.log(`Tumulti nel borgo: la folla saccheggia i magazzini (−${lostCoins} monete, −10% di cibo). Abbassa le tasse!`, 'bad');
     }
-    if (s.population > a.housing) s.population -= (s.population - a.housing) * 0.02 * dt;
-    s.population = Math.max(0, s.population);
+    if (s.population > a.housing) s.population -= (s.population - a.housing) * 0.008 * dt;
+    // Il seguito del signore non se ne va mai: si può sempre ripartire
+    s.population = Math.max(Math.min(MIN_POPULATION, pop0), s.population, 0);
+    // Avviso quando il cibo sta per finire
+    const foodLeft = FOOD_IDS.reduce((t, id) => t + r[id], 0);
+    const perDay = Math.max(0.01, needed / dt);
+    if (foodLeft / perDay < 40 && s.day - this.hungerWarned > 90) {
+      this.hungerWarned = s.day;
+      this.log(`⚠️ Il cibo basta per circa ${formatDuration(foodLeft / perDay)}: costruisci campi, orti, cacciatori o pescatori (e i costruttori sottraggono braccia ai campi).`, 'bad');
+    }
 
     // Tasse
     this.track('Tasse', () => (r.coins += this.taxPerDay() * dt));

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Game, FOREIGN } from '../src/game/sim/game';
-import { createInitialState } from '../src/game/sim/state';
+import { BASE_HOUSING, createInitialState } from '../src/game/sim/state';
 import { generateTerrain, isBuildableLand, tileAt, Tile } from '../src/game/world/terrain';
 import { PRESET_LIST } from '../src/game/world/presets';
 import { packBuildings } from '../src/net/match';
@@ -77,7 +77,7 @@ describe('partita a due', () => {
     expect(a.buildingAt(bx + 3, bz)?.uid).toBeGreaterThanOrEqual(FOREIGN);
     expect(a.isForeign(a.buildingAt(bx + 3, bz)!)).toBe(true);
     expect(a.state.buildings).toHaveLength(0);
-    expect(a.analysis().housing).toBe(10);
+    expect(a.analysis().housing).toBe(BASE_HOUSING);
     // Non si può migliorare o demolire ciò che è dell'altro
     expect(a.demolish(a.others[0].uid)).toBe(false);
     expect(a.canUpgrade(a.others[0], 'cistern').ok).toBe(false);

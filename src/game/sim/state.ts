@@ -200,7 +200,10 @@ export interface StateOptions {
   faction?: FactionId;
 }
 
-export const BASE_HOUSING = 10;
+/** Ripari di fortuna per chi arriva con il signore: tutta la gente iniziale ha un tetto. */
+export const BASE_HOUSING = 24;
+/** Famiglie che restano sempre (il seguito del signore): sotto questa soglia nessuno se ne va. */
+export const MIN_POPULATION = 5;
 export const BASE_STORAGE = 500;
 export const FOOD_PER_PERSON = 0.1;
 /** Tassa giornaliera per abitante a livello normale (1,5 monete al mese). */
@@ -220,9 +223,10 @@ export function createInitialState(seed: number, castleName = 'Castello senza no
   const day = (era.year - 900) * DAYS_PER_YEAR;
   const resources = emptyResources();
   Object.assign(resources, {
-    grain: 150 + (era.pop - 20) * 4,
-    vegetables: 40,
-    meat: 30,
+    // Scorte per arrivare al primo raccolto anche partendo da zero (circa un anno)
+    grain: 320 + (era.pop - 20) * 8,
+    vegetables: 90,
+    meat: 50,
     hay: 80,
     ...era.res,
   });
