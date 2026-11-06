@@ -1039,8 +1039,14 @@ export class Hud {
         const soldiers = Math.round(l.army.infantry + l.army.archers + l.army.cavalry);
         const html = `<div class="row"><span class="swatch" style="background:#${SIDE_COLORS[(l.id + 1) % SIDE_COLORS.length].toString(16).padStart(6, '0')}"></span>
           <strong>${escapeHtml(l.name)}</strong></div>
-          <div class="small">${escapeHtml(l.castle)} · ${'★'.repeat(l.level)}${'☆'.repeat(5 - l.level)} · ${PERSONALITIES[l.personality].name}</div>
-          <div class="small ${l.status === 'war' ? 'bad' : l.status === 'alliance' || l.status === 'vassal' ? 'good' : ''}">${escapeHtml(g.lordStatusName(l))} · rapporto ${Math.round(l.relation)} · circa ${Math.round(soldiers / 5) * 5} soldati${l.companies.length ? ' · <span class="bad">esercito in marcia</span>' : ''}</div>`;
+          <div class="small">${escapeHtml(l.castle)} · ${l.level ? `${'★'.repeat(l.level)}${'☆'.repeat(5 - l.level)}` : 'accampamento'} · ${PERSONALITIES[l.personality].name}</div>
+          <div class="small ${l.status === 'war' ? 'bad' : l.status === 'alliance' || l.status === 'vassal' ? 'good' : ''}">${escapeHtml(g.lordStatusName(l))} · rapporto ${Math.round(l.relation)} · circa ${Math.round(soldiers / 5) * 5} soldati${l.companies.length ? ' · <span class="bad">esercito in marcia</span>' : ''}</div>
+          <div class="small muted">👪 ${Math.round(l.pop ?? 0)} abitanti${(() => {
+            const act = g.lordActivity(l);
+            if (!act.length) return '';
+            const uniq = [...new Set(act)];
+            return ` · 🏗️ ${escapeHtml(uniq.slice(0, 2).join(', '))}${uniq.length > 2 ? ` e altro (${act.length} lavori)` : ''}`;
+          })()}</div>`;
         if (r.info.innerHTML !== html) r.info.innerHTML = html;
         const v = (l.relation + 100) / 2;
         r.bar.style.width = `${v}%`;

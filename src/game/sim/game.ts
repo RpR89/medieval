@@ -24,6 +24,7 @@ import { CASTLE_LEVELS, KEEP_EVOLVE, UPGRADE_BY_ID, upgradesFor, type UpgradeDef
 import {
   generateTerrain,
   isBuildableLand,
+  mulberry32,
   isWater,
   Tile,
   tileAt,
@@ -31,7 +32,7 @@ import {
 } from '../world/terrain';
 import { resolveSiege, type AttackerArmy, type DefenderSnapshot, type SiegeSegment } from './siege';
 import { findPath } from './pathfind';
-import { lordCastle, lordLevel, PERSONALITIES, STATUS_NAMES, type Lord } from './lords';
+import { lordCastle, lordLevel, PERSONALITIES, STATUS_NAMES, type Lord, type LordJob } from './lords';
 import {
   BASE_HOUSING,
   BASE_STORAGE,
@@ -352,6 +353,7 @@ export class Game {
   /** Blocca il passaggio degli assalitori: mura, torri, porte, mastio (non in rovina) e acqua senza ponte. */
   private blocks(x: number, z: number): boolean {
     const b = this.buildingAt(x, z);
+    if (b && b.site !== undefined && b.site < 4) return isWater(tileAt(this.terrain, x, z));
     if (b) {
       const def = getBuilding(b.defId);
       if (def.fort && def.fort !== 'moat') return this.hpState(b) !== 'ruin';
@@ -726,6 +728,15 @@ export class Game {
     for (let dz = 0; dz < d; dz++) for (let dx = 0; dx < w; dx++) {
       if (!this.ownsTile(x + dx, z + dz)) return { ok: false, reason: 'Fuori dal tuo territorio' };
     }
+    const t = this.terrainCheck(def, x, z);
+    if (!t.ok) return t;
+    if (!canAfford(this.state.resources, def.cost)) return { ok: false, reason: 'Risorse insufficienti' };
+    return { ok: true };
+  }
+
+  /** Regole del terreno e caselle libere (senza territorio, epoca né costi). */
+  private terrainCheck(def: BuildingDef, x: number, z: number): PlaceCheck {
+    const [w, d] = def.size;
     let rock = 0;
     let gold = 0;
     let river = 0;
@@ -755,7 +766,6 @@ export class Game {
     if (def.placement === 'nearWater' && !this.near(x, z, w, d, 1, (t) => isWater(t))) {
       return { ok: false, reason: 'Serve acqua vicino (fiume o mare)' };
     }
-    if (!canAfford(this.state.resources, def.cost)) return { ok: false, reason: 'Risorse insufficienti' };
     return { ok: true };
   }
 
@@ -2181,29 +2191,512 @@ export class Game {
     return this.state.lords?.find((l) => l.id === id);
   }
 
-  /** Edifici dei signori come "altri" sulla mappa; ricostruisce i castelli cambiati d'epoca. */
+  /** Edifici e cantieri dei signori come "altri" sulla mappa. */
   private syncLords(force = false) {
-    const year = this.date.year;
-    let changed = force;
     for (const l of this.lords()) {
-      const lv = lordLevel(year, l.personality);
-      if (lv !== l.level || !l.buildings.length) {
+      this.lordInit(l);
+      const lv = this.lordLevelOf(l);
+      if (lv !== l.level) {
+        if (lv > l.level && l.level > 0) this.log(`🏰 ${l.name} ha ampliato ${l.castle}: castello al livello ${lv} (${CASTLE_LEVELS[lv].name}).`, 'info');
         l.level = lv;
-        l.buildings = lordCastle(this.terrain, this.terrain.sites[l.id], lv, this.state.seed + l.id * 101);
-        changed = true;
+        force = true;
       }
     }
-    if (!changed) return;
+    if (!force) return;
     for (const b of this.others) this.mark(b, 0);
     this.others = [];
     for (const l of this.lords()) {
+      const busy = new Set(l.jobs!.filter((j) => j.kind !== 'build').map((j) => j.uid));
       for (const b of l.buildings) {
-        const fb: PlacedBuilding = { ...b, uid: FOREIGN + l.id * 100000 + b.uid, owner: l.id };
+        const fb: PlacedBuilding = { ...b, uid: this.lordUid(l, b.uid), owner: l.id };
+        if (busy.has(b.uid)) fb.site = 4;
+        this.others.push(fb);
+        this.mark(fb, fb.uid);
+      }
+      for (const j of l.jobs!) {
+        if (j.kind !== 'build') continue;
+        const fb: PlacedBuilding = { uid: this.lordUid(l, j.uid), defId: j.defId, x: j.x, z: j.z, upgrades: [], owner: l.id, site: Math.min(3, Math.floor((j.done / j.work) * 4)) };
         this.others.push(fb);
         this.mark(fb, fb.uid);
       }
     }
     this.changed();
+  }
+
+  /** Solo per i test: costruisce subito i castelli dei signori come sarebbero nella loro epoca. */
+  buildLordCastlesNow() {
+    const year = this.date.year;
+    for (const l of this.lords()) {
+      const lv = lordLevel(year, l.personality);
+      l.buildings = lordCastle(this.terrain, this.terrain.sites[l.id], lv, this.state.seed + l.id * 101);
+      l.nextUid = Math.max(l.nextUid, ...l.buildings.map((b) => b.uid + 1));
+      l.pop = Math.max(l.pop ?? 0, 30 + lv * 20);
+      l.jobs = [];
+    }
+    this.syncLords(true);
+  }
+
+  // ───────────── Signori: economia e costruzioni ─────────────
+
+  private lordUid(l: Lord, uid: number): number {
+    return FOREIGN + l.id * 100000 + uid;
+  }
+
+  /** Livello del castello di un signore, dal suo mastio. */
+  private lordLevelOf(l: Lord): number {
+    const k = l.buildings.find((b) => getBuilding(b.defId).fort === 'keep');
+    if (!k) return 0;
+    const u = k.upgrades ?? [];
+    if (k.defId === 'keep_wood') return u.includes('bailey') ? 2 : 1;
+    return u.includes('palace') ? 5 : u.includes('great_hall') ? 4 : 3;
+  }
+
+  private lordInit(l: Lord) {
+    if (!l.res) {
+      // Salvataggi vecchi: il castello già costruito resta, si aggiunge l'economia
+      l.res = { food: 200, wood: 200, stone: 100, lime: 20 };
+      l.pop = 20 + l.level * 15;
+      l.nextUid = Math.max(l.nextUid, 1, ...l.buildings.map((b) => b.uid + 1));
+    }
+    l.pop ??= 20;
+    l.jobs ??= [];
+  }
+
+  private static readonly LORD_R = 6;
+  /** Giorno fino a cui un signore non cerca nuovi lavori, e posti già cercati invano. */
+  private lordIdle = new Map<number, number>();
+  private lordNoSpot = new Map<string, number>();
+
+  /** Il signore può costruire qui? (nel suo territorio, su caselle libere e adatte) */
+  private lordCanPlace(l: Lord, def: BuildingDef, x: number, z: number): boolean {
+    const [w, d] = def.size;
+    const n = this.terrain.size;
+    if (x < 1 || z < 1 || x + w >= n - 1 || z + d >= n - 1) return false;
+    for (let dz = 0; dz < d; dz++) for (let dx = 0; dx < w; dx++) if (this.ownerAt(x + dx, z + dz) !== l.id) return false;
+    return this.terrainCheck(def, x, z).ok;
+  }
+
+  /** Cerca un posto per un edificio: dentro la cinta (case) o fuori, a spirale. */
+  private lordSpot(l: Lord, defId: string, inside: boolean): [number, number] | null {
+    // Un posto cercato invano non si ricerca per un po' (la ricerca a spirale costa)
+    const key = `${l.id}|${defId}|${inside}`;
+    if ((this.lordNoSpot.get(key) ?? -1) > this.state.day) return null;
+    const found = this.lordSpotSearch(l, defId, inside);
+    if (!found) this.lordNoSpot.set(key, this.state.day + 90);
+    return found;
+  }
+
+  private lordSpotSearch(l: Lord, defId: string, inside: boolean): [number, number] | null {
+    const def = getBuilding(defId);
+    const [cx, cz] = this.lordKeep(l);
+    const R = Game.LORD_R;
+    const rand = mulberry32(this.state.seed + l.id * 977 + l.nextUid * 13);
+    const shuffle = <T,>(a: T[]) => {
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    };
+    if (inside) {
+      const cands: Array<[number, number]> = [];
+      for (let z = cz - R + 2; z + def.size[1] <= cz + R - 1; z += 2) {
+        for (let x = cx - R + 2; x + def.size[0] <= cx + R - 1; x += 2) {
+          if (x + def.size[0] > cx - 2 && x < cx + 3 && z + def.size[1] > cz - 2 && z < cz + 3) continue; // spazio attorno al mastio
+          cands.push([x, z]);
+        }
+      }
+      for (const [x, z] of shuffle(cands)) if (this.lordCanPlace(l, def, x, z)) return [x, z];
+      return null;
+    }
+    for (let ring = R + 3; ring <= R + 16; ring++) {
+      const cands: Array<[number, number]> = [];
+      for (let i = -ring; i <= ring; i++) cands.push([cx + i, cz - ring], [cx + i, cz + ring], [cx - ring, cz + i], [cx + ring, cz + i]);
+      for (const [x, z] of shuffle(cands)) if (this.lordCanPlace(l, def, x, z)) return [x, z];
+    }
+    return null;
+  }
+
+  private static readonly LORD_TIERS: Record<'wall' | 'tower' | 'gate', string[]> = {
+    wall: ['palisade', 'palisade_double', 'wall_rubble', 'wall_stone', 'wall_curtain', 'wall_bastion'],
+    tower: ['tower_wood', 'tower_square', 'tower_round', 'tower_bastion'],
+    gate: ['gate_wood', 'gate_strong', 'gate_stone'],
+  };
+
+  private lordDefOk(l: Lord, def: BuildingDef, year: number): boolean {
+    return year >= def.minYear && (def.maxYear === undefined || year < def.maxYear) && (def.minLevel ?? 0) <= l.level;
+  }
+
+  /** Il miglior tipo di mura, torre o porta che il signore sa costruire ora. */
+  private lordTier(l: Lord, role: 'wall' | 'tower' | 'gate', year: number): string {
+    const list = Game.LORD_TIERS[role];
+    let best = list[0];
+    for (const id of list) if (this.lordDefOk(l, getBuilding(id), year)) best = id;
+    return best;
+  }
+
+  /** Posizioni della cinta: torri agli angoli, due porte, mura sul perimetro. */
+  private lordRing(l: Lord): Array<{ role: 'wall' | 'tower' | 'gate'; x: number; z: number }> {
+    const [cx, cz] = this.lordKeep(l);
+    const R = Game.LORD_R;
+    const out: Array<{ role: 'wall' | 'tower' | 'gate'; x: number; z: number }> = [];
+    for (const [x, z] of [[cx - R - 1, cz - R - 1], [cx + R, cz - R - 1], [cx - R - 1, cz + R], [cx + R, cz + R]]) out.push({ role: 'tower', x, z });
+    out.push({ role: 'gate', x: cx + R, z: cz }, { role: 'gate', x: cx - R, z: cz });
+    const seen = new Set<string>();
+    for (let i = -R + 1; i <= R - 1; i++) {
+      for (const [x, z] of [[cx + i, cz - R], [cx + i, cz + R], [cx - R, cz + i], [cx + R, cz + i]]) {
+        if (z === cz && (x === cx + R || x === cx - R)) continue;
+        const k = `${x},${z}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push({ role: 'wall', x, z });
+      }
+    }
+    return out;
+  }
+
+  /** Cinta chiusa: tutto il perimetro coperto da fortificazioni intatte o da acqua. */
+  lordRingClosed(l: Lord): boolean {
+    const [cx, cz] = this.lordKeep(l);
+    const R = Game.LORD_R;
+    const covered = new Set<number>();
+    for (const b of l.buildings) {
+      const def = getBuilding(b.defId);
+      if (!def.fort || def.fort === 'moat' || (b.hp ?? 1) <= 0) continue;
+      for (let dz = 0; dz < def.size[1]; dz++) for (let dx = 0; dx < def.size[0]; dx++) covered.add((b.z + dz) * this.terrain.size + b.x + dx);
+    }
+    for (let i = -R; i <= R; i++) {
+      for (const [x, z] of [[cx + i, cz - R], [cx + i, cz + R], [cx - R, cz + i], [cx + R, cz + i]]) {
+        if (!covered.has(z * this.terrain.size + x) && !isWater(tileAt(this.terrain, x, z))) return false;
+      }
+    }
+    return true;
+  }
+
+  private lordCount(l: Lord, ...ids: string[]): number {
+    return l.buildings.filter((b) => ids.includes(b.defId)).length + l.jobs!.filter((j) => j.kind === 'build' && ids.includes(j.defId)).length;
+  }
+
+  /** Quanto produce e consuma il feudo di un signore (al giorno). */
+  private lordStats(l: Lord, si: number, avg = false) {
+    let housing = BASE_HOUSING + CASTLE_LEVELS[l.level].housing;
+    let storage = BASE_STORAGE + CASTLE_LEVELS[l.level].storage;
+    let jobs = 0;
+    let lodges = 0;
+    for (const b of l.buildings) {
+      const def = getBuilding(b.defId);
+      housing += def.housing ?? 0;
+      storage += def.storage ?? 0;
+      jobs += def.workers;
+      if (def.builders) lodges++;
+    }
+    const soldiers = l.army.infantry + l.army.archers + l.army.cavalry;
+    const builders = l.jobs!.length ? Math.max(2, Math.min(Math.floor(l.pop! * 0.3), BASE_BUILDERS + lodges * 6)) : 0;
+    const staffing = jobs ? Math.min(1, Math.max(0, l.pop! - builders) / jobs) : 1;
+    const prod = { food: 0, wood: 0, stone: 0, lime: 0, coins: 0 };
+    const use = { food: 0, wood: 0, stone: 0, lime: 0, coins: 0 };
+    const add = (o: typeof prod, id: string, v: number) => {
+      if (RESOURCES[id as ResourceId]?.food) o.food += v;
+      else if (id === 'wood' || id === 'stone' || id === 'lime') o[id] += v;
+      else if (id === 'gold') o.coins += v * 40;
+    };
+    for (const b of l.buildings) {
+      const def = getBuilding(b.defId);
+      const k = staffing * (def.seasonal ? (avg ? def.seasonal.reduce((a, b) => a + b, 0) / 4 : def.seasonal[si]) : 1);
+      for (const [id, v] of Object.entries(def.produces ?? {})) add(prod, id, (v ?? 0) * k);
+      for (const [id, v] of Object.entries(def.consumes ?? {})) add(use, id, (v ?? 0) * k);
+      if (def.herd) prod.food += 0.8;
+    }
+    use.food += l.pop! * FOOD_PER_PERSON + soldiers * SOLDIER_FOOD + builders * BUILDER_FOOD;
+    return { housing, storage, builders, lodges, prod, use, soldiers };
+  }
+
+  /** Un giorno di economia del signore: produzione, cibo, tasse, popolazione, esercito. */
+  private lordEconomy(l: Lord, year: number, si: number) {
+    const r = l.res!;
+    const p = PERSONALITIES[l.personality];
+    const st = this.lordStats(l, si);
+    // Produzione (le fornaci consumano pietra e legna solo se ci sono)
+    const conv = Math.min(1, st.use.stone ? r.stone / st.use.stone : 1, st.use.wood ? (r.wood + st.prod.wood) / st.use.wood : 1);
+    r.wood += st.prod.wood - st.use.wood * conv;
+    r.stone += st.prod.stone - st.use.stone * conv;
+    r.lime += st.prod.lime * conv;
+    l.wealth += st.prod.coins + l.pop! * TAX_PER_PERSON * 1.1 - st.soldiers * 0.12 - st.builders * BUILDER_WAGE;
+    if (l.wealth < 0) {
+      l.wealth = 0;
+      for (const k of ['infantry', 'archers', 'cavalry'] as const) l.army[k] *= 0.99;
+    }
+    // Cibo e popolazione
+    r.food += st.prod.food;
+    const fed = st.use.food > 0 ? Math.min(1, r.food / st.use.food) : 1;
+    r.food = Math.max(0, r.food - st.use.food);
+    if (fed > 0.95 && l.pop! < st.housing) l.pop! += 0.03 + l.pop! * 0.001; // come la nostra gente
+    else if (fed < 0.8) l.pop! = Math.max(5, l.pop! - l.pop! * 0.012 * (1 - fed));
+    l.pop! = Math.min(l.pop!, st.housing + 2);
+    for (const k of ['food', 'wood', 'stone', 'lime'] as const) r[k] = Math.max(0, Math.min(st.storage, r[k]));
+    l.wealth = Math.min(l.wealth, 2000 + l.level * 1000);
+    // Arruolamento: costa monete e uomini
+    // ...ma solo quanti ne può pagare con le tasse (più i bellicosi)
+    const taxes = l.pop! * TAX_PER_PERSON * 1.1;
+    const target = Math.min((3 + l.level * 8 + l.pop! * 0.12 + (year - 900) / 15) * p.army, (taxes * 0.45 * p.army) / 0.12 + 3);
+    const total = st.soldiers;
+    if (total < target && l.wealth > 80 + this.lordSaving(l) && l.pop! > 15 && fed > 0.8) {
+      const add = Math.min(Math.max(0.05, (target - total) * 0.02), l.wealth / 12);
+      l.army.infantry += add * 0.6;
+      l.army.archers += add * 0.28;
+      l.army.cavalry += add * 0.12;
+      l.wealth -= add * 12;
+      l.pop! -= add;
+    }
+    // Riparazioni dopo gli assedi
+    for (const b of l.buildings) {
+      const max = this.maxHp(b);
+      if (max && (b.hp ?? max) < max && l.wealth > 5) {
+        b.hp = Math.min(max, (b.hp ?? max) + max * 0.03);
+        l.wealth -= 1;
+      }
+    }
+    return { fed, builders: st.builders };
+  }
+
+  /** Monete da tenere da parte per il prossimo passo del castello (se il signore è pronto a farlo). */
+  private lordSaving(l: Lord): number {
+    const keep = l.buildings.find((b) => getBuilding(b.defId).fort === 'keep');
+    if (!keep || l.jobs!.some((j) => j.uid === keep.uid)) return 0;
+    const year = this.date.year;
+    const pop = l.pop ?? 0;
+    const u = keep.upgrades ?? [];
+    if (keep.defId === 'keep_wood' && !u.includes('bailey') && pop >= 25) return UPGRADE_BY_ID.bailey.cost.coins ?? 0;
+    if (keep.defId === 'keep_wood' && year >= KEEP_EVOLVE.minYear && pop >= KEEP_EVOLVE.minPop) return KEEP_EVOLVE.cost.coins ?? 0;
+    if (keep.defId === 'keep_stone' && !u.includes('great_hall') && year >= 1150 && pop >= 60) return UPGRADE_BY_ID.great_hall.cost.coins ?? 0;
+    if (keep.defId === 'keep_stone' && !u.includes('palace') && u.includes('great_hall') && year >= 1250 && pop >= 95) return UPGRADE_BY_ID.palace.cost.coins ?? 0;
+    return 0;
+  }
+
+  /** Paga un costo con le scorte, comprando al mercato (a caro prezzo) quel che manca. */
+  private lordPay(l: Lord, cost: Cost, dry = false, reserve = 20): boolean {
+    const r = l.res!;
+    let coins = cost.coins ?? 0;
+    const take: Partial<Record<'wood' | 'stone' | 'lime', number>> = {};
+    for (const [id, n] of Object.entries(cost)) {
+      const need = n ?? 0;
+      if (id === 'coins') continue;
+      if (id === 'wood' || id === 'stone' || id === 'lime') {
+        const have = Math.min(r[id], need);
+        take[id] = have;
+        coins += (need - have) * RESOURCES[id].basePrice * 1.6;
+      } else coins += need * RESOURCES[id as ResourceId].basePrice * 1.6;
+    }
+    // Tiene sempre una piccola riserva di monete
+    if (coins > 0 && l.wealth - coins < reserve) return false;
+    if (dry) return true;
+    l.wealth -= coins;
+    for (const [id, n] of Object.entries(take)) r[id as 'wood'] -= n ?? 0;
+    return true;
+  }
+
+  /** Il prossimo lavoro che il signore vuole avviare, in ordine di urgenza. */
+  private lordNextAction(l: Lord, year: number, si: number): { job: Omit<LordJob, 'done'>; cost: Cost } | null {
+    const lv = l.level;
+    const [cx, cz] = this.lordKeep(l);
+    const pop = l.pop!;
+    const st = this.lordStats(l, si, true);
+    const busy = new Set(l.jobs!.map((j) => j.uid));
+    const build = (defId: string, at: [number, number] | null) => {
+      if (!at) return null;
+      const def = getBuilding(defId);
+      return { job: { kind: 'build' as const, uid: l.nextUid, defId, x: at[0], z: at[1], work: this.buildWork(def) }, cost: def.cost };
+    };
+    const keep = l.buildings.find((b) => getBuilding(b.defId).fort === 'keep');
+    const keepJob = l.jobs!.find((j) => j.kind === 'build' && getBuilding(j.defId).fort === 'keep');
+    const hungry = l.res!.food < st.use.food * 40;
+    const farms = this.lordCount(l, 'field_grain', 'field_vegetables', 'fisher');
+    // 0. Con le scorte basse si semina prima di tutto
+    if (hungry && farms < 4) {
+      const id = farms % 3 === 2 ? 'field_vegetables' : 'field_grain';
+      const a = build(id, this.lordSpot(l, id, false));
+      if (a) return a;
+    }
+    // 1. Il mastio
+    if (!keep && !keepJob) {
+      const id = year < 1150 ? 'keep_wood' : 'keep_stone';
+      const def = getBuilding(id);
+      return build(id, this.lordCanPlace(l, def, cx - 1, cz - 1) ? [cx - 1, cz - 1] : this.lordSpot(l, id, true));
+    }
+    // 2. Cibo
+    // Cibo: produzione media dell'anno con margine per l'inverno (e scorte basse = urgenza)
+    if ((st.prod.food < st.use.food * 1.5 || l.res!.food < st.use.food * 60) && this.lordCount(l, 'field_grain', 'field_vegetables', 'fisher') < 12 + lv * 5) {
+      const fields = this.lordCount(l, 'field_grain', 'field_vegetables');
+      if (fields >= 3 && this.lordCount(l, 'fisher') < 1) {
+        const a = build('fisher', this.lordSpot(l, 'fisher', false));
+        if (a) return a;
+      }
+      const id = fields % 3 === 2 ? 'field_vegetables' : 'field_grain';
+      const a = build(id, this.lordSpot(l, id, false));
+      if (a) return a;
+    }
+    // 3. Case
+    if (st.housing < pop + 4 && this.lordCount(l, 'hut', 'house') < 20 + lv * 6) {
+      const id = year >= 1150 ? 'house' : 'hut';
+      const a = build(id, this.lordSpot(l, id, true)) ?? build(id, this.lordSpot(l, id, false));
+      if (a) return a;
+    }
+    // 4. Legna
+    if (this.lordCount(l, 'woodcutter') < 1 + Math.floor(lv / 2)) {
+      const a = build('woodcutter', this.lordSpot(l, 'woodcutter', false));
+      if (a) return a;
+    }
+    if (!keep) return null;
+    // 5. Pietra e calce prima delle opere in muratura
+    if (year >= 950 && this.lordCount(l, 'quarry') < 1) {
+      const a = build('quarry', this.lordSpot(l, 'quarry', false));
+      if (a) return a;
+    }
+    if (year >= 1000 && lv >= 2 && this.lordCount(l, 'lime_kiln') < 1) {
+      const a = build('lime_kiln', this.lordSpot(l, 'lime_kiln', false));
+      if (a) return a;
+    }
+    // La cinta: torri, porte, poi mura
+    for (const role of ['tower', 'gate', 'wall'] as const) {
+      for (const pos of this.lordRing(l)) {
+        if (pos.role !== role) continue;
+        const id = this.lordTier(l, role, year);
+        if (this.lordCanPlace(l, getBuilding(id), pos.x, pos.z)) return build(id, [pos.x, pos.z]);
+      }
+    }
+    // 6. Pietra, calce, costruttori
+    if (year >= 950 && this.lordCount(l, 'quarry') < 1 + (lv >= 3 ? 1 : 0)) {
+      const a = build('quarry', this.lordSpot(l, 'quarry', false));
+      if (a) return a;
+    }
+    if (year >= 1000 && lv >= 2 && this.lordCount(l, 'lime_kiln') < (lv >= 3 ? 2 : 1)) {
+      const a = build('lime_kiln', this.lordSpot(l, 'lime_kiln', false));
+      if (a) return a;
+    }
+    if (pop >= 30 && this.lordCount(l, 'mason_lodge') < (lv >= 4 ? 2 : 1)) {
+      const a = build('mason_lodge', this.lordSpot(l, 'mason_lodge', true) ?? this.lordSpot(l, 'mason_lodge', false));
+      if (a) return a;
+    }
+    // 7. Evoluzione del castello
+    if (!busy.has(keep.uid)) {
+      const u = keep.upgrades ?? [];
+      const up = (upId: string) => ({ job: { kind: 'upgrade' as const, uid: keep.uid, defId: keep.defId, x: keep.x, z: keep.z, upId, work: Game.workFor(UPGRADE_BY_ID[upId].cost) }, cost: UPGRADE_BY_ID[upId].cost });
+      if (keep.defId === 'keep_wood' && !u.includes('bailey') && pop >= 25) return up('bailey');
+      if (keep.defId === 'keep_wood' && u.includes('bailey') && year >= KEEP_EVOLVE.minYear && pop >= KEEP_EVOLVE.minPop) {
+        return { job: { kind: 'evolve', uid: keep.uid, defId: keep.defId, x: keep.x, z: keep.z, to: 'keep_stone', work: Math.round(this.buildWork(getBuilding('keep_stone')) * 0.8) }, cost: KEEP_EVOLVE.cost };
+      }
+      if (keep.defId === 'keep_stone' && !u.includes('great_hall') && year >= 1150 && pop >= 70) return up('great_hall');
+      if (keep.defId === 'keep_stone' && u.includes('great_hall') && !u.includes('palace') && year >= 1250 && pop >= 110) return up('palace');
+    }
+    // 8. Le fortificazioni evolvono (prima torri e porte)
+    const ring = l.buildings.filter((b) => {
+      const f = getBuilding(b.defId).fort;
+      return (f === 'wall' || f === 'tower' || f === 'gate') && !busy.has(b.uid);
+    });
+    ring.sort((a, b) => (getBuilding(a.defId).fort === 'wall' ? 1 : 0) - (getBuilding(b.defId).fort === 'wall' ? 1 : 0));
+    for (const b of ring) {
+      const to = getBuilding(b.defId).evolvesTo;
+      if (!to || !this.lordDefOk(l, getBuilding(to), year)) continue;
+      const toDef = getBuilding(to);
+      const cost: Cost = {};
+      for (const [id, n] of Object.entries(toDef.cost)) cost[id as ResourceId] = Math.ceil((n ?? 0) * 0.85);
+      return { job: { kind: 'evolve', uid: b.uid, defId: b.defId, x: b.x, z: b.z, to, work: Math.round(this.buildWork(toDef) * 0.8 * 10) / 10 }, cost };
+    }
+    // 9. Miglioramenti delle fortificazioni
+    if (lv >= 2) {
+      const prefs = ['earthbank', 'walkway', 'hoarding', 'portcullis', 'machicolation', 'thicken', 'tower_roof', 'hoarding_wall', 'cistern', 'armory'];
+      for (const upId of prefs) {
+        const u = UPGRADE_BY_ID[upId];
+        if (year < u.minYear || (u.minPop && pop < u.minPop)) continue;
+        for (const b of [...ring, keep]) {
+          if (busy.has(b.uid) || !upgradesFor(b.defId).some((x) => x.id === upId) || b.upgrades?.includes(upId)) continue;
+          if (u.requires && !b.upgrades?.includes(u.requires) && !getBuilding(b.defId).builtIn?.includes(u.requires)) continue;
+          return { job: { kind: 'upgrade', uid: b.uid, defId: b.defId, x: b.x, z: b.z, upId, work: Game.workFor(u.cost) }, cost: u.cost };
+        }
+      }
+    }
+    // 10. Magazzini
+    if (this.lordCount(l, 'granary') < Math.floor(lv / 2)) {
+      const a = build('granary', this.lordSpot(l, 'granary', true) ?? this.lordSpot(l, 'granary', false));
+      if (a) return a;
+    }
+    return null;
+  }
+
+  /** Un giorno di lavori del signore: avvia nuovi cantieri e fa avanzare quelli aperti. */
+  private lordWorks(l: Lord, year: number, si: number, fed: number, builders: number): boolean {
+    let dirty = false;
+    // Nuovi lavori finché i costruttori non sono tutti impegnati
+    let demand = l.jobs!.reduce((sum, j) => sum + this.crewCap(j.defId), 0);
+    const want = Math.max(builders, 3);
+    for (let i = 0; i < 4 && demand < want && (this.lordIdle.get(l.id) ?? -1) <= this.state.day; i++) {
+      const a = this.lordNextAction(l, year, si);
+      // I lavori del mastio usano i risparmi, gli altri no
+      const castleStep = !!a && a.job.uid === l.buildings.find((b) => getBuilding(b.defId).fort === 'keep')?.uid;
+      if (!a || !this.lordPay(l, a.cost, false, castleStep ? 20 : 20 + this.lordSaving(l))) {
+        // Niente da fare o mancano i mezzi: riprova fra qualche giorno
+        this.lordIdle.set(l.id, this.state.day + (a ? 3 : 10));
+        break;
+      }
+      const job: LordJob = { ...a.job, done: 0 };
+      if (job.kind === 'build') {
+        l.nextUid++;
+        // Segna subito il terreno, così il prossimo lavoro non lo sceglie di nuovo
+        const fb: PlacedBuilding = { uid: this.lordUid(l, job.uid), defId: job.defId, x: job.x, z: job.z, upgrades: [], owner: l.id, site: 0 };
+        this.mark(fb, fb.uid);
+      }
+      l.jobs!.push(job);
+      demand += this.crewCap(job.defId);
+      dirty = true;
+    }
+    // Avanzamento
+    let free = builders;
+    const finished: LordJob[] = [];
+    for (const j of l.jobs!) {
+      if (free <= 0) break;
+      const crew = Math.min(free, this.crewCap(j.defId));
+      free -= crew;
+      const def = getBuilding(j.to ?? j.defId);
+      const cost = j.upId ? UPGRADE_BY_ID[j.upId].cost : def.cost;
+      const stone = (cost.stone ?? 0) + (cost.lime ?? 0) > 0;
+      const rate = (0.3 + 0.7 * fed) * (si === 3 ? (stone ? 0.35 : 0.75) : 1);
+      const before = Math.floor((j.done / j.work) * 4);
+      j.done += crew * rate;
+      if (j.done >= j.work) finished.push(j);
+      else if (j.kind === 'build' && Math.floor((j.done / j.work) * 4) !== before) dirty = true;
+    }
+    for (const j of finished) {
+      l.jobs = l.jobs!.filter((x) => x !== j);
+      dirty = true;
+      if (j.kind === 'build') {
+        const def = getBuilding(j.defId);
+        l.buildings.push({ uid: j.uid, defId: j.defId, x: j.x, z: j.z, upgrades: [], ...(def.hp ? { hp: def.hp } : {}) });
+        continue;
+      }
+      const b = l.buildings.find((x) => x.uid === j.uid);
+      if (!b) continue;
+      if (j.kind === 'upgrade' && j.upId && !b.upgrades?.includes(j.upId)) {
+        const before = this.maxHp(b);
+        b.upgrades = [...(b.upgrades ?? []), j.upId];
+        if (before) b.hp = (b.hp ?? before) + (this.maxHp(b) - before);
+      } else if (j.kind === 'evolve' && j.to) {
+        const to = getBuilding(j.to);
+        b.defId = j.to;
+        b.upgrades = (b.upgrades ?? []).filter((u) => UPGRADE_BY_ID[u]?.appliesTo.includes(j.to!) && !to.builtIn?.includes(u));
+        b.hp = this.maxHp(b);
+      }
+    }
+    return dirty;
+  }
+
+  /** Cosa sta costruendo un signore (per l'interfaccia). */
+  lordActivity(l: Lord): string[] {
+    return (l.jobs ?? []).map((j) => {
+      const name = getBuilding(j.defId).name;
+      if (j.kind === 'build') return name;
+      if (j.kind === 'upgrade') return `${UPGRADE_BY_ID[j.upId ?? '']?.name ?? ''} (${name})`;
+      return `${name} → ${getBuilding(j.to ?? j.defId).name}`;
+    });
   }
 
   /** Il castello di un signore (il suo mastio). */
@@ -2265,18 +2758,13 @@ export class Game {
     this.lordDay = today;
     this.syncLords();
     const year = this.date.year;
+    const si = seasonIndex(this.date.season);
+    let dirty = false;
     for (const l of this.lords()) {
       const p = PERSONALITIES[l.personality];
-      // Crescita dell'esercito e del tesoro
-      const target = (8 + l.level * 9 + (year - 900) / 12) * p.army;
-      const total = l.army.infantry + l.army.archers + l.army.cavalry;
-      if (total < target) {
-        const add = Math.max(0.05, (target - total) * 0.01);
-        l.army.infantry += add * 0.6;
-        l.army.archers += add * 0.28;
-        l.army.cavalry += add * 0.12;
-      }
-      l.wealth += 0.5 + l.level * 0.6;
+      // Il signore lavora come noi: produce, mangia, arruola e costruisce
+      const eco = this.lordEconomy(l, year, si);
+      if (!this.locked && this.lordWorks(l, year, si, eco.fed, eco.builders)) dirty = true;
       // Il rapporto torna lentamente verso il carattere del signore
       const base = l.status === 'alliance' ? Math.max(p.base, 40) : l.status === 'war' ? Math.min(p.base, -40) : p.base;
       l.relation += Math.sign(base - l.relation) * Math.min(Math.abs(base - l.relation), 0.08);
@@ -2308,6 +2796,7 @@ export class Game {
         this.log(`💰 ${l.name} pretende un tributo e minaccia guerra: mandagli un diplomatico con un dono.`, 'bad');
       }
     }
+    if (dirty) this.syncLords(true);
   }
 
   private launchLordRaid(l: Lord) {
@@ -2433,11 +2922,11 @@ export class Game {
       const def = getBuilding(b.defId);
       if (!def.fort || def.fort === 'moat') continue;
       const max = this.maxHp(b);
-      segments.push({ uid: b.uid, defId: b.defId, role: def.fort, hp: b.hp ?? max, maxHp: max, upgrades: [...(b.upgrades ?? [])], defense: def.defense ?? 0 });
+      segments.push({ uid: b.uid, defId: b.defId, role: def.fort, hp: b.hp ?? max, maxHp: max, upgrades: [...(def.builtIn ?? []), ...(b.upgrades ?? [])], defense: def.defense ?? 0 });
     }
     const snap: DefenderSnapshot = {
       segments,
-      closed: true,
+      closed: this.lordRingClosed(lord),
       moat: { tiles: 0, coverage: 0, depth: 1, flooded: 0, stakes: 0 },
       army: { infantry: Math.round(lord.army.infantry), archers: Math.round(lord.army.archers), cavalry: Math.round(lord.army.cavalry) },
       armory: lord.level >= 4,

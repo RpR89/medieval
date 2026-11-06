@@ -16,11 +16,38 @@ export interface Lord {
   status: LordStatus;
   army: { infantry: number; archers: number; cavalry: number };
   wealth: number;
-  level: number; // livello del castello 1..5
+  level: number; // livello del castello 0..5 (dipende dal mastio costruito)
   buildings: PlacedBuilding[];
   companies: Company[];
   nextAction: number;
   nextUid: number;
+  /** Scorte del signore (le monete sono `wealth`). */
+  res?: LordResources;
+  /** Abitanti del suo feudo. */
+  pop?: number;
+  /** Cantieri e lavori in corso. */
+  jobs?: LordJob[];
+}
+
+export interface LordResources {
+  food: number;
+  wood: number;
+  stone: number;
+  lime: number;
+}
+
+/** Lavoro dei costruttori di un signore. */
+export interface LordJob {
+  kind: 'build' | 'upgrade' | 'evolve';
+  /** Edificio (nuovo o esistente). */
+  uid: number;
+  defId: string;
+  x: number;
+  z: number;
+  upId?: string;
+  to?: string;
+  work: number;
+  done: number;
 }
 
 export const PERSONALITIES: Record<Personality, { name: string; base: number; army: number; description: string }> = {
@@ -66,9 +93,12 @@ export function createLords(count: number, seed: number): Lord[] {
       personality: p,
       relation: PERSONALITIES[p].base,
       status: 'neutral',
-      army: { infantry: 6, archers: 3, cavalry: 1 },
+      army: { infantry: 2, archers: 1, cavalry: 0 },
       wealth: 300,
-      level: 1,
+      level: 0,
+      res: { food: 150, wood: 220, stone: 60, lime: 0 },
+      pop: 20,
+      jobs: [],
       buildings: [],
       companies: [],
       nextAction: 360 * 2 + Math.floor(rand() * 200),

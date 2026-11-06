@@ -334,8 +334,11 @@ export class WorldRenderer {
       upgrades: [...(def.builtIn ?? []), ...(b.upgrades ?? [])],
       state: this.game.hpState(b),
     };
-    if (this.game.siteByUid(b.uid)) ctx.site = this.game.siteStageOf(b.uid);
-    else if (!this.game.isForeign(b) && this.game.jobFor(b.uid)) ctx.works = true;
+    if (this.game.isForeign(b)) {
+      if (b.site !== undefined && b.site < 4) ctx.site = b.site;
+      else if (b.site === 4) ctx.works = true;
+    } else if (this.game.siteByUid(b.uid)) ctx.site = this.game.siteStageOf(b.uid);
+    else if (this.game.jobFor(b.uid)) ctx.works = true;
     if (def.id === 'road' || def.id === 'road_paved' || def.id === 'bridge') ctx.links = this.linksFor(b, ROAD_FAMILY, false);
     else if (LINKED_TYPES.has(def.id)) ctx.links = this.linksFor(b, WALL_FAMILY, true);
     if (def.fort === 'gate') {

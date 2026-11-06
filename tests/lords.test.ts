@@ -9,7 +9,7 @@ Game.instantByDefault = true;
 
 const F = (f: Partial<Force>): Force => ({ infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0, ...f });
 
-function single(lords: number, year = 1000) {
+function single(lords: number, year = 1000, prebuilt = true) {
   const st = createInitialState(21, 'Rocca', { preset: 'pianura', lords });
   st.day = (year - 900) * 360 + 100;
   st.nextRaidDay = 1e9;
@@ -19,6 +19,8 @@ function single(lords: number, year = 1000) {
   const [x, z] = g.homeSite();
   g.place('keep_wood', x - 1, z - 1);
   g.levelOverride = 5;
+  // Per le prove di diplomazia e guerra i signori hanno già il castello della loro epoca
+  if (prebuilt) g.buildLordCastlesNow();
   return g;
 }
 
@@ -46,14 +48,35 @@ describe('signori rivali', () => {
     }
   });
 
-  it('i castelli dei signori crescono con le epoche', () => {
-    const g = single(1, 950);
+  it('i signori partono da zero e costruiscono il castello col tempo', () => {
+    const g = single(1, 950, false);
     const l = g.lords()[0];
-    expect(l.level).toBeLessThanOrEqual(2);
-    g.state.day = 400 * 360;
-    g.advance(1);
-    expect(l.level).toBe(5);
-    expect(g.others.some((b) => b.owner === l.id && b.defId === 'keep_stone')).toBe(true);
+    expect(l.level).toBe(0);
+    expect(g.others.filter((b) => b.owner === l.id && b.site === undefined)).toHaveLength(0);
+    // Dopo pochi giorni ci sono i primi cantieri
+    run(g, 3);
+    expect(l.jobs!.length).toBeGreaterThan(0);
+    expect(g.others.some((b) => b.owner === l.id && b.site !== undefined && b.site < 4)).toBe(true);
+    // In un paio d'anni: motta, campi, case e una cinta che cresce
+    run(g, 720);
+    expect(l.level).toBeGreaterThanOrEqual(1);
+    const own = (pred: (id: string) => boolean) => l.buildings.filter((b) => pred(b.defId)).length;
+    expect(own((id) => id.startsWith('field_'))).toBeGreaterThan(1);
+    expect(own((id) => id === 'hut')).toBeGreaterThan(1);
+    expect(own((id) => getBuilding(id).fort === 'wall')).toBeGreaterThan(5);
+    expect(l.pop!).toBeGreaterThan(20);
+  });
+
+  it('con le epoche il signore fa evolvere mura e mastio', () => {
+    const g = single(1, 1046, false);
+    const l = g.lords()[0];
+    l.wealth = 3000;
+    run(g, 1400);
+    const walls = l.buildings.filter((b) => getBuilding(b.defId).fort === 'wall').map((b) => b.defId);
+    expect(walls.length).toBeGreaterThan(10);
+    // Le palizzate costruite prima del 1050 sono diventate muri in pietrame
+    expect(walls.join()).toMatch(/wall_rubble/);
+    expect(l.level).toBeGreaterThanOrEqual(2);
   });
 
   it('il diplomatico viaggia, porta il dono e torna', () => {

@@ -19,6 +19,8 @@ export interface PlacedBuilding {
   upgrades?: string[];
   /** Proprietario per gli edifici dei signori controllati dal gioco (indice del signore). */
   owner?: number;
+  /** Solo edifici degli altri: cantiere allo stadio 0-3, oppure 4 = lavori su un edificio finito. */
+  site?: number;
 }
 
 /** Lavoro in corso dei costruttori: nuovo edificio, miglioramento o evoluzione. */
@@ -211,7 +213,13 @@ export function createInitialState(seed: number, castleName = 'Castello senza no
     ...era.res,
   });
   const lords = !opts.match && opts.lords ? createLords(Math.min(4, opts.lords), seed) : undefined;
-  for (const l of lords ?? []) l.nextAction += day;
+  for (const l of lords ?? []) {
+    // I signori partono da zero come noi, con le scorte dell'epoca
+    l.nextAction += day;
+    l.pop = era.pop;
+    l.wealth = era.res.coins;
+    l.res = { food: resources.grain + 70, wood: era.res.wood, stone: era.res.stone, lime: 'lime' in era.res ? era.res.lime : 0 };
+  }
   return {
     version: 1,
     seed,
