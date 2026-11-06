@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Game } from '../src/game/sim/game';
 import { createInitialState } from '../src/game/sim/state';
 import { Tile } from '../src/game/world/terrain';
+import { getBuilding } from '../src/game/data/buildings';
 
 Game.instantByDefault = true;
 
@@ -143,3 +144,74 @@ describe('rifornimenti dei reparti', () => {
     expect(c.troops.infantry).toBeLessThan(20);
   });
 });
+
+describe('il nostro assedio a un signore', () => {
+  function war() {
+    const st = createInitialState(21, 'Rocca', { preset: 'pianura', lords: 1 });
+    st.day = 220 * 360 + 100;
+    st.nextRaidDay = 1e9;
+    const g = new Game(st, () => 0.5);
+    Object.assign(g.state.resources, { wood: 1e5, stone: 1e5, lime: 1e5, coins: 1e5, grain: 5e3 });
+    g.storageCap = () => 1e9;
+    const [x, z] = g.homeSite();
+    g.place('keep_stone', x - 1, z - 1);
+    g.buildLordCastlesNow();
+    const l = g.lords()[0];
+    l.army = { infantry: 10, archers: 6, cavalry: 0 };
+    g.state.army = { infantry: 60, archers: 20, cavalry: 10 };
+    return { g, l };
+  }
+  function arrive(g: Game, l: ReturnType<typeof war>['l']) {
+    const c = g.formCompany({ infantry: 60, archers: 20, cavalry: 10, rams: 0, trebuchets: 0 })!;
+    const [kx, kz] = g.lordKeep(l);
+    c.x = kx + 0.5;
+    c.z = kz + 9.5;
+    expect(g.orderAttack([c.id], kx, kz).ok).toBe(true);
+    for (let i = 0; i < 400 && !g.state.offense; i++) g.advance(0.25);
+    return c;
+  }
+
+  it('davanti a una cinta chiusa ci si accampa invece di assaltare subito', () => {
+    const { g, l } = war();
+    expect(g.lordRingClosed(l)).toBe(true);
+    const c = arrive(g, l);
+    expect(g.state.offense?.lord).toBe(l.id);
+    expect(c.order).toBe('siege');
+    expect(l.status).toBe('war');
+    // Le macchine (dal 1100) bombardano il bersaglio scelto
+    g.setOffenseAim('gate');
+    g.advance(20);
+    expect(g.state.offense!.ladders).toBeGreaterThan(5);
+    const tb = l.buildings.find((b) => b.uid === g.state.offense!.target);
+    expect(tb && getBuildingFort(tb.defId)).toBe('gate');
+  });
+
+  it('l\'assalto si ordina quando si vuole; il castello cade e diventa vassallo', () => {
+    const { g, l } = war();
+    arrive(g, l);
+    g.advance(15);
+    expect(g.offenseAssault()).toBe(true);
+    // Con forze molto superiori il castello cade
+    expect(l.status).toBe('vassal');
+    expect(g.state.offense).toBeUndefined();
+  });
+
+  it('il blocco affama il signore che alla fine si arrende; si può anche togliere l\'assedio', () => {
+    const { g, l } = war();
+    arrive(g, l);
+    l.res!.food = 0;
+    g.state.offense!.sallyDay = 1e9;
+    for (let i = 0; i < 200 && g.state.offense; i++) g.advance(0.5);
+    expect(l.status).toBe('vassal');
+
+    const w = war();
+    arrive(w.g, w.l);
+    w.g.liftOffense();
+    expect(w.g.state.offense).toBeUndefined();
+    expect(w.g.companies().every((c) => c.order === 'home')).toBe(true);
+  });
+});
+
+function getBuildingFort(id: string) {
+  return getBuilding(id).fort;
+}

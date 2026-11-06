@@ -50,6 +50,7 @@ import {
   type GameState,
   type IncomingAttack,
   type Outcome,
+  type OffensiveSiege,
   type PlacedBuilding,
 } from './state';
 
@@ -1205,6 +1206,7 @@ export class Game {
 
     if (s.day >= s.nextRaidDay) this.track('Assedi dei predoni', () => this.resolveRaid(), 'event');
     if (s.siege) this.track('Assedi dei predoni', () => this.stepSiege(dt), 'event');
+    if (s.offense) this.stepOffense(dt);
     this.stepSupplies(dt);
     this.track('Assedi e spedizioni', () => this.stepWar(), 'event');
     this.track('Bottino riportato dai reparti', () => this.stepCompanies(dt), 'event');
@@ -1864,6 +1866,218 @@ export class Game {
       pz = z + 0.5;
     }
     return cost / v;
+  }
+
+  // ───────────── Il nostro assedio a un signore ─────────────
+
+  /** Un reparto arrivato alle mura di un signore si unisce all'assedio (o lo comincia). */
+  private joinOffense(c: Company, l: Lord) {
+    const s = this.state;
+    c.order = 'siege';
+    c.path = [];
+    if (!s.offense) {
+      if (l.status !== 'war') this.declareWar(l, 'Hai stretto d\'assedio il suo castello');
+      s.offense = {
+        lord: l.id,
+        companyIds: [],
+        camp: [Math.floor(c.x), Math.floor(c.z)],
+        startDay: s.day,
+        ladders: 0,
+        mangonels: 0,
+        aim: 'weakest',
+        starving: 0,
+        assaults: 0,
+        sallyDay: s.day + 10,
+        log: [],
+      };
+      this.offenseLog(`Ci accampiamo davanti a ${l.castle}: comincia l'assedio. I campi fuori dalle mura del signore non rendono più.`);
+      this.log(`⛺ Assedio a ${l.castle}! Prepara scale e macchine, scegli dove colpire e decidi tu quando assaltare.`, 'info');
+    }
+    if (!s.offense.companyIds.includes(c.id)) s.offense.companyIds.push(c.id);
+  }
+
+  private offenseLog(text: string) {
+    const o = this.state.offense;
+    if (!o) return;
+    o.log.push({ day: this.state.day, text });
+    if (o.log.length > 40) o.log.splice(0, o.log.length - 40);
+  }
+
+  /** Reparti che partecipano al nostro assedio. */
+  offenseCompanies(): Company[] {
+    const o = this.state.offense;
+    if (!o) return [];
+    return this.companies().filter((c) => o.companyIds.includes(c.id) && c.order === 'siege');
+  }
+
+  offenseTroops(): Force {
+    const t: Force = { infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0 };
+    for (const c of this.offenseCompanies()) for (const k of Object.keys(t) as Array<keyof Force>) t[k] += c.troops[k];
+    return t;
+  }
+
+  setOffenseAim(aim: OffensiveSiege['aim']) {
+    const o = this.state.offense;
+    if (!o) return;
+    o.aim = aim;
+    o.target = undefined;
+  }
+
+  /** Un giorno del nostro assedio: macchine, bombardamento, fame del castello, sortite. */
+  private stepOffense(dt: number) {
+    const s = this.state;
+    const o = s.offense;
+    if (!o) return;
+    const l = this.lord(o.lord);
+    const comps = this.offenseCompanies();
+    if (!l || !comps.length) {
+      this.endOffense('L\'assedio è finito: non ci sono più reparti nel campo.');
+      return;
+    }
+    if (l.status === 'vassal') {
+      this.endOffense(`${l.name} è ormai nostro vassallo: l'assedio è finito.`);
+      return;
+    }
+    const t = this.offenseTroops();
+    const size = t.infantry + t.archers + t.cavalry;
+    // Preparazione: scale e, dal 1100, mangani costruiti sul posto
+    o.ladders = Math.min(40, o.ladders + size * 0.02 * dt);
+    if (this.date.year >= 1100) o.mangonels = Math.min(5, o.mangonels + (size / 60) * 0.06 * dt);
+    // Bombardamento del tratto scelto
+    const engines = Math.floor(o.mangonels) + t.trebuchets * 2.5;
+    if (engines > 0) {
+      let target = o.target !== undefined ? l.buildings.find((b) => b.uid === o.target) : undefined;
+      if (!target || (target.hp ?? 1) <= 0) {
+        const forts = l.buildings.filter((b) => {
+          const f = getBuilding(b.defId).fort;
+          return f && f !== 'moat' && f !== 'keep' && (b.hp ?? 1) > 0;
+        });
+        const pref = forts.filter((b) => (o.aim === 'gate' ? getBuilding(b.defId).fort === 'gate' : o.aim === 'tower' ? getBuilding(b.defId).fort === 'tower' : true));
+        const pool = pref.length ? pref : forts;
+        // Il più vicino al campo tra quelli del tipo scelto; per "più debole" quello con meno punti vita
+        pool.sort((a, b) =>
+          o.aim === 'weakest'
+            ? (a.hp ?? 0) - (b.hp ?? 0)
+            : Math.hypot(a.x - o.camp[0], a.z - o.camp[1]) - Math.hypot(b.x - o.camp[0], b.z - o.camp[1]),
+        );
+        target = pool[0];
+        o.target = target?.uid;
+      }
+      if (target) {
+        target.hp = Math.max(0, (target.hp ?? this.maxHp(target)) - engines * 9 * dt);
+        if (target.hp <= 0) {
+          this.offenseLog(`Breccia! ${getBuilding(target.defId).name} del nemico crolla sotto i nostri colpi.`);
+          this.log(`🧱 Breccia nelle mura di ${l.castle}: è il momento di assaltare!`, 'good');
+          o.target = undefined;
+          this.syncLords(true);
+        }
+      }
+    }
+    // Fame nel castello assediato: senza cibo il signore si arrende
+    if ((l.res?.food ?? 0) < 1) o.starving += dt;
+    if (o.starving > 25) {
+      l.status = 'vassal';
+      l.relation = -30;
+      const coins = Math.floor(l.wealth * 0.4);
+      l.wealth -= coins;
+      for (const c of comps) {
+        c.cargo ??= {};
+        c.cargo.coins = (c.cargo.coins ?? 0) + Math.floor(coins / comps.length);
+      }
+      this.log(`👑 Affamato, ${l.name} apre le porte di ${l.castle}: si arrende e diventa nostro vassallo (bottino ${coins} monete nei carri).`, 'good');
+      this.endOffense(`${l.castle} si arrende per fame.`);
+      return;
+    }
+    // Sortita degli assediati se si sentono abbastanza forti
+    if (s.day >= o.sallyDay) {
+      o.sallyDay = s.day + 15 + this.random() * 15;
+      const theirs = l.army.infantry * 3 + l.army.archers * 1.5 + l.army.cavalry * 6;
+      const ours = t.infantry * 3 + t.archers * 1.5 + t.cavalry * 5;
+      if (theirs > ours * 0.5 && theirs > 20) {
+        const ratio = theirs / (theirs + ours);
+        const ourLoss = size * 0.12 * ratio;
+        for (const c of comps) {
+          const n = c.troops.infantry + c.troops.archers + c.troops.cavalry;
+          const k = n > 0 ? 1 - ourLoss / Math.max(1, size) : 1;
+          c.troops.infantry = Math.round(c.troops.infantry * k);
+          c.troops.archers = Math.round(c.troops.archers * k);
+          c.troops.cavalry = Math.round(c.troops.cavalry * k);
+        }
+        const theirLoss = (l.army.infantry + l.army.archers + l.army.cavalry) * 0.15 * (1 - ratio);
+        const tot = Math.max(1, l.army.infantry + l.army.archers + l.army.cavalry);
+        for (const k of ['infantry', 'archers', 'cavalry'] as const) l.army[k] = Math.max(0, l.army[k] - theirLoss * (l.army[k] / tot));
+        o.ladders *= 0.6;
+        o.mangonels = Math.floor(o.mangonels * 0.7);
+        const text = `Sortita degli assediati: perdiamo ${Math.round(ourLoss)} uomini e qualche macchina, loro ${Math.round(theirLoss)}.`;
+        this.offenseLog(text);
+        this.log(`⚔️ ${text}`, 'bad');
+        this.pruneCompanies();
+      }
+    }
+  }
+
+  /** Il giocatore ordina l'assalto. */
+  offenseAssault(): boolean {
+    const o = this.state.offense;
+    const comps = this.offenseCompanies();
+    if (!o || !comps.length) return false;
+    const l = this.lord(o.lord);
+    if (!l) return false;
+    const troops = this.offenseTroops();
+    const id = `off:${this.state.nextUid++}`;
+    for (const c of comps) c.engaged = id;
+    const soldiers = Math.max(1, troops.infantry + troops.archers + troops.cavalry);
+    const share = (fn: (c: Company) => number) => comps.reduce((s, c) => s + fn(c) * (c.troops.infantry + c.troops.archers + c.troops.cavalry), 0) / soldiers;
+    const a: IncomingAttack = {
+      id,
+      from: this.state.castleName,
+      troops,
+      stance: 'resolute',
+      departDay: this.state.day,
+      arriveDay: this.state.day,
+      tactics: { arrows: share((c) => FORMATIONS[c.formation ?? 'line'].arrows), melee: share((c) => FORMATIONS[c.formation ?? 'line'].attack) },
+    };
+    o.assaults++;
+    this.offenseLog(`Assalto n. ${o.assaults} con ${soldiers} soldati e ${Math.floor(o.ladders)} scale.`);
+    this.assaultLord(comps[0], a, { ladders: o.ladders, starving: o.starving });
+    // Esito: chi resta continua l'assedio, a meno che il castello sia caduto
+    if (!this.state.offense) return true;
+    if (l.status === 'vassal') {
+      this.endOffense(`${l.castle} è caduta!`);
+      return true;
+    }
+    o.ladders *= 0.4;
+    for (const c of this.companies()) if (o.companyIds.includes(c.id) && !c.engaged) c.order = 'siege';
+    return true;
+  }
+
+  /** Fine del nostro assedio: i reparti restano liberi (con il bottino nei carri). */
+  endOffense(reason: string) {
+    const o = this.state.offense;
+    if (!o) return;
+    this.offenseLog(reason);
+    for (const c of this.companies()) {
+      if (!o.companyIds.includes(c.id)) continue;
+      if (c.order === 'siege') c.order = 'idle';
+    }
+    (this.state.campaignLog ??= []).push({
+      day: this.state.day,
+      text: `Assedio di ${this.lord(o.lord)?.castle ?? '?'}: ${reason}`,
+      outcome: this.lord(o.lord)?.status === 'vassal' ? 'sacked' : 'repelled',
+      log: o.log.map((x) => x.text),
+    });
+    if (this.state.campaignLog.length > 10) this.state.campaignLog.shift();
+    this.state.offense = undefined;
+    this.syncLords(true);
+  }
+
+  /** Togliere l'assedio: i reparti tornano a casa. */
+  liftOffense() {
+    const o = this.state.offense;
+    if (!o) return;
+    const ids = this.offenseCompanies().map((c) => c.id);
+    this.endOffense('Togliamo l\'assedio.');
+    this.orderHome(ids);
   }
 
   // ───────────── Assedio a fasi ─────────────
@@ -2565,8 +2779,12 @@ export class Game {
         continue;
       }
       if (c.order === 'attack') {
-        if (this.nearEnemyWalls(c)) this.startAssault(c);
-        else if (arrived) c.order = 'idle';
+        if (this.nearEnemyWalls(c)) {
+          const l = this.state.match ? undefined : this.nearestLord(c.x, c.z);
+          // Castello con la cinta chiusa: ci si accampa e si assedia; altrimenti assalto subito
+          if (l && this.lordRingClosed(l) && (!this.state.offense || this.state.offense.lord === l.id)) this.joinOffense(c, l);
+          else this.startAssault(c);
+        } else if (arrived) c.order = 'idle';
       } else if (arrived && c.order === 'move') c.order = 'idle';
     }
   }
@@ -2999,8 +3217,9 @@ export class Game {
       l.wealth = 0;
       for (const k of ['infantry', 'archers', 'cavalry'] as const) l.army[k] *= 0.99;
     }
-    // Cibo e popolazione
-    r.food += st.prod.food;
+    // Cibo e popolazione (assediato da noi: i campi fuori dalle mura non rendono)
+    const blockaded = this.state.offense?.lord === l.id;
+    r.food += st.prod.food * (blockaded ? 0.15 : 1);
     const fed = st.use.food > 0 ? Math.min(1, r.food / st.use.food) : 1;
     r.food = Math.max(0, r.food - st.use.food);
     if (fed > 0.95 && l.pop! < st.housing) l.pop! += 0.03 + l.pop! * 0.001; // come la nostra gente
@@ -3494,18 +3713,23 @@ export class Game {
   }
 
   /** I nostri reparti assaltano il castello di un signore: l'assedio si risolve subito. */
-  private assaultLord(lead: Company, a: IncomingAttack) {
-    // Il signore è quello del castello più vicino
+  private nearestLord(x: number, z: number): Lord | undefined {
     let lord: Lord | undefined;
     let bd = Infinity;
     for (const l of this.lords()) {
-      const [x, z] = this.lordKeep(l);
-      const d = Math.hypot(x - lead.x, z - lead.z);
+      const [kx, kz] = this.lordKeep(l);
+      const d = Math.hypot(kx - x, kz - z);
       if (d < bd) {
         bd = d;
         lord = l;
       }
     }
+    return lord;
+  }
+
+  private assaultLord(lead: Company, a: IncomingAttack, extra: { ladders?: number; starving?: number } = {}) {
+    // Il signore è quello del castello più vicino
+    const lord = this.nearestLord(lead.x, lead.z);
     if (!lord) return;
     if (lord.status !== 'war') this.declareWar(lord, 'Hai assaltato le sue mura');
     const segments: SiegeSegment[] = [];
@@ -3523,6 +3747,8 @@ export class Game {
       armory: lord.level >= 4,
       cistern: lord.level >= 3,
       charcoal: lord.level >= 3 ? 20 : 0,
+      ladders: extra.ladders,
+      starving: extra.starving,
     };
     const army: AttackerArmy = { name: `L'esercito di ${this.state.castleName}`, ...a.troops, morale: 0.6, arrows: a.tactics?.arrows, melee: a.tactics?.melee };
     const res = resolveSiege(snap, army, this.random);

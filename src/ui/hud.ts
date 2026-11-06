@@ -208,6 +208,10 @@ export class Hud {
       } else if (t.dataset.act === 'ransom') {
         if (!g.payRansom()) this.toast('Non hai abbastanza monete per il riscatto.', 'bad');
       } else if (t.dataset.act === 'focus' && g.state.siege) this.cb.focus?.(...g.state.siege.camp);
+      else if (t.dataset.act === 'focus-off' && g.state.offense) this.cb.focus?.(...g.state.offense.camp);
+      else if (t.dataset.act === 'assault') g.offenseAssault();
+      else if (t.dataset.act === 'lift') g.liftOffense();
+      else if (t.dataset.act?.startsWith('aim-')) g.setOffenseAim(t.dataset.act.slice(4) as 'weakest' | 'gate' | 'tower');
     };
     root.append(this.top, build, this.panel, this.selPanel, this.compPanel, this.logEl, this.toastEl, this.hintEl);
     this.renderBuildList();
@@ -1339,14 +1343,13 @@ export class Hud {
     }
   }
 
-  /** Pannello dell'assedio in corso. */
-  private refreshSiege() {
+  /** Sezione dell'assedio che subiamo. */
+  private defenseHtml(): string {
     const g = this.game;
     const sg = g.state.siege;
-    this.siegePanel.classList.toggle('hidden', !sg);
     if (!sg) {
       this.siegeStart = -1;
-      return;
+      return '';
     }
     if (this.siegeStart !== sg.startDay) {
       // Inizio dell'assedio: si torna a velocità normale per seguirlo
@@ -1362,8 +1365,7 @@ export class Hud {
     const sortie = g.canSortie();
     const ransom = g.ransomCost();
     const engines = Math.floor(sg.mangonels) + t.trebuchets;
-    setHtml(
-      this.siegePanel,
+    return (
       `<div class="row"><strong class="bad">⚔️ Assedio — ${escapeHtml(sg.attacker)}</strong><span class="spacer"></span><span class="small muted">giorno ${Math.floor(g.state.day - sg.startDay) + 1}</span></div>
       <p class="small"><strong>${escapeHtml(ph.name)}</strong>${sg.phase !== 'assault' ? ` · assalto tra circa ${formatDuration(ph.days)}` : ''}</p>
       <p class="small">Assedianti: ${size} (🛡️${Math.round(t.infantry)} 🏹${Math.round(t.archers)} 🐎${Math.round(t.cavalry)}) · 🪜 ${Math.floor(sg.ladders)} scale · ${engines ? `🎯 ${engines} macchine` : 'nessuna macchina'}</p>
@@ -1376,8 +1378,46 @@ export class Hud {
         <button data-act="focus" class="link">📍 Campo nemico</button>
       </div>
       ${sortie.ok ? '' : `<p class="small muted">${escapeHtml(sortie.reason ?? '')}</p>`}
-      <ol class="small siege-log">${sg.log.slice(-4).map((l) => `<li>${escapeHtml(l.text)}</li>`).join('')}</ol>`,
+      <ol class="small siege-log">${sg.log.slice(-4).map((l) => `<li>${escapeHtml(l.text)}</li>`).join('')}</ol>`
     );
+  }
+
+  /** Sezione del nostro assedio a un signore. */
+  private offenseHtml(): string {
+    const g = this.game;
+    const o = g.state.offense;
+    if (!o) return '';
+    const l = g.lord(o.lord);
+    if (!l) return '';
+    const t = g.offenseTroops();
+    const size = Math.round(t.infantry + t.archers + t.cavalry);
+    const engines = Math.floor(o.mangonels) + t.trebuchets;
+    const tb = o.target !== undefined ? l.buildings.find((b) => b.uid === o.target) : undefined;
+    const tmax = tb ? g.maxHp(tb) : 0;
+    const enemy = Math.round((l.army.infantry + l.army.archers + l.army.cavalry) / 5) * 5;
+    const food = l.res?.food ?? 0;
+    const foodText = food < 1 ? `<span class="good">finito! (${Math.floor(o.starving)} giorni di fame, si arrendono dopo 25)</span>` : food < 200 ? 'scarseggia' : 'ancora abbondante';
+    const supply = Math.min(...g.offenseCompanies().map((c) => g.supplyDays(c)));
+    const aim = (id: string, label: string) => `<button data-act="aim-${id}" class="${o.aim === id ? 'active' : ''}">${label}</button>`;
+    return `<div class="row"><strong class="good">⛺ Assedio a ${escapeHtml(l.castle)}</strong><span class="spacer"></span><span class="small muted">giorno ${Math.floor(g.state.day - o.startDay) + 1}</span></div>
+      <p class="small">Nostri: ${size} (🛡️${t.infantry} 🏹${t.archers} 🐎${t.cavalry}) · 🪜 ${Math.floor(o.ladders)} scale · ${engines ? `🎯 ${engines} macchine` : 'nessuna macchina (mangani dal 1100, o porta i trabucchi)'}</p>
+      <div class="row small"><span>Bersaglio:</span>${aim('weakest', 'Più debole')}${aim('gate', 'Porta')}${aim('tower', 'Torre')}</div>
+      ${tb ? `<div class="row small"><span>${escapeHtml(getBuilding(tb.defId).name)}</span><div class="hp grow"><div class="hp-bar ${(tb.hp ?? 0) < tmax * 0.5 ? 'damaged' : ''}" style="width:${Math.round(((tb.hp ?? 0) / Math.max(1, tmax)) * 100)}%"></div></div></div>` : ''}
+      <p class="small">Difensori: circa ${enemy} soldati · cinta ${g.lordRingClosed(l) ? 'chiusa' : '<span class="good">aperta (breccia)</span>'} · cibo del castello: ${foodText}</p>
+      <p class="small ${supply < 8 ? 'bad' : ''}">🍞 Viveri del campo: ${isFinite(supply) ? formatDuration(supply) : '—'}</p>
+      <div class="row">
+        <button data-act="assault" class="primary" title="Tutti i reparti del campo assaltano: le scale preparate e le brecce aiutano">⚔️ Assalta ora</button>
+        <button data-act="lift" title="I reparti tornano al castello">🏳️ Togli l'assedio</button>
+        <button data-act="focus-off" class="link">📍 Campo</button>
+      </div>
+      <ol class="small siege-log">${o.log.slice(-4).map((x) => `<li>${escapeHtml(x.text)}</li>`).join('')}</ol>`;
+  }
+
+  /** Pannello degli assedi in corso (subiti e nostri). */
+  private refreshSiege() {
+    const html = [this.defenseHtml(), this.offenseHtml()].filter(Boolean).join('<hr>');
+    this.siegePanel.classList.toggle('hidden', !html);
+    if (html) setHtml(this.siegePanel, html);
   }
 
   refresh(speed: number) {

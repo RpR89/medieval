@@ -28,59 +28,118 @@ const stoneGeo = new THREE.IcosahedronGeometry(0.07, 0);
 const arrowGeo = new THREE.BoxGeometry(0.22, 0.012, 0.012);
 const puffGeo = new THREE.IcosahedronGeometry(0.2, 1);
 
+/** Un fronte d'assedio da disegnare: il nemico sotto le nostre mura, o noi sotto le sue. */
+interface Front {
+  key: string;
+  camp: [number, number];
+  /** Verso dove sono rivolte le macchine. */
+  facing: [number, number];
+  ladders: number;
+  mangonels: number;
+  trebuchets: number;
+  bombarding: boolean;
+  target?: [number, number];
+  assaults: number;
+  flag: THREE.Material;
+}
+
 export class SiegeView {
   readonly group = new THREE.Group();
-  private camp: THREE.Group | null = null;
-  private campKey = '';
+  private camps = new Map<string, { obj: THREE.Group; key: string; timer: number; assaults: number }>();
   private shots: Shot[] = [];
   private puffs: Puff[] = [];
-  private fireTimer = 0;
-  private lastAssaults = -1;
   private stoneMat = new THREE.MeshStandardMaterial({ color: 0x8a847a, roughness: 1 });
   private arrowMat = new THREE.MeshBasicMaterial({ color: 0x2a2018 });
   private puffMat = new THREE.MeshStandardMaterial({ color: 0xb8ad98, transparent: true, opacity: 0.6, depthWrite: false });
 
   constructor(private game: Game, private terrain: TerrainView) {}
 
-  update(dt: number) {
-    const sg = this.game.state.siege;
-    const key = sg ? `${sg.startDay}:${Math.floor(sg.ladders / 4)}:${Math.floor(sg.mangonels)}:${sg.troops.trebuchets}:${sg.camp}` : '';
-    if (key !== this.campKey) {
-      this.campKey = key;
-      if (this.camp) {
-        this.group.remove(this.camp);
-        this.camp.traverse((o) => {
-          if (o instanceof THREE.Mesh) o.geometry.dispose();
-        });
-        this.camp = null;
-      }
-      if (sg) {
-        this.camp = this.buildCamp(sg.camp, Math.floor(sg.ladders), Math.floor(sg.mangonels), sg.troops.trebuchets);
-        this.group.add(this.camp);
-      }
-    }
+  /** I fronti d'assedio attivi. */
+  private fronts(): Front[] {
+    const g = this.game;
+    const out: Front[] = [];
+    const sg = g.state.siege;
     if (sg) {
+      const target = sg.target !== undefined ? g.byUid(sg.target) : undefined;
+      const def = target ? getBuilding(target.defId) : undefined;
+      out.push({
+        key: 'def',
+        camp: sg.camp,
+        facing: g.keepCenter(),
+        ladders: sg.ladders,
+        mangonels: Math.floor(sg.mangonels),
+        trebuchets: sg.troops.trebuchets,
+        bombarding: sg.phase === 'bombard',
+        target: target && def ? [target.x + def.size[0] / 2, target.z + def.size[1] / 2] : undefined,
+        assaults: sg.assaults,
+        flag: mats().flagBlue,
+      });
+    }
+    const o = g.state.offense;
+    if (o) {
+      const l = g.lord(o.lord);
+      const tb = l && o.target !== undefined ? l.buildings.find((b) => b.uid === o.target) : undefined;
+      const def = tb ? getBuilding(tb.defId) : undefined;
+      const t = g.offenseTroops();
+      out.push({
+        key: 'off',
+        camp: o.camp,
+        facing: l ? g.lordKeep(l) : o.camp,
+        ladders: o.ladders,
+        mangonels: Math.floor(o.mangonels),
+        trebuchets: t.trebuchets,
+        bombarding: true,
+        target: tb && def ? [tb.x + def.size[0] / 2, tb.z + def.size[1] / 2] : undefined,
+        assaults: o.assaults,
+        flag: mats().flag,
+      });
+    }
+    return out;
+  }
+
+  update(dt: number) {
+    const seen = new Set<string>();
+    for (const f of this.fronts()) {
+      seen.add(f.key);
+      const key = `${f.camp}:${Math.floor(f.ladders / 4)}:${f.mangonels}:${f.trebuchets}`;
+      let c = this.camps.get(f.key);
+      if (!c || c.key !== key) {
+        if (c) this.dispose(c.obj);
+        const obj = this.buildCamp(f);
+        this.group.add(obj);
+        c = { obj, key, timer: 0, assaults: c?.assaults ?? f.assaults };
+        this.camps.set(f.key, c);
+      }
       // Bombardamento: un sasso ogni tanto per macchina, verso il tratto preso di mira
-      const engines = Math.floor(sg.mangonels) + sg.troops.trebuchets;
-      const target = sg.target !== undefined ? this.game.byUid(sg.target) : undefined;
-      if (sg.phase === 'bombard' && engines > 0 && target) {
-        this.fireTimer -= dt;
-        if (this.fireTimer <= 0) {
-          this.fireTimer = 2.4 / Math.min(4, engines) + Math.random() * 0.6;
-          const def = getBuilding(target.defId);
-          const tx = target.x + def.size[0] / 2 + (Math.random() - 0.5) * 0.4;
-          const tz = target.z + def.size[1] / 2 + (Math.random() - 0.5) * 0.4;
-          const [cx, cz] = sg.camp;
-          const fx = cx + 0.5 + (Math.random() - 0.5) * 2;
-          const fz = cz + 0.5 + (Math.random() - 0.5) * 2;
+      const engines = f.mangonels + f.trebuchets;
+      if (f.bombarding && engines > 0 && f.target) {
+        c.timer -= dt;
+        if (c.timer <= 0) {
+          c.timer = 2.4 / Math.min(4, engines) + Math.random() * 0.6;
+          const tx = f.target[0] + (Math.random() - 0.5) * 0.4;
+          const tz = f.target[1] + (Math.random() - 0.5) * 0.4;
+          const fx = f.camp[0] + 0.5 + (Math.random() - 0.5) * 2;
+          const fz = f.camp[1] + 0.5 + (Math.random() - 0.5) * 2;
           this.shoot(new THREE.Vector3(fx, this.terrain.heightAt(fx, fz) + 1.2, fz), new THREE.Vector3(tx, this.terrain.heightAt(tx, tz) + 0.8, tz), 1.6, false);
         }
       }
       // Assalto: nugoli di frecce in entrambe le direzioni
-      if (this.lastAssaults >= 0 && sg.assaults > this.lastAssaults) this.volley(sg.camp);
-      this.lastAssaults = sg.assaults;
-    } else this.lastAssaults = -1;
+      if (f.assaults > c.assaults) this.volley(f.camp, f.facing);
+      c.assaults = f.assaults;
+    }
+    for (const [k, c] of this.camps) {
+      if (seen.has(k)) continue;
+      this.dispose(c.obj);
+      this.camps.delete(k);
+    }
     this.animate(dt);
+  }
+
+  private dispose(obj: THREE.Object3D) {
+    this.group.remove(obj);
+    obj.traverse((o) => {
+      if (o instanceof THREE.Mesh) o.geometry.dispose();
+    });
   }
 
   /** Lancia un proiettile lungo un arco. */
@@ -92,8 +151,8 @@ export class SiegeView {
   }
 
   /** Frecce dalle mura verso il campo e dal campo verso le mura. */
-  private volley(camp: [number, number]) {
-    const [kx, kz] = this.game.keepCenter();
+  private volley(camp: [number, number], walls: [number, number]) {
+    const [kx, kz] = walls;
     const [cx, cz] = camp;
     for (let i = 0; i < 60; i++) {
       const out = i % 2 === 0;
@@ -148,10 +207,11 @@ export class SiegeView {
     this.puffs.push({ mesh, t: 0 });
   }
 
-  private buildCamp(at: [number, number], ladders: number, mangonels: number, trebuchets: number): THREE.Group {
+  private buildCamp(f: Front): THREE.Group {
+    const { camp: at, ladders, mangonels, trebuchets } = f;
     const k = mats();
     const g = new THREE.Group();
-    const [cx, cz] = this.game.keepCenter();
+    const [cx, cz] = f.facing;
     const toward = Math.atan2(-(cz - at[1]), cx - at[0]);
     // Tende in cerchio attorno ai fuochi
     for (let i = 0; i < 9; i++) {
@@ -164,7 +224,7 @@ export class SiegeView {
     g.add(cyl(0.18, 0.2, 0.05, k.stoneDark, 0, 0, 0, 8));
     g.add(box(0.12, 0.08, 0.12, k.fire, 0, 0.04, 0));
     g.add(smoke(0, 0.15, 0, 4, 0.8));
-    g.add(flag(k.flagBlue, 0.4, 0.9, 0.3, 0.3));
+    g.add(flag(f.flag, 0.4, 0.9, 0.3, 0.3));
     g.add(cyl(0.02, 0.02, 0.95, k.beam, 0.4, 0, 0.3, 4));
     // Scale accatastate
     for (let i = 0; i < Math.min(8, Math.ceil(ladders / 4)); i++) {

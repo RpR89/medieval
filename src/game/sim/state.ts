@@ -157,6 +157,25 @@ export interface ActiveSiege {
   log: Array<{ day: number; text: string }>;
 }
 
+/** Il nostro assedio al castello di un signore: lo decidiamo noi, fase per fase. */
+export interface OffensiveSiege {
+  lord: number;
+  companyIds: string[];
+  camp: [number, number];
+  startDay: number;
+  ladders: number;
+  mangonels: number;
+  /** Dove tirano le macchine: tratto più debole, porta o torre. */
+  aim: 'weakest' | 'gate' | 'tower';
+  target?: number;
+  /** Giorni di fame nel castello assediato. */
+  starving: number;
+  assaults: number;
+  /** Prossima sortita possibile degli assediati. */
+  sallyDay: number;
+  log: Array<{ day: number; text: string }>;
+}
+
 /** Esercito nemico in marcia verso il proprio castello. */
 export interface IncomingAttack {
   id: string;
@@ -200,6 +219,8 @@ export interface GameState {
   explored?: string;
   /** Assedio in corso. */
   siege?: ActiveSiege;
+  /** Nostro assedio in corso a un signore. */
+  offense?: OffensiveSiege;
   /** Partita multigiocatore: id e posto (0 = chi l'ha creata, 1 = chi si è unito). */
   match?: { id: string; slot: 0 | 1 };
   /** Signori controllati dal gioco (solo in giocatore singolo). */
