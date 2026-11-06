@@ -690,6 +690,19 @@ function moundRadius(base: number, top: number, t: number): number {
 }
 
 /**
+ * Deformazione della collina all'angolo a e all'altezza relativa t: pianta ovale,
+ * fianchi ondulati e gobbe di terra. Restituisce il fattore sul raggio e lo
+ * spostamento verticale (in frazione dell'altezza). Nulla alla base e in cima per le gobbe.
+ */
+function moundShape(a: number, t: number, seed: number, wobble: number): { k: number; dy: number } {
+  const wave = Math.sin(a * 3 + seed) * 0.5 + Math.sin(a * 5 + seed * 2.3) * 0.3 + Math.sin(a * 9 + seed * 4.1) * 0.2;
+  const oval = 0.07 * Math.cos(2 * (a - seed));
+  const k = 1 + wobble * (1 - t * 0.5) * wave + oval * (wobble > 0.03 ? 1 : 0.3);
+  const dy = wobble > 0.03 ? 0.07 * Math.sin(PI * t) * (Math.sin(a * 4 + seed * 1.7) + 0.5 * Math.sin(a * 7 + seed)) : 0;
+  return { k, dy };
+}
+
+/**
  * Collina di terra liscia (tornio) con il bordo leggermente irregolare. Con t0/t1 e phi
  * si ottiene solo una fascia o uno spicchio della stessa superficie (zolle di terra, sentieri).
  */
@@ -699,13 +712,13 @@ function mound(
 ): THREE.Mesh {
   const { t0 = 0, t1 = 1, phi0 = 0, phiLen = PI * 2, lift = 0, cap = true } = opts;
   const pts: THREE.Vector2[] = [];
-  const n = Math.max(3, Math.round(14 * (t1 - t0)));
+  const n = Math.max(4, Math.round(22 * (t1 - t0)));
   for (let i = 0; i <= n; i++) {
     const t = t0 + ((t1 - t0) * i) / n;
     pts.push(new THREE.Vector2(moundRadius(base, top, t) + lift, t * h));
   }
   if (cap && t1 >= 1) pts.push(new THREE.Vector2(0, h));
-  const geo = new THREE.LatheGeometry(pts, Math.max(6, Math.round((48 * phiLen) / (PI * 2))), phi0, phiLen);
+  const geo = new THREE.LatheGeometry(pts, Math.max(8, Math.round((72 * phiLen) / (PI * 2))), phi0, phiLen);
   const pos = geo.getAttribute('position') as THREE.BufferAttribute;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
@@ -714,9 +727,10 @@ function mound(
     if (r < 1e-4) continue;
     const a = Math.atan2(z, x);
     const t = pos.getY(i) / h;
-    const k = 1 + wobble * (1 - t * 0.6) * (Math.sin(a * 3 + seed) * 0.6 + Math.sin(a * 7 + seed * 2.3) * 0.4);
+    const { k, dy } = moundShape(a, t, seed, wobble);
     pos.setX(i, x * k);
     pos.setZ(i, z * k);
+    pos.setY(i, pos.getY(i) + dy * h);
   }
   geo.computeVertexNormals();
   const mesh = new THREE.Mesh(geo, m);
@@ -738,6 +752,12 @@ export function keepWood(g: G, c: ModelCtx) {
   const H = 1.1;
   const topR = 0.8;
   const seed = (c.seed ?? 1) * 0.37;
+  /** Irregolarità dei fianchi. */
+  const W = 0.09;
+  const at = (a: number, t: number, r: number): [number, number, number] => {
+    const { k: f, dy } = moundShape(a, t, seed, W);
+    return [Math.cos(a) * r * f, 0.04 + (t + dy) * H, Math.sin(a) * r * f];
+  };
   // Fossato: anello di terra scura scavato attorno alla collina, con l'argine esterno erboso
   const ditch = new THREE.Mesh(new THREE.RingGeometry(1.28, 1.47, 48, 1), k.soil);
   ditch.rotation.x = -PI / 2;
@@ -746,12 +766,21 @@ export function keepWood(g: G, c: ModelCtx) {
   g.add(ditch);
   g.add(mound(1.5, 1.44, 0.09, 0.0, seed + 3, k.grassMound, 0.015, { cap: false }));
   // Collina: profilo continuo e concavo, con il bordo un po' irregolare come un vero terrapieno
-  g.add(mound(1.34, topR, H, 0.04, seed, k.grassMound, 0.05));
+  g.add(mound(1.22, topR, H, 0.04, seed, k.grassMound, W));
   // Terra smossa alla base (dove si è scavato il fossato) e sentieri erosi che salgono
-  g.add(mound(1.34, topR, H, 0.04, seed, k.earth, 0.05, { t0: 0, t1: 0.16, lift: 0.006, cap: false }));
-  for (let i = 0; i < 4; i++) {
+  g.add(mound(1.22, topR, H, 0.04, seed, k.earth, W, { t0: 0, t1: 0.14, lift: 0.006, cap: false }));
+  for (let i = 0; i < 3; i++) {
     const phi0 = rand() * PI * 2;
-    g.add(mound(1.34, topR, H, 0.04, seed, k.earth, 0.05, { t0: 0.1, t1: 0.55 + rand() * 0.35, phi0, phiLen: 0.12 + rand() * 0.18, lift: 0.006, cap: false }));
+    g.add(mound(1.22, topR, H, 0.04, seed, k.earth, W, { t0: 0.1, t1: 0.4 + rand() * 0.4, phi0, phiLen: 0.05 + rand() * 0.05, lift: 0.006, cap: false }));
+  }
+  // Smottamenti: gobbe di terra erbosa alla base dei fianchi
+  for (let i = 0; i < 3; i++) {
+    const a = rand() * PI * 2;
+    const [px, , pz] = at(a, 0.1, moundRadius(1.22, topR, 0.1) - 0.02);
+    const lump = sphere(0.22 + rand() * 0.08, k.grassMound, px, -0.02, pz, 2);
+    lump.scale.set(0.8, 0.9 + rand() * 0.4, 1.3);
+    lump.rotation.y = -a;
+    g.add(lump);
   }
   // Sassi nel fossato
   for (let i = 0; i < 6; i++) {
@@ -761,26 +790,36 @@ export function keepWood(g: G, c: ModelCtx) {
     g.add(st);
   }
   // Sommità spianata di terra battuta
-  const top = new THREE.Mesh(new THREE.CircleGeometry(topR - 0.02, 32), k.earth);
+  const topGeo = new THREE.CircleGeometry(topR - 0.01, 48);
+  const tp = topGeo.getAttribute('position') as THREE.BufferAttribute;
+  for (let i = 0; i < tp.count; i++) {
+    const x = tp.getX(i);
+    const y = tp.getY(i);
+    // Il cerchio è nel piano XY e poi ruotato: y diventa -z
+    const f = moundShape(Math.atan2(-y, x), 1, seed, W).k;
+    tp.setX(i, x * f);
+    tp.setY(i, y * f);
+  }
+  const top = new THREE.Mesh(topGeo, k.earth);
   top.rotation.x = -PI / 2;
-  top.position.y = H + 0.045;
+  top.position.y = H + 0.046;
   top.receiveShadow = true;
   g.add(top);
   // Cespugli e sassi sui fianchi, solchi di terra lasciati dalla pioggia
   for (let i = 0; i < 10; i++) {
     const a = rand() * PI * 2;
     const t = 0.15 + rand() * 0.6;
-    const r = moundRadius(1.34, topR, t) + 0.01;
+    const [px, py, pz] = at(a, t, moundRadius(1.22, topR, t) + 0.01);
     if (i < 6) {
       // Cespuglio: tre palle di fogliame ravvicinate
       for (let j = 0; j < 3; j++) {
         const rr = 0.035 + rand() * 0.03;
-        const b = sphere(rr, k.leafGreen, Math.cos(a) * r + (rand() - 0.5) * 0.08, t * H + rr * 0.6, Math.sin(a) * r + (rand() - 0.5) * 0.08, 1);
+        const b = sphere(rr, k.leafGreen, px + (rand() - 0.5) * 0.08, py + rr * 0.3, pz + (rand() - 0.5) * 0.08, 1);
         b.scale.y = 0.75;
         g.add(b);
       }
     } else {
-      const st = box(0.07, 0.04, 0.05, k.stoneDark, Math.cos(a) * r, t * H, Math.sin(a) * r);
+      const st = box(0.07, 0.04, 0.05, k.stoneDark, px, py - 0.02, pz);
       st.rotation.y = rand() * PI;
       g.add(st);
     }
@@ -793,8 +832,11 @@ export function keepWood(g: G, c: ModelCtx) {
     const r1 = rand();
     if ((a > PI * 0.15 && a < PI * 0.33) || (ruin && r1 < 0.6)) continue;
     const h = 0.4 + r1 * 0.05;
-    g.add(cyl(0.032, 0.036, h, k.log, Math.cos(a) * (topR - 0.04), y0, Math.sin(a) * (topR - 0.04), 6));
-    g.add(cone(0.032, 0.07, k.log, Math.cos(a) * (topR - 0.04), y0 + h, Math.sin(a) * (topR - 0.04), 6));
+    const f = moundShape(a, 1, seed, W).k;
+    const sx = Math.cos(a) * (topR - 0.05) * f;
+    const sz = Math.sin(a) * (topR - 0.05) * f;
+    g.add(cyl(0.032, 0.036, h, k.log, sx, y0 - 0.03, sz, 6));
+    g.add(cone(0.032, 0.07, k.log, sx, y0 - 0.03 + h, sz, 6));
   }
   // Ponte su cavalletti dalla sommità al cortile (verso l'angolo +x +z)
   const br = new THREE.Group();
