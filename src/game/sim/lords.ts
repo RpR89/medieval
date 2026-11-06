@@ -1,6 +1,7 @@
 import { getBuilding } from '../data/buildings';
 import { mulberry32, isBuildableLand, tileAt, type Terrain } from '../world/terrain';
 import type { Company, PlacedBuilding } from './state';
+import type { FactionId } from '../data/factions';
 
 /** Signori controllati dal gioco, con il loro castello sulla mappa. */
 
@@ -27,6 +28,8 @@ export interface Lord {
   pop?: number;
   /** Cantieri e lavori in corso. */
   jobs?: LordJob[];
+  /** Schieramento del signore. */
+  faction?: FactionId;
 }
 
 export interface LordResources {

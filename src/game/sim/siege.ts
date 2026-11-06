@@ -38,6 +38,9 @@ export interface DefenderSnapshot {
   moat: { tiles: number; coverage: number; depth: number; flooded: number; stakes: number };
   army: Troops;
   armory: boolean;
+  /** Moltiplicatori dello schieramento: forza della guarnigione e tiro degli arcieri. */
+  defenseMul?: number;
+  archerMul?: number;
   cistern: boolean;
   charcoal: number;
 }
@@ -162,7 +165,7 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
     damage.set(s.uid, s.hp);
   };
   const atkStart = total(atk);
-  const armoryMul = def.armory ? 1.2 : 1;
+  const armoryMul = (def.armory ? 1.2 : 1) * (def.defenseMul ?? 1);
   const arrowsF = atkIn.arrows ?? 1;
   const meleeF = atkIn.melee ?? 1;
   let charcoal = def.charcoal;
@@ -187,7 +190,7 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
     const wallShare = walls().length ? walkways / walls().length : 0;
     const tw = towers();
     const height = 1 + 0.5 * wallShare + Math.min(1, tw.length * 0.1);
-    let f = gar.archers * 1.0 * height * armoryMul + gar.infantry * 0.25;
+    let f = gar.archers * 1.0 * height * armoryMul * (def.archerMul ?? 1) + gar.infantry * 0.25;
     for (const t of tw) f += (2 + upFire(t)) * health(t);
     // Le difese delle mura servono solo se ci sono uomini a presidiarle
     let structural = 0;

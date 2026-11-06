@@ -21,6 +21,7 @@ import {
 } from '../data/resources';
 import { CARRY, ENGINES, FORMATIONS, MARCH_SPEED, SOLDIER_FOOD, STANCES, UNITS, type Behavior, type EngineType, type Formation, type Stance } from '../data/units';
 import { CASTLE_LEVELS, KEEP_EVOLVE, UPGRADE_BY_ID, upgradesFor, type UpgradeDef } from '../data/upgrades';
+import { factionEffects, FACTIONS, type FactionDef, type FactionEffects } from '../data/factions';
 import {
   generateTerrain,
   isBuildableLand,
@@ -198,6 +199,40 @@ export class Game {
     this.lastSeasonIndex = seasonIndex(d.season);
     this.lastYear = d.year;
     if (state.lords?.length) this.syncLords(true);
+  }
+
+  // ───────────── Schieramento ─────────────
+
+  /** Effetti dello schieramento scelto. */
+  fx(): FactionEffects {
+    return factionEffects(this.state.faction);
+  }
+
+  faction(): FactionDef | undefined {
+    return this.state.faction ? FACTIONS[this.state.faction] : undefined;
+  }
+
+  private scaleCost(cost: Cost, mul: number): Cost {
+    if (mul === 1) return cost;
+    const out: Cost = {};
+    for (const [id, n] of Object.entries(cost)) out[id as ResourceId] = Math.ceil((n ?? 0) * mul);
+    return out;
+  }
+
+  /** Costo di un edificio per il nostro schieramento. */
+  costOf(def: BuildingDef): Cost {
+    const stoneFort = !!def.fort && def.fort !== 'moat' && (def.cost.stone ?? 0) > 0;
+    return this.scaleCost(def.cost, stoneFort ? this.fx().stoneFortCost ?? 1 : 1);
+  }
+
+  /** Costo di un miglioramento per il nostro schieramento. */
+  upgradeCostOf(u: UpgradeDef): Cost {
+    return this.scaleCost(u.cost, u.id === 'great_hall' || u.id === 'palace' ? this.fx().hallCost ?? 1 : 1);
+  }
+
+  /** Costo di un'unità per il nostro schieramento. */
+  unitCost(unit: UnitType): Cost {
+    return this.scaleCost(UNITS[unit].cost, unit === 'cavalry' ? this.fx().cavalryCost ?? 1 : 1);
   }
 
   // ───────────── Eventi ─────────────
@@ -517,6 +552,7 @@ export class Game {
   }
 
   moatFlooded(b: PlacedBuilding): boolean {
+    if (this.fx().floodedMoats && !this.isForeign(b) && b.defId === 'moat') return true;
     return this.analysis().flooded.has(b.uid);
   }
 
@@ -531,6 +567,8 @@ export class Game {
     if (!def.hp) return 0;
     let hp = def.hp;
     for (const u of b.upgrades ?? []) hp *= UPGRADE_BY_ID[u]?.hpMul ?? 1;
+    // Lo schieramento conta solo per i nostri edifici
+    if (!this.isForeign(b) && def.fort && def.fort !== 'keep' && def.fort !== 'moat') hp *= this.fx().fortHp ?? 1;
     return Math.round(hp);
   }
 
@@ -596,7 +634,7 @@ export class Game {
     if (u.needsMoat && !this.gateHasMoat(b)) return { ok: false, reason: 'Serve un fossato davanti alla porta' };
     if (u.minPop && this.state.population < u.minPop) return { ok: false, reason: `Servono ${u.minPop} abitanti` };
     if (this.hpState(b) === 'ruin') return { ok: false, reason: 'Prima va riparato' };
-    if (!canAfford(this.state.resources, u.cost)) return { ok: false, reason: 'Risorse insufficienti' };
+    if (!canAfford(this.state.resources, this.upgradeCostOf(u))) return { ok: false, reason: 'Risorse insufficienti' };
     return { ok: true };
   }
 
@@ -614,9 +652,10 @@ export class Game {
   private startUpgrade(b: PlacedBuilding, upId: string): boolean {
     if (!this.canUpgrade(b, upId).ok) return false;
     const u = UPGRADE_BY_ID[upId];
-    pay(this.state.resources, u.cost);
+    const cost = this.upgradeCostOf(u);
+    pay(this.state.resources, cost);
     if (this.instantBuild) this.applyUpgrade(b, upId);
-    else this.jobs().push({ id: this.newJobId(), kind: 'upgrade', uid: b.uid, upId, work: Game.workFor(u.cost), done: 0, cost: { ...u.cost } });
+    else this.jobs().push({ id: this.newJobId(), kind: 'upgrade', uid: b.uid, upId, work: Game.workFor(u.cost), done: 0, cost: { ...cost } });
     return true;
   }
 
@@ -730,7 +769,7 @@ export class Game {
     }
     const t = this.terrainCheck(def, x, z);
     if (!t.ok) return t;
-    if (!canAfford(this.state.resources, def.cost)) return { ok: false, reason: 'Risorse insufficienti' };
+    if (!canAfford(this.state.resources, this.costOf(def))) return { ok: false, reason: 'Risorse insufficienti' };
     return { ok: true };
   }
 
@@ -781,7 +820,8 @@ export class Game {
   private placeQuiet(defId: string, x: number, z: number): PlacedBuilding | null {
     if (!this.canPlace(defId, x, z).ok) return null;
     const def = getBuilding(defId);
-    pay(this.state.resources, def.cost);
+    const cost = this.costOf(def);
+    pay(this.state.resources, cost);
     const b: PlacedBuilding = { uid: this.state.nextUid++, defId, x, z, upgrades: [] };
     if (def.herd) b.herd = def.herd.start;
     if (def.hp) b.hp = def.hp;
@@ -789,7 +829,7 @@ export class Game {
     if (this.instantBuild) this.state.buildings.push(b);
     else {
       this.sites().push(b);
-      this.jobs().push({ id: this.newJobId(), kind: 'build', uid: b.uid, work: this.buildWork(def), done: 0, cost: { ...def.cost } });
+      this.jobs().push({ id: this.newJobId(), kind: 'build', uid: b.uid, work: this.buildWork(def), done: 0, cost: { ...cost } });
     }
     return b;
   }
@@ -841,7 +881,7 @@ export class Game {
     if (i < 0) return false;
     const b = this.state.buildings[i];
     const def = getBuilding(b.defId);
-    for (const [id, n] of Object.entries(def.cost)) {
+    for (const [id, n] of Object.entries(this.costOf(def))) {
       this.state.resources[id as ResourceId] += Math.floor((n ?? 0) * 0.5);
     }
     if (def.herd && b.herd) this.slaughter(def.herd.species, Math.floor(b.herd));
@@ -864,7 +904,7 @@ export class Game {
     if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
     if (!this.has((d) => d.trains === unit)) return { ok: false, reason: 'Serve l\'edificio di addestramento' };
     if (this.state.population < 2) return { ok: false, reason: 'Non ci sono abbastanza abitanti' };
-    if (!canAfford(this.state.resources, UNITS[unit].cost)) return { ok: false, reason: 'Risorse insufficienti' };
+    if (!canAfford(this.state.resources, this.unitCost(unit))) return { ok: false, reason: 'Risorse insufficienti' };
     return { ok: true };
   }
 
@@ -875,7 +915,7 @@ export class Game {
   private recruitImpl(unit: UnitType, n: number): number {
     let done = 0;
     for (let i = 0; i < n && this.canRecruit(unit).ok; i++) {
-      pay(this.state.resources, UNITS[unit].cost);
+      pay(this.state.resources, this.unitCost(unit));
       this.state.population -= 1;
       this.state.army[unit] += 1;
       done++;
@@ -902,11 +942,11 @@ export class Game {
   }
 
   buyPrice(id: ResourceId): number {
-    return Math.ceil(this.price(id) * 1.25 * 10) / 10;
+    return Math.ceil(this.price(id) * 1.25 * (this.fx().buy ?? 1) * 10) / 10;
   }
 
   sellPrice(id: ResourceId): number {
-    return Math.floor(this.price(id) * 0.8 * 10) / 10;
+    return Math.floor(this.price(id) * 0.8 * (this.fx().sell ?? 1) * 10) / 10;
   }
 
   trade(id: ResourceId, amount: number): PlaceCheck {
@@ -1021,7 +1061,7 @@ export class Game {
     if (fed < 0.99) {
       s.population -= pop * 0.01 * (1 - fed) * dt;
     } else if (pop < a.housing && hm >= 30) {
-      const growth = (0.03 + pop * 0.0008) * (1 + 0.08 * Math.max(0, variety - 1)) * Math.min(1.5, hm / 55);
+      const growth = (0.03 + pop * 0.0008) * (1 + 0.08 * Math.max(0, variety - 1)) * Math.min(1.5, hm / 55) * (this.fx().growth ?? 1);
       s.population = Math.min(a.housing, pop + growth * dt);
     }
     if (hm < 30) s.population -= pop * 0.004 * ((30 - hm) / 30) * dt;
@@ -1101,7 +1141,8 @@ export class Game {
         }
         for (const [id, n] of Object.entries(def.consumes)) r[id as ResourceId] -= (n ?? 0) * factor;
       }
-      for (const [id, n] of Object.entries(def.produces)) r[id as ResourceId] += (n ?? 0) * factor;
+      const fp = this.fx().produce ?? {};
+      for (const [id, n] of Object.entries(def.produces)) r[id as ResourceId] += (n ?? 0) * factor * (fp[id as ResourceId] ?? 1);
     }
     if (def.herd && b.herd !== undefined) this.stepHerd(b, def, si, staffing, dt);
   }
@@ -1503,7 +1544,7 @@ export class Game {
       if (def.fort === 'moat') {
         moatTiles++;
         depth += this.moatDepth(b);
-        if (a.flooded.has(b.uid)) flooded++;
+        if (this.moatFlooded(b)) flooded++;
         if (b.upgrades?.includes('stakes')) stakes++;
         continue;
       }
@@ -1515,7 +1556,7 @@ export class Game {
         hp: b.hp ?? this.maxHp(b),
         maxHp: this.maxHp(b),
         upgrades: [...(def.builtIn ?? []), ...(b.upgrades ?? [])],
-        defense: def.defense ?? 0,
+        defense: (def.defense ?? 0) * (def.fort === 'tower' || def.fort === 'keep' ? this.fx().towerDefense ?? 1 : 1),
         moatAhead: def.fort === 'gate' ? this.gateHasMoat(b) : undefined,
       });
     }
@@ -1533,6 +1574,8 @@ export class Game {
       armory: this.state.buildings.some((b) => b.upgrades?.includes('armory')),
       cistern: this.state.buildings.some((b) => b.upgrades?.includes('cistern')),
       charcoal: this.state.resources.charcoal,
+      defenseMul: (this.fx().siegeDefense ?? 1) * (this.fx().towerDefense ? 1 + (this.fx().towerDefense! - 1) * 0.5 : 1),
+      archerMul: this.fx().archers,
     };
   }
 
@@ -1550,7 +1593,7 @@ export class Game {
             : 'Una compagnia di ventura';
     // La ricchezza attira predoni, ma con un tetto: conta soprattutto l'epoca
     const wealth = Math.min(30, s.resources.coins / 150 + s.population * 0.15);
-    const size = Math.round((8 + (year - 900) / 14 + wealth * 0.5) * (0.8 + this.random() * 0.4));
+    const size = Math.round((8 + (year - 900) / 14 + wealth * 0.5) * (0.8 + this.random() * 0.4) * (this.fx().raids ?? 1));
     const archers = Math.round(size * 0.25);
     const cavalry = Math.round(size * (year >= 950 ? 0.15 : 0.05));
     return {
@@ -1567,7 +1610,7 @@ export class Game {
   private resolveRaid() {
     const s = this.state;
     const army = this.raiderArmy();
-    s.nextRaidDay = s.day + 300 + this.random() * 300;
+    s.nextRaidDay = s.day + (300 + this.random() * 300) / (this.fx().raids ?? 1);
     this.besiege(army);
   }
 
@@ -2403,7 +2446,8 @@ export class Game {
     for (const b of l.buildings) {
       const def = getBuilding(b.defId);
       const k = staffing * (def.seasonal ? (avg ? def.seasonal.reduce((a, b) => a + b, 0) / 4 : def.seasonal[si]) : 1);
-      for (const [id, v] of Object.entries(def.produces ?? {})) add(prod, id, (v ?? 0) * k);
+      const lfx = factionEffects(l.faction).produce ?? {};
+      for (const [id, v] of Object.entries(def.produces ?? {})) add(prod, id, (v ?? 0) * k * (lfx[id as ResourceId] ?? 1));
       for (const [id, v] of Object.entries(def.consumes ?? {})) add(use, id, (v ?? 0) * k);
       if (def.herd) prod.food += 0.8;
     }
@@ -2421,7 +2465,7 @@ export class Game {
     r.wood += st.prod.wood - st.use.wood * conv;
     r.stone += st.prod.stone - st.use.stone * conv;
     r.lime += st.prod.lime * conv;
-    l.wealth += st.prod.coins + l.pop! * TAX_PER_PERSON * 1.1 - st.soldiers * 0.12 - st.builders * BUILDER_WAGE;
+    l.wealth += st.prod.coins + l.pop! * TAX_PER_PERSON * 1.1 * (factionEffects(l.faction).taxes ?? 1) - st.soldiers * 0.12 - st.builders * BUILDER_WAGE;
     if (l.wealth < 0) {
       l.wealth = 0;
       for (const k of ['infantry', 'archers', 'cavalry'] as const) l.army[k] *= 0.99;
@@ -3040,7 +3084,7 @@ export class Game {
     c.path = findPath(this.terrain.size, [Math.floor(c.x), Math.floor(c.z)], [Math.floor(hx), Math.floor(hz)], (x, z) => this.envoyMoveCost(x, z));
     if (!l) return;
     const giftValue = Object.entries(e.gift ?? {}).reduce((s, [id, n]) => s + (n ?? 0) * RESOURCES[id as ResourceId].basePrice, 0);
-    const bonus = Math.min(40, giftValue / 12);
+    const bonus = Math.min(40, (giftValue / 12) * (this.fx().diplomacy ?? 1));
     const luck = this.random() * 20 - 10;
     // In guerra il diplomatico rischia la vita
     if (l.status === 'war' && e.mission !== 'peace' && this.random() < 0.25) {
@@ -3128,7 +3172,7 @@ export class Game {
 
   /** Gettito giornaliero delle tasse. */
   taxPerDay(): number {
-    return this.state.population * TAX_PER_PERSON * this.analysis().taxMul * TAX_LEVELS[this.taxLevel()].mul;
+    return this.state.population * TAX_PER_PERSON * this.analysis().taxMul * TAX_LEVELS[this.taxLevel()].mul * (this.fx().taxes ?? 1);
   }
 
   /** Bilancio mensile delle monete: entrate, uscite, saldo e resa per abitante. */
@@ -3161,6 +3205,7 @@ export class Game {
     if (crowd > 1) parts.push(['Sovraffollamento', -12]);
     else if (crowd < 0.85) parts.push(['Case spaziose', 4]);
     if (this.has((d) => !!d.market)) parts.push(['Mercato', 5]);
+    if (this.fx().mood) parts.push([`${this.faction()!.name}`, this.fx().mood!]);
     if (this.state.lastSiege && this.state.day - this.state.lastSiege.day < 120 && this.state.lastSiege.outcome !== 'repelled') {
       parts.push(['Saccheggio recente', -15]);
     }
@@ -3211,11 +3256,11 @@ export class Game {
 
   /** Costo dell'evoluzione: si riusa parte del vecchio materiale. */
   evolveCost(b: PlacedBuilding): Cost {
-    if (b.defId === 'keep_wood') return { ...KEEP_EVOLVE.cost };
+    if (b.defId === 'keep_wood') return this.scaleCost(KEEP_EVOLVE.cost, this.fx().stoneFortCost ?? 1);
     const to = this.evolveTarget(b);
     if (!to) return {};
     const out: Cost = {};
-    for (const [id, n] of Object.entries(to.cost)) out[id as ResourceId] = Math.ceil((n ?? 0) * 0.85);
+    for (const [id, n] of Object.entries(this.costOf(to))) out[id as ResourceId] = Math.ceil((n ?? 0) * 0.85);
     return out;
   }
 
@@ -3363,6 +3408,8 @@ export class Game {
     const prod = this.productivity();
     parts.push(['Contento', prod]);
     if (this.state.resources.coins < 1) parts.push(['Senza paga', 0.5]);
+    const fb = this.fx().builders;
+    if (fb && this.date.year >= fb.from) parts.push([`${this.faction()!.name}`, fb.mul]);
     if (seasonIndex(this.date.season) === 3) parts.push([stone ? 'Inverno: la malta gela' : 'Inverno', stone ? 0.35 : 0.75]);
     return { rate: parts.reduce((r, [, v]) => r * v, 1), parts };
   }

@@ -5,6 +5,8 @@ import type { PresetId } from '../world/presets';
 import type { Cost } from '../data/resources';
 import type { Behavior, Formation, Stance } from '../data/units';
 import { createLords, type Lord } from './lords';
+import { FACTION_LIST, FACTIONS, type FactionId } from '../data/factions';
+import { mulberry32 } from '../world/terrain';
 
 export interface PlacedBuilding {
   uid: number;
@@ -152,6 +154,8 @@ export interface GameState {
   lastSiege?: SiegeReport;
   /** Tipo di mappa (default: classica). */
   preset?: PresetId;
+  /** Schieramento scelto all'inizio. */
+  faction?: FactionId;
   /** Partita multigiocatore: id e posto (0 = chi l'ha creata, 1 = chi si è unito). */
   match?: { id: string; slot: 0 | 1 };
   /** Signori controllati dal gioco (solo in giocatore singolo). */
@@ -184,6 +188,8 @@ export interface StateOptions {
   lords?: number;
   /** Anno di partenza (vedi START_ERAS). */
   startYear?: number;
+  /** Schieramento. */
+  faction?: FactionId;
 }
 
 export const BASE_HOUSING = 10;
@@ -213,6 +219,16 @@ export function createInitialState(seed: number, castleName = 'Castello senza no
     ...era.res,
   });
   const lords = !opts.match && opts.lords ? createLords(Math.min(4, opts.lords), seed) : undefined;
+  const fx = opts.faction ? FACTIONS[opts.faction].effects : {};
+  if (fx.startCoins) resources.coins = Math.round(resources.coins * fx.startCoins);
+  for (const [id, n] of Object.entries(fx.start ?? {})) resources[id as keyof Resources] += n ?? 0;
+  // I signori rivali prendono gli altri schieramenti
+  const rand = mulberry32(seed ^ 0xfac7);
+  const others = FACTION_LIST.filter((f) => f.id !== opts.faction).sort(() => rand() - 0.5);
+  (lords ?? []).forEach((l, i) => {
+    l.faction = others[i % others.length].id;
+    l.relation += fx.relations ?? 0;
+  });
   for (const l of lords ?? []) {
     // I signori partono da zero come noi, con le scorte dell'epoca
     l.nextAction += day;
@@ -233,8 +249,9 @@ export function createInitialState(seed: number, castleName = 'Castello senza no
     nextJobId: 1,
     army: { infantry: 0, archers: 0, cavalry: 0 },
     nextUid: 1,
-    nextRaidDay: day + DAYS_PER_YEAR * 2 + 120,
+    nextRaidDay: day + DAYS_PER_YEAR * 2 + 120 - (fx.earlyRaid ?? 0),
     preset: opts.preset,
+    faction: opts.faction,
     match: opts.match,
     lords,
     log: [

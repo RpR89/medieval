@@ -5,6 +5,8 @@ import { localIdentity, LocalMatchService, SupabaseMatchService, type MatchInfo,
 import { CloudSaveStore, LocalSaveStore, type SaveStore } from '../save/store';
 import { el } from './dom';
 import { showLobby } from './lobby';
+import { FACTION_LIST, FACTIONS, type FactionId } from '../game/data/factions';
+import { emblemHtml, factionTraitsHtml } from './emblem';
 
 export interface Session {
   userId: string | null;
@@ -17,6 +19,31 @@ export interface StartResult {
   state: GameState;
   /** Presente nelle partite multigiocatore. */
   match?: { info: MatchInfo; service: MatchService };
+}
+
+/** Griglia per scegliere lo schieramento: richiama `onPick` a ogni scelta. */
+function factionGrid(selected: FactionId, onPick: (id: FactionId) => void): HTMLElement {
+  const grid = el('div', { class: 'factions' });
+  const render = (cur: FactionId) => {
+    grid.replaceChildren(
+      ...FACTION_LIST.map((f) => {
+        const b = el(
+          'button',
+          { class: `faction ${f.id === cur ? 'active' : ''}`, type: 'button' },
+          el('div', { class: 'row', html: `${emblemHtml(f.id, 26)} <strong>${f.name}</strong>` }),
+          el('div', { class: 'small muted', text: f.region }),
+          el('div', { class: 'small', html: factionTraitsHtml(f) }),
+        );
+        b.onclick = () => {
+          render(f.id);
+          onPick(f.id);
+        };
+        return b;
+      }),
+    );
+  };
+  render(selected);
+  return grid;
 }
 
 /** Schermata iniziale: accesso (o ospite), poi continua o nuova partita. */
@@ -98,13 +125,19 @@ export function showStartScreen(root: HTMLElement): Promise<StartResult> {
       lordsSelect.value = '2';
       const eraSelect = el('select');
       for (const e of START_ERAS) eraSelect.append(el('option', { value: String(e.year), text: `${e.year} — ${e.name}` }));
+      let faction: FactionId = 'verona';
+      mapSelect.value = FACTIONS[faction].preset;
+      const grid = factionGrid(faction, (id) => {
+        faction = id;
+        mapSelect.value = FACTIONS[id].preset;
+      });
       const newBtn = el('button', { class: 'primary', text: 'Nuova partita in solitario' });
       newBtn.onclick = () => {
         if (existing && !confirm('Iniziare una nuova partita sovrascriverà il salvataggio attuale. Continuare?')) return;
         const seed = Math.floor(Math.random() * 2 ** 31);
         finish({
           session,
-          state: createInitialState(seed, nameInput.value.trim() || 'Castello senza nome', { preset: mapSelect.value as PresetId, lords: Number(lordsSelect.value), startYear: Number(eraSelect.value) }),
+          state: createInitialState(seed, nameInput.value.trim() || 'Castello senza nome', { preset: mapSelect.value as PresetId, lords: Number(lordsSelect.value), startYear: Number(eraSelect.value), faction }),
         });
       };
       const back = el('button', { class: 'link', text: '← Indietro' });
@@ -119,9 +152,12 @@ export function showStartScreen(root: HTMLElement): Promise<StartResult> {
         cont.onclick = () => finish({ session, state: existing! });
         items.push(cont, el('hr'));
       }
+      card.classList.add('wide');
       items.push(
         el('label', { text: 'Nuovo castello' }),
         nameInput,
+        el('label', { text: 'Schieramento (la mappa consigliata si imposta da sola)' }),
+        grid,
         el('label', { text: 'Mappa' }),
         mapSelect,
         el('label', { text: 'Signori rivali (con castelli, eserciti e diplomazia)' }),
@@ -149,7 +185,17 @@ export function showStartScreen(root: HTMLElement): Promise<StartResult> {
         return;
       }
       const slot: 0 | 1 = info.hostId === service.me.id ? 0 : 1;
-      state ??= createInitialState(info.seed, choice.castleName, { preset: info.preset, match: { id: info.id, slot }, startYear: info.startYear });
+      if (!state) {
+        // Prima volta in questa partita: si sceglie lo schieramento
+        const faction = await new Promise<FactionId>((ok) => {
+          let cur: FactionId = slot === 0 ? 'verona' : 'padova';
+          const go = el('button', { class: 'primary', text: 'Entra nella partita' });
+          go.onclick = () => ok(cur);
+          card.classList.add('wide');
+          card.replaceChildren(header(), el('h2', { text: 'Scegli il tuo schieramento' }), factionGrid(cur, (id) => (cur = id)), go);
+        });
+        state = createInitialState(info.seed, choice.castleName, { preset: info.preset, match: { id: info.id, slot }, startYear: info.startYear, faction });
+      }
       // Chi si unisce più tardi parte dal giorno della partita
       if (slot === 1 && state.day < info.day) state.day = info.day;
       finish({ session: { ...session, name: service.me.name }, state, match: { info, service } });

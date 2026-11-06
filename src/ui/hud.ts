@@ -12,13 +12,15 @@ import { eraForYear } from '../game/data/eras';
 import { canAfford, formatCost, RESOURCE_IDS, RESOURCES, TAX_LEVELS, type ResourceId } from '../game/data/resources';
 import { BEHAVIORS, ENGINES, FORMATIONS, UNITS, type Behavior, type EngineType, type Formation, type Stance } from '../game/data/units';
 import type { Force } from '../game/sim/state';
-import { CASTLE_LEVELS, KEEP_EVOLVE, UPGRADE_BY_ID } from '../game/data/upgrades';
+import { CASTLE_LEVELS, UPGRADE_BY_ID } from '../game/data/upgrades';
 import { BUILDER_FOOD, BUILDER_WAGE, Game } from '../game/sim/game';
 import { PERSONALITIES } from '../game/sim/lords';
 import { SIDE_COLORS } from '../render/armies';
 import type { PlacedBuilding } from '../game/sim/state';
 import type { ChatMessage, RealmPlayer } from '../net/realm';
 import { el, escapeHtml, fmt } from './dom';
+import { emblemHtml, factionTraitsHtml } from './emblem';
+import { FACTIONS } from '../game/data/factions';
 
 /** Aggiorna l'HTML solo se è cambiato (evita di ricalcolare l'impaginazione per nulla). */
 function setHtml(e: HTMLElement, html: string) {
@@ -139,6 +141,7 @@ export class Hud {
       el(
         'div',
         { class: 'row' },
+        el('span', { class: 'castle-emblem', html: emblemHtml(game.state.faction, 18) }),
         el('strong', { class: 'castle', text: game.state.castleName }),
         this.dateEl,
         this.eraEl,
@@ -220,7 +223,7 @@ export class Hud {
           'span',
           { class: 'text' },
           el('span', { class: 'name', text: def.name }),
-          el('span', { class: 'cost', text: formatCost(def.cost) }),
+          el('span', { class: 'cost', text: formatCost(this.game.costOf(def)) }),
           el('span', { class: 'meta', text: this.metaFor(def.id) }),
         ),
       );
@@ -253,7 +256,7 @@ export class Hud {
       const levelLocked = !!def.minLevel && this.game.castleLevel() < def.minLevel;
       const locked = !isAvailable(def, year) || levelLocked;
       btn.classList.toggle('locked', locked);
-      btn.classList.toggle('poor', !locked && !canAfford(this.game.state.resources, def.cost));
+      btn.classList.toggle('poor', !locked && !canAfford(this.game.state.resources, this.game.costOf(def)));
       btn.classList.toggle('active', this.activeTool === id);
       btn.classList.toggle('done', !!def.unique && this.game.count(id) > 0);
       const meta = btn.querySelector('.meta')!;
@@ -458,7 +461,7 @@ export class Hud {
         const c = checks[i];
         const row = el('div', { class: `upgrade ${done ? 'done' : ''}` });
         row.append(
-          el('div', { class: 'row' }, el('strong', { text: `${u.icon} ${u.name}` }), el('span', { class: 'spacer' }), el('span', { class: 'small', text: done ? '✓' : `${formatCost(u.cost)} · ⏱ ${formatDuration(g.daysFor(Game.workFor(u.cost), b.defId, (u.cost.stone ?? 0) + (u.cost.lime ?? 0) > 0))}` })),
+          el('div', { class: 'row' }, el('strong', { text: `${u.icon} ${u.name}` }), el('span', { class: 'spacer' }), el('span', { class: 'small', text: done ? '✓' : `${formatCost(g.upgradeCostOf(u))} · ⏱ ${formatDuration(g.daysFor(Game.workFor(u.cost), b.defId, (u.cost.stone ?? 0) + (u.cost.lime ?? 0) > 0))}` })),
           el('div', { class: 'small muted', text: u.description }),
         );
         if (!done) {
@@ -623,15 +626,21 @@ export class Hud {
       const g = this.game;
       const lv = g.castleLevel();
       const keep = g.ownKeep();
-      if (lv === 2) return { label: `🏰 Trasforma in mastio di pietra (${formatCost(KEEP_EVOLVE.cost)})`, check: g.canEvolveKeep(), run: () => g.evolveKeep() };
+      if (lv === 2 && keep) return { label: `🏰 Trasforma in mastio di pietra (${formatCost(g.evolveCost(keep))})`, check: g.canEvolveKeep(), run: () => g.evolveKeep() };
       const id = lv === 1 ? 'bailey' : lv === 3 ? 'great_hall' : lv === 4 ? 'palace' : null;
       if (!id || !keep) return null;
       const u = UPGRADE_BY_ID[id];
-      return { label: `${u.icon} ${u.name} (${formatCost(u.cost)})`, check: g.canUpgrade(keep, id), run: () => g.upgrade(keep, id) };
+      return { label: `${u.icon} ${u.name} (${formatCost(g.upgradeCostOf(u))})`, check: g.canUpgrade(keep, id), run: () => g.upgrade(keep, id) };
     };
     levelBtn.onclick = () => nextStep()?.run();
     const levelBox = el('div', { class: 'castle-level' }, el('h4', { text: '👑 Livello del castello' }), levelInfo, levelBtn, levelWhy);
-    this.panelBody.append(levelBox, tax, defense, repairAll, siege, body);
+    const fac = this.game.faction();
+    const factionBox = el('div', { class: 'faction-box' });
+    if (fac) {
+      factionBox.innerHTML = `<h4>${emblemHtml(fac.id, 20)} Schieramento: ${escapeHtml(fac.name)}</h4>
+        <p class="small muted">${escapeHtml(fac.region)}</p>${factionTraitsHtml(fac)}`;
+    }
+    this.panelBody.append(levelBox, factionBox, tax, defense, repairAll, siege, body);
     let lastSiege = -1;
     this.refreshTab = () => {
       const g = this.game;
@@ -811,7 +820,7 @@ export class Hud {
           'div',
           { class: 'unit' },
           el('div', { class: 'row' }, el('span', { text: `${def.icon} ${def.name}` }), el('span', { class: 'spacer' }), count),
-          el('div', { class: 'small muted', text: `Costo ${formatCost(def.cost)} · Paga ${formatCost(def.upkeep)}/giorno · Att ${def.attack} Dif ${def.defense}` }),
+          el('div', { class: 'small muted', text: `Costo ${formatCost(this.game.unitCost(u))} · Paga ${formatCost(def.upkeep)}/giorno · Att ${def.attack} Dif ${def.defense}` }),
           el(
             'div',
             { class: 'row' },
@@ -1039,7 +1048,7 @@ export class Hud {
         const soldiers = Math.round(l.army.infantry + l.army.archers + l.army.cavalry);
         const html = `<div class="row"><span class="swatch" style="background:#${SIDE_COLORS[(l.id + 1) % SIDE_COLORS.length].toString(16).padStart(6, '0')}"></span>
           <strong>${escapeHtml(l.name)}</strong></div>
-          <div class="small">${escapeHtml(l.castle)} · ${l.level ? `${'★'.repeat(l.level)}${'☆'.repeat(5 - l.level)}` : 'accampamento'} · ${PERSONALITIES[l.personality].name}</div>
+          <div class="small">${l.faction ? `${emblemHtml(l.faction, 14)} ${escapeHtml(FACTIONS[l.faction].name)} · ` : ''}${escapeHtml(l.castle)} · ${l.level ? `${'★'.repeat(l.level)}${'☆'.repeat(5 - l.level)}` : 'accampamento'} · ${PERSONALITIES[l.personality].name}</div>
           <div class="small ${l.status === 'war' ? 'bad' : l.status === 'alliance' || l.status === 'vassal' ? 'good' : ''}">${escapeHtml(g.lordStatusName(l))} · rapporto ${Math.round(l.relation)} · circa ${Math.round(soldiers / 5) * 5} soldati${l.companies.length ? ' · <span class="bad">esercito in marcia</span>' : ''}</div>
           <div class="small muted">👪 ${Math.round(l.pop ?? 0)} abitanti${(() => {
             const act = g.lordActivity(l);

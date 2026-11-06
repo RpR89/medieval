@@ -205,3 +205,21 @@ button.multi { background: #6b2a1e; border-color: #a3402f; color: var(--ink); }
 .budget td { font-size: 12px; padding: 2px 4px; }
 .budget tr.bad td { color: var(--bad); }
 .budget tr.good td { color: var(--good); }
+
+/* Schieramenti */
+.emblem {
+  display: inline-flex; align-items: center; justify-content: center; vertical-align: middle;
+  background: linear-gradient(90deg, var(--a) 50%, var(--b) 50%);
+  border: 1px solid rgba(0, 0, 0, 0.5); border-radius: 3px 3px 50% 50% / 3px 3px 40% 40%;
+  text-shadow: 0 0 2px #000, 0 0 2px #000; line-height: 1; margin-right: 4px;
+}
+.castle-emblem { display: inline-flex; }
+.factions { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin: 4px 0 8px; }
+.faction { text-align: left; display: flex; flex-direction: column; gap: 3px; padding: 8px; }
+.faction.active { border-color: var(--accent); background: rgba(217, 164, 65, 0.15); }
+.faction strong { font-size: 15px; }
+.traits { list-style: none; margin: 4px 0 0; padding: 0; }
+.traits li { margin: 1px 0; font-size: 12px; }
+.traits .good { color: var(--good); }
+.traits .bad { color: var(--bad); }
+.faction-box { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; margin: 8px 0; }
