@@ -334,6 +334,7 @@ export class WorldRenderer {
       upgrades: [...(def.builtIn ?? []), ...(b.upgrades ?? [])],
       state: this.game.hpState(b),
     };
+    if ((b.level ?? 1) > 1) ctx.level = b.level;
     if (this.game.isForeign(b)) {
       if (b.site !== undefined && b.site < 4) ctx.site = b.site;
       else if (b.site === 4) ctx.works = true;

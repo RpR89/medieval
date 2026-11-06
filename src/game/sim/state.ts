@@ -21,6 +21,8 @@ export interface PlacedBuilding {
   upgrades?: string[];
   /** Proprietario per gli edifici dei signori controllati dal gioco (indice del signore). */
   owner?: number;
+  /** Livello degli edifici civili (1 se assente). */
+  level?: number;
   /** Solo edifici degli altri: cantiere allo stadio 0-3, oppure 4 = lavori su un edificio finito. */
   site?: number;
 }
@@ -28,7 +30,7 @@ export interface PlacedBuilding {
 /** Lavoro in corso dei costruttori: nuovo edificio, miglioramento o evoluzione. */
 export interface BuildJob {
   id: number;
-  kind: 'build' | 'upgrade' | 'evolve';
+  kind: 'build' | 'upgrade' | 'evolve' | 'level';
   /** Edificio (o cantiere, per 'build') su cui si lavora. */
   uid: number;
   /** Miglioramento da costruire. */

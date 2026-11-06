@@ -17,6 +17,7 @@ import {
   sphere,
 } from './kit';
 import { addWind } from './effects';
+import { isLevelable, levelTier } from '../game/data/levels';
 import { bridge, gatehouse, gateStone, gateStrong, gateWood, keepStone, keepWood, moat, palisade, road, scaffold, stoneWall, towerBastion, towerRound, towerSquare, towerWood, type ModelCtx } from './fortModels';
 export type { Link, ModelCtx } from './fortModels';
 import { timberFrame, windowShutters, door, chimney, barrel, crate, sack, logPile, fence } from './parts';
@@ -747,12 +748,63 @@ export function buildModel(def: BuildingDef, ctx: ModelCtx = {}): THREE.Group {
       g.add(box(w * 0.8, 0.8, d * 0.8, mats().planks, 0, 0, 0));
       g.add(hipRoof(w * 0.9, d * 0.9, 0.6, mats().thatch, 0, 0.8, 0));
   }
+  if (ctx.level && ctx.level > 1 && isLevelable(def)) levelLook(g, def, ctx.level, seed);
   if (ctx.site !== undefined || ctx.works) {
     const stone = (def.cost.stone ?? 0) + (def.cost.lime ?? 0) > 0;
     const selfGrow = def.id.startsWith('palisade') || MASONRY_WALLS.has(def.id);
     scaffold(g, w, d, ctx.site, stone, seed, selfGrow, def.id.startsWith('palisade'));
   }
   return bake(g);
+}
+
+// ───────────── Livelli degli edifici ─────────────
+
+/**
+ * Aspetto secondo il livello: ogni epoca cambia i materiali (paglia → scandole → coppi → ardesia,
+ * graticcio → tavole → intonaco → pietra) e fa crescere un po' l'edificio; ogni livello
+ * dentro l'epoca aggiunge scorte e attrezzi attorno.
+ */
+function levelLook(g: G, def: BuildingDef, level: number, seed: number) {
+  const k = mats();
+  const t = levelTier(level);
+  const sub = (level - 1) % 4;
+  const roof = [k.thatch, k.shingle, k.roofTile, k.roofTile, k.slate][t];
+  const wall = [k.wattle, k.planks, k.plaster, k.plaster, k.stoneLight][t];
+  const logs = [k.logWall, k.logWall, k.plaster, k.stone, k.stone][t];
+  g.traverse((o) => {
+    if (!(o instanceof THREE.Mesh)) return;
+    if (o.material === k.thatch) o.material = roof;
+    else if (o.material === k.wattle) o.material = wall;
+    else if (o.material === k.logWall) o.material = logs;
+  });
+  // L'edificio cresce un poco a ogni epoca (resta dentro il suo spazio)
+  const s = 1 + 0.035 * t;
+  if (s !== 1) {
+    const sub2 = new THREE.Group();
+    for (const ch of [...g.children]) sub2.add(ch);
+    sub2.scale.set(s, 1 + 0.06 * t, s);
+    g.add(sub2);
+  }
+  // Basamento in pietra dalle epoche più avanzate
+  const [w, d] = def.size;
+  if (t >= 2 && def.category !== 'farming' && def.category !== 'animals') g.add(box(w * 0.86, 0.05, d * 0.8, k.stoneDark, 0, 0, 0));
+  // Scorte e attrezzi: più numerosi a ogni livello
+  const rand = mulberry32(seed * 31 + level);
+  const n = sub + t;
+  for (let i = 0; i < n; i++) {
+    const side = i % 2 ? 1 : -1;
+    const x = side * (w / 2 - 0.12) + (rand() - 0.5) * 0.06;
+    const z = (d / 2 - 0.12) * (rand() < 0.5 ? 1 : -1) + (rand() - 0.5) * 0.3;
+    const kind = Math.floor(rand() * 3);
+    if (def.category === 'farming') {
+      const bale = cyl(0.07, 0.07, 0.1, k.straw, x, 0, z, 8);
+      g.add(bale);
+    } else if (kind === 0) barrel(g, x, z, 0.8);
+    else if (kind === 1) crate(g, x, z, 0.12);
+    else sack(g, x, z);
+  }
+  // Insegna o bandierina dal livello più alto di ogni epoca
+  if (sub === 3) g.add(flag(k.flagGold, w / 2 - 0.1, 0.55 + t * 0.05, -d / 2 + 0.1, 0.18));
 }
 
 // ───────────── Animazioni ─────────────

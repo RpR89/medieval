@@ -37,6 +37,8 @@ export interface ModelCtx {
   site?: number;
   /** Lavori in corso su un edificio finito (impalcature). */
   works?: boolean;
+  /** Livello degli edifici civili (cambia materiali, dimensioni e dettagli). */
+  level?: number;
 }
 
 const has = (c: ModelCtx, u: string) => !!c.upgrades?.includes(u);

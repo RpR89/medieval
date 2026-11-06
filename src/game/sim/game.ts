@@ -8,7 +8,7 @@ import {
   type UnitType,
 } from '../data/buildings';
 import { dateFromDays, DAYS_PER_SEASON, formatDuration, SEASON_NAMES, TIME_SCALE, type GameDate } from '../data/calendar';
-import { eraForYear } from '../data/eras';
+import { eraForYear, ERAS } from '../data/eras';
 import {
   canAfford,
   FOOD_IDS,
@@ -22,6 +22,7 @@ import {
 import { CARRY, ENGINES, FORMATIONS, MARCH_SPEED, SOLDIER_FOOD, STANCES, UNITS, type Behavior, type EngineType, type Formation, type Stance } from '../data/units';
 import { CASTLE_LEVELS, KEEP_EVOLVE, UPGRADE_BY_ID, upgradesFor, type UpgradeDef } from '../data/upgrades';
 import { factionEffects, FACTIONS, type FactionDef, type FactionEffects } from '../data/factions';
+import { eraIndex as eraIndexOf, isLevelable, levelEffects, levelUpCost, maxLevelFor } from '../data/levels';
 import {
   generateTerrain,
   isBuildableLand,
@@ -404,10 +405,11 @@ export class Game {
     let jobs = 0;
     let storage = BASE_STORAGE;
     let taxMul = 1;
-    for (const { def } of this.defsPlaced()) {
-      housing += def.housing ?? 0;
-      jobs += def.workers;
-      storage += def.storage ?? 0;
+    for (const { b, def } of this.defsPlaced()) {
+      const le = levelEffects(b.level ?? 1);
+      housing += Math.round((def.housing ?? 0) * le.housing);
+      jobs += Math.round(def.workers * le.workers);
+      storage += Math.round((def.storage ?? 0) * le.storage);
       taxMul += def.taxBonus ?? 0;
     }
     const lv = CASTLE_LEVELS[this.castleLevel()];
@@ -1133,7 +1135,7 @@ export class Game {
   private produce(b: PlacedBuilding, def: BuildingDef, a: Analysis, si: number, staffing: number, dt: number) {
     const r = this.state.resources;
     if (def.produces) {
-      let factor = staffing * (def.seasonal ? def.seasonal[si] : 1) * dt * (a.connected.get(b.uid) ?? 1) * this.productivity();
+      let factor = staffing * (def.seasonal ? def.seasonal[si] : 1) * dt * (a.connected.get(b.uid) ?? 1) * this.productivity() * levelEffects(b.level ?? 1).production;
       if (def.consumes) {
         for (const [id, n] of Object.entries(def.consumes)) {
           const need = (n ?? 0) * factor;
@@ -1248,10 +1250,11 @@ export class Game {
     }
 
     if (n >= 2) n += (n * a.birthRate[si] * Math.min(1, care) * dt) / DAYS_PER_SEASON;
-    if (n > herd.capacity) {
-      const extra = Math.floor(n - herd.capacity);
+    const cap = this.herdCapacity(b);
+    if (n > cap) {
+      const extra = Math.floor(n - cap);
       if (extra > 0) this.slaughter(herd.species, extra);
-      n = Math.min(n, herd.capacity);
+      n = Math.min(n, cap);
     }
     b.herd = Math.max(0, n);
   }
@@ -2429,9 +2432,10 @@ export class Game {
     let lodges = 0;
     for (const b of l.buildings) {
       const def = getBuilding(b.defId);
-      housing += def.housing ?? 0;
-      storage += def.storage ?? 0;
-      jobs += def.workers;
+      const le = levelEffects(b.level ?? 1);
+      housing += (def.housing ?? 0) * le.housing;
+      storage += (def.storage ?? 0) * le.storage;
+      jobs += def.workers * le.workers;
       if (def.builders) lodges++;
     }
     const soldiers = l.army.infantry + l.army.archers + l.army.cavalry;
@@ -2446,7 +2450,7 @@ export class Game {
     };
     for (const b of l.buildings) {
       const def = getBuilding(b.defId);
-      const k = staffing * (def.seasonal ? (avg ? def.seasonal.reduce((a, b) => a + b, 0) / 4 : def.seasonal[si]) : 1);
+      const k = staffing * (def.seasonal ? (avg ? def.seasonal.reduce((a, b) => a + b, 0) / 4 : def.seasonal[si]) : 1) * levelEffects(b.level ?? 1).production;
       const lfx = factionEffects(l.faction).produce ?? {};
       for (const [id, v] of Object.entries(def.produces ?? {})) add(prod, id, (v ?? 0) * k * (lfx[id as ResourceId] ?? 1));
       for (const [id, v] of Object.entries(def.consumes ?? {})) add(use, id, (v ?? 0) * k);
@@ -2665,6 +2669,16 @@ export class Game {
       const a = build('granary', this.lordSpot(l, 'granary', true) ?? this.lordSpot(l, 'granary', false));
       if (a) return a;
     }
+    // 11. Migliora gli edifici civili, prima i più indietro (campi e case per primi)
+    const cap = maxLevelFor(year);
+    const civil = l.buildings
+      .filter((b) => isLevelable(getBuilding(b.defId)) && (b.level ?? 1) < cap && !busy.has(b.uid))
+      .sort((a, b) => (a.level ?? 1) - (b.level ?? 1) || (/field|hut|house/.test(b.defId) ? 1 : 0) - (/field|hut|house/.test(a.defId) ? 1 : 0));
+    const b = civil[0];
+    if (b) {
+      const cost = levelUpCost(getBuilding(b.defId), b.level ?? 1);
+      return { job: { kind: 'level', uid: b.uid, defId: b.defId, x: b.x, z: b.z, work: Game.workFor(cost) }, cost };
+    }
     return null;
   }
 
@@ -2720,7 +2734,8 @@ export class Game {
       }
       const b = l.buildings.find((x) => x.uid === j.uid);
       if (!b) continue;
-      if (j.kind === 'upgrade' && j.upId && !b.upgrades?.includes(j.upId)) {
+      if (j.kind === 'level') b.level = (b.level ?? 1) + 1;
+      else if (j.kind === 'upgrade' && j.upId && !b.upgrades?.includes(j.upId)) {
         const before = this.maxHp(b);
         b.upgrades = [...(b.upgrades ?? []), j.upId];
         if (before) b.hp = (b.hp ?? before) + (this.maxHp(b) - before);
@@ -2740,6 +2755,7 @@ export class Game {
       const name = getBuilding(j.defId).name;
       if (j.kind === 'build') return name;
       if (j.kind === 'upgrade') return `${UPGRADE_BY_ID[j.upId ?? '']?.name ?? ''} (${name})`;
+      if (j.kind === 'level') return `${name} (livello)`;
       return `${name} → ${getBuilding(j.to ?? j.defId).name}`;
     });
   }
@@ -3325,6 +3341,70 @@ export class Game {
     if (def.fort === 'keep') this.log(`Il castello sale al livello 3: la motta è diventata un ${CASTLE_LEVELS[3].name.toLowerCase()}!`, 'good');
   }
 
+  // ───────────── Livelli degli edifici civili ─────────────
+
+  /** Capi che un recinto può ospitare (cresce con il livello). */
+  herdCapacity(b: PlacedBuilding): number {
+    const def = getBuilding(b.defId);
+    return def.herd ? Math.round(def.herd.capacity * levelEffects(b.level ?? 1).herd) : 0;
+  }
+
+  levelOf(b: PlacedBuilding): number {
+    return b.level ?? 1;
+  }
+
+  /** Livello massimo per l'epoca attuale (4 per epoca). */
+  maxLevel(): number {
+    return maxLevelFor(this.date.year);
+  }
+
+  levelCost(b: PlacedBuilding): Cost {
+    return levelUpCost(getBuilding(b.defId), this.levelOf(b));
+  }
+
+  canLevelUp(b: PlacedBuilding): PlaceCheck {
+    const def = getBuilding(b.defId);
+    if (!isLevelable(def)) return { ok: false, reason: 'Non si migliora a livelli' };
+    if (this.isForeign(b)) return { ok: false, reason: 'Appartiene a un altro signore' };
+    if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
+    if (this.siteByUid(b.uid)) return { ok: false, reason: 'Ancora in costruzione' };
+    if (this.jobFor(b.uid)) return { ok: false, reason: 'Lavori già in corso' };
+    const lv = this.levelOf(b);
+    if (lv >= this.maxLevel()) {
+      const next = ERAS[Math.min(ERAS.length - 1, eraIndexOf(this.date.year) + 1)];
+      return { ok: false, reason: lv >= ERAS.length * 4 ? 'Livello massimo' : `Altri livelli dal ${next.fromYear} (${next.name})` };
+    }
+    if (!canAfford(this.state.resources, this.levelCost(b))) return { ok: false, reason: 'Risorse insufficienti' };
+    return { ok: true };
+  }
+
+  levelUp(b: PlacedBuilding): boolean {
+    return this.track('Miglioramento degli edifici', () => {
+      if (!this.startLevelUp(b)) return false;
+      this.changed();
+      return true;
+    }, 'event');
+  }
+
+  /** Migliora tutti gli edifici dello stesso tipo e livello, finché bastano le risorse. */
+  levelUpAll(defId: string, level: number): number {
+    return this.track('Miglioramento degli edifici', () => {
+      let n = 0;
+      for (const b of this.state.buildings) if (b.defId === defId && this.levelOf(b) === level && this.startLevelUp(b)) n++;
+      if (n) this.changed();
+      return n;
+    }, 'event');
+  }
+
+  private startLevelUp(b: PlacedBuilding): boolean {
+    if (!this.canLevelUp(b).ok) return false;
+    const cost = this.levelCost(b);
+    pay(this.state.resources, cost);
+    if (this.instantBuild) b.level = this.levelOf(b) + 1;
+    else this.jobs().push({ id: this.newJobId(), kind: 'level', uid: b.uid, work: Game.workFor(cost), done: 0, cost });
+    return true;
+  }
+
   // ───────────── Cantieri e costruttori ─────────────
 
   sites(): PlacedBuilding[] {
@@ -3481,7 +3561,10 @@ export class Game {
     }
     const b = this.byUid(j.uid);
     if (!b) return;
-    if (j.kind === 'upgrade' && j.upId) {
+    if (j.kind === 'level') {
+      b.level = this.levelOf(b) + 1;
+      if (!getBuilding(b.defId).draggable) this.log(`🏗️ ${getBuilding(b.defId).name} migliorato al livello ${b.level}.`, 'good');
+    } else if (j.kind === 'upgrade' && j.upId) {
       this.applyUpgrade(b, j.upId);
       if (!getBuilding(b.defId).draggable) this.log(`🏗️ Completato: ${UPGRADE_BY_ID[j.upId].name} (${getBuilding(b.defId).name}).`, 'good');
     } else if (j.kind === 'evolve' && j.to) {
@@ -3537,6 +3620,7 @@ export class Game {
     const name = defId ? getBuilding(defId).name : '?';
     if (j.kind === 'build') return `${defId ? getBuilding(defId).icon : ''} ${name}`;
     if (j.kind === 'upgrade') return `${UPGRADE_BY_ID[j.upId ?? '']?.icon ?? ''} ${UPGRADE_BY_ID[j.upId ?? '']?.name ?? ''} · ${name}`;
+    if (j.kind === 'level') return `⬆️ ${name} → livello ${(this.byUid(j.uid)?.level ?? 1) + 1}`;
     return `⬆️ ${name} → ${getBuilding(j.to ?? defId ?? '').name}`;
   }
 

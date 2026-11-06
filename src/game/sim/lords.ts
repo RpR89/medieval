@@ -41,7 +41,7 @@ export interface LordResources {
 
 /** Lavoro dei costruttori di un signore. */
 export interface LordJob {
-  kind: 'build' | 'upgrade' | 'evolve';
+  kind: 'build' | 'upgrade' | 'evolve' | 'level';
   /** Edificio (nuovo o esistente). */
   uid: number;
   defId: string;

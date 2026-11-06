@@ -20,6 +20,7 @@ import type { PlacedBuilding } from '../game/sim/state';
 import type { ChatMessage, RealmPlayer } from '../net/realm';
 import { el, escapeHtml, fmt } from './dom';
 import { emblemHtml, factionTraitsHtml } from './emblem';
+import { isLevelable, levelEffects, levelName } from '../game/data/levels';
 import { FACTIONS } from '../game/data/factions';
 
 /** Aggiorna l'HTML solo se è cambiato (evita di ricalcolare l'impaginazione per nulla). */
@@ -346,6 +347,8 @@ export class Hud {
     const eta = job ? g.jobEta(job) : null;
     const to = isSite ? undefined : g.evolveTarget(b);
     const evo = to ? g.canEvolve(b) : null;
+    const levelable = !isSite && isLevelable(def);
+    const lvl = levelable ? g.canLevelUp(b) : null;
     const ups = g.upgradeOptions(b);
     const checks = ups.map((u) => g.canUpgrade(b, u.id));
     const repairCost = g.repairCost(b);
@@ -353,7 +356,7 @@ export class Hud {
       Math.round(b.hp ?? 0), b.upgrades, Math.round(b.herd ?? 0), checks.map((c) => c.ok),
       canAfford(g.state.resources, repairCost), g.structureVersion, b.defId,
       job && [Math.round((job.done / job.work) * 100), g.lastCrew.get(job.id) ?? 0, eta === null ? -1 : Math.round(eta)],
-      evo?.ok, evo?.reason, g.desiredBuilders(),
+      evo?.ok, evo?.reason, g.desiredBuilders(), b.level, lvl?.ok, lvl?.reason,
     ]);
     if (key === this.selKey) return;
     this.selKey = key;
@@ -390,7 +393,40 @@ export class Hud {
         return;
       }
     }
-    if (def.herd) parts.push(el('p', { text: `${SPECIES_NAMES[def.herd.species]}: ${Math.round(b.herd ?? 0)} / ${def.herd.capacity} capi` }));
+    if (def.herd) parts.push(el('p', { text: `${SPECIES_NAMES[def.herd.species]}: ${Math.round(b.herd ?? 0)} / ${g.herdCapacity(b)} capi` }));
+    if (levelable && lvl) {
+      const level = g.levelOf(b);
+      const max = g.maxLevel();
+      const eff = levelEffects(level);
+      const nextEff = levelEffects(level + 1);
+      const what = def.housing ? `alloggi ×${eff.housing.toFixed(2)} → ×${nextEff.housing.toFixed(2)}` : def.storage ? `magazzini ×${eff.storage.toFixed(2)} → ×${nextEff.storage.toFixed(2)}` : def.herd ? `capi ×${eff.herd.toFixed(2)} → ×${nextEff.herd.toFixed(2)}` : `resa ×${eff.production.toFixed(2)} → ×${nextEff.production.toFixed(2)}`;
+      const cost = g.levelCost(b);
+      const days = g.daysFor(Game.workFor(cost), b.defId, (cost.stone ?? 0) + (cost.lime ?? 0) > 0);
+      const row = el('div', { class: 'upgrade evolve' });
+      row.append(
+        el('div', { class: 'row' }, el('strong', { text: `⭐ ${levelName(level)}` }), el('span', { class: 'spacer' }), el('span', { class: 'small muted', text: `max ${max} in quest'epoca` })),
+        el('div', { class: 'hp' }, el('div', { class: 'hp-bar build', style: `width:${Math.round((level / 20) * 100)}%` })),
+        el('div', { class: 'small', text: `Prossimo livello: ${what} · ${formatCost(cost)} · ⏱ ${formatDuration(days)}` }),
+      );
+      const btns = el('div', { class: 'row' });
+      const one = el('button', { text: `⬆️ Migliora al livello ${level + 1}` });
+      one.disabled = !lvl.ok;
+      one.onclick = () => g.levelUp(b);
+      btns.append(one);
+      const same = g.state.buildings.filter((x) => x.defId === b.defId && g.levelOf(x) === level && !g.jobFor(x.uid)).length;
+      if (same > 1) {
+        const all = el('button', { text: `Tutti (${same})`, title: 'Migliora tutti gli edifici uguali allo stesso livello, finché bastano le risorse' });
+        all.disabled = !lvl.ok;
+        all.onclick = () => {
+          const n = g.levelUpAll(b.defId, level);
+          this.toast(`${n} ${def.name.toLowerCase()} in miglioramento.`, 'good');
+        };
+        btns.append(all);
+      }
+      if (!lvl.ok && lvl.reason) btns.append(el('span', { class: 'small muted', text: lvl.reason }));
+      row.append(btns);
+      parts.push(row);
+    }
     if (!def.fort && !def.road && (def.produces || def.herd)) {
       const bonus = g.roadBonus(b);
       parts.push(
