@@ -13,15 +13,6 @@ export enum Tile {
   Sand = 6,
 }
 
-export const TILE_NAMES: Record<Tile, string> = {
-  [Tile.Grass]: 'Prato',
-  [Tile.Forest]: 'Bosco',
-  [Tile.Rock]: 'Roccia',
-  [Tile.Gold]: 'Vena d\'oro',
-  [Tile.River]: 'Fiume',
-  [Tile.Sea]: 'Mare',
-  [Tile.Sand]: 'Spiaggia',
-};
 
 export interface Terrain {
   size: number;

@@ -73,7 +73,7 @@ describe('cinta muraria', () => {
     // Una breccia (rovina) riapre la cinta
     const w = g.buildingAt(30, 27)!;
     w.hp = 0;
-    g.structureVersion++;
+    g.invalidate();
     expect(g.analysis().closed).toBe(false);
   });
 

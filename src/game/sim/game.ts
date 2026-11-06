@@ -1,6 +1,5 @@
 import { ANIMALS } from '../data/animals';
 import {
-  BUILDINGS,
   getBuilding,
   isAvailable,
   seasonIndex,
@@ -118,8 +117,6 @@ interface Analysis {
   taxMul: number;
 }
 
-type Listener = () => void;
-
 const D4 = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
 /** Gli uid degli edifici dell'altro giocatore partono da qui. */
 export const FOREIGN = 1_000_000;
@@ -160,7 +157,6 @@ export class Game {
   readonly terrain: Terrain;
   /** uid dell'edificio che occupa ogni casella (0 = libera). */
   readonly occupancy: Int32Array;
-  private listeners = new Set<Listener>();
   private eventListeners = new Set<(e: { text: string; kind: EventKind }) => void>();
   private attackListeners = new Set<(r: AttackResult) => void>();
   private lastSeasonIndex: number;
@@ -168,6 +164,8 @@ export class Game {
   private cache: Analysis | null = null;
   /** Cresce a ogni cambiamento visibile (costruzioni, demolizioni, miglioramenti, danni). */
   structureVersion = 0;
+  /** Cresce solo quando cambiano i nostri edifici (invalida l'analisi di cinta, fossati e strade). */
+  private analysisVersion = 0;
   /** Edifici dell'altro giocatore (solo da guardare: non entrano nella nostra economia). */
   others: PlacedBuilding[] = [];
   /** Bloccato: in multigiocatore finché non sono online entrambi i giocatori. */
@@ -185,6 +183,7 @@ export class Game {
   private hungerWarned = -1e9;
   private siteStage = new Map<number, number>();
   private visualDirty = false;
+  private stageDirty = false;
 
   constructor(public state: GameState, private random: () => number = Math.random) {
     this.terrain = generateTerrain(state.seed, { preset: state.preset, players: state.match ? 2 : 1 + (state.lords?.length ?? 0) });
@@ -242,24 +241,28 @@ export class Game {
 
   // ───────────── Eventi ─────────────
 
-  onChange(fn: Listener): () => void {
-    this.listeners.add(fn);
-    return () => this.listeners.delete(fn);
-  }
 
   onEvent(fn: (e: { text: string; kind: EventKind }) => void): () => void {
     this.eventListeners.add(fn);
     return () => this.eventListeners.delete(fn);
   }
 
-  private emit() {
-    for (const fn of this.listeners) fn();
-  }
 
+  /** I nostri edifici sono cambiati: cambia l'aspetto e va rifatta l'analisi della cinta. */
   private changed() {
     this.structureVersion++;
+    this.analysisVersion++;
     this.cache = null;
-    this.emit();
+  }
+
+  /** Da chiamare dopo aver modificato lo stato dall'esterno (test, strumenti). */
+  invalidate() {
+    this.changed();
+  }
+
+  /** Cambia solo ciò che si vede (cantieri, castelli degli altri): l'analisi resta valida. */
+  private changedVisual() {
+    this.structureVersion++;
   }
 
   log(text: string, kind: EventKind = 'info') {
@@ -291,12 +294,6 @@ export class Game {
     return this.terrain.sites[this.state.match?.slot ?? 0] ?? [this.terrain.size / 2, this.terrain.size / 2];
   }
 
-  /** Territorio in cui si può costruire: in multigiocatore, la propria metà della mappa. */
-  territory(): { x0: number; x1: number; z0: number; z1: number } {
-    const n = this.terrain.size;
-    if (!this.state.match) return { x0: 0, x1: n, z0: 0, z1: n };
-    return this.state.match.slot === 0 ? { x0: 0, x1: Math.floor(n / 2), z0: 0, z1: n } : { x0: Math.floor(n / 2), x1: n, z0: 0, z1: n };
-  }
 
   /** Sostituisce gli edifici dell'altro giocatore (ricevuti dalla rete). */
   setOthers(list: PlacedBuilding[]) {
@@ -312,7 +309,7 @@ export class Game {
       }
       if (free) this.mark(b, b.uid);
     }
-    this.changed();
+    this.changedVisual();
   }
 
   buildingAt(x: number, z: number): PlacedBuilding | undefined {
@@ -379,10 +376,6 @@ export class Game {
     };
   }
 
-  availableBuildings(): BuildingDef[] {
-    const year = this.date.year;
-    return BUILDINGS.filter((b) => isAvailable(b, year));
-  }
 
   // ───────────── Analisi della cinta, dei fossati e delle strade ─────────────
 
@@ -393,7 +386,8 @@ export class Game {
   /** Blocca il passaggio degli assalitori: mura, torri, porte, mastio (non in rovina) e acqua senza ponte. */
   private blocks(x: number, z: number): boolean {
     const b = this.buildingAt(x, z);
-    if (b && b.site !== undefined && b.site < 4) return isWater(tileAt(this.terrain, x, z));
+    // Le mura degli altri non c'entrano con la nostra cinta (e cambiano spesso: si ignorano)
+    if (b && this.isForeign(b)) return isWater(tileAt(this.terrain, x, z));
     if (b) {
       const def = getBuilding(b.defId);
       if (def.fort && def.fort !== 'moat') return this.hpState(b) !== 'ruin';
@@ -403,7 +397,7 @@ export class Game {
   }
 
   analysis(): Analysis {
-    if (this.cache && this.cache.version === this.structureVersion) return this.cache;
+    if (this.cache && this.cache.version === this.analysisVersion) return this.cache;
     const size = this.terrain.size;
     let housing = BASE_HOUSING;
     let jobs = 0;
@@ -540,7 +534,7 @@ export class Game {
       if (best > 0) connected.set(b.uid, best);
     }
 
-    this.cache = { version: this.structureVersion, closed, outside, flooded, connected, housing, jobs, storage, taxMul };
+    this.cache = { version: this.analysisVersion, closed, outside, flooded, connected, housing, jobs, storage, taxMul };
     return this.cache;
   }
 
@@ -729,7 +723,6 @@ export class Game {
     pay(this.state.resources, cost);
     b.hp = this.maxHp(b);
     if (was !== 'ok') this.changed();
-    else this.emit();
     return true;
   }
 
@@ -750,7 +743,6 @@ export class Game {
       n++;
     }
     if (visual) this.changed();
-    else if (n) this.emit();
     return n;
   }
 
@@ -930,7 +922,6 @@ export class Game {
       this.state.army[unit] += 1;
       done++;
     }
-    if (done) this.emit();
     return done;
   }
 
@@ -938,7 +929,6 @@ export class Game {
     const done = Math.min(n, this.state.army[unit]);
     this.state.army[unit] -= done;
     this.state.population += done;
-    if (done) this.emit();
     return done;
   }
 
@@ -980,7 +970,6 @@ export class Game {
       r[id] -= n;
       r.coins += this.sellPrice(id) * n;
     }
-    this.emit();
     return { ok: true };
   }
 
@@ -997,7 +986,6 @@ export class Game {
       this.state.resources[rid] = rid === 'coins' ? this.state.resources[rid] + n : Math.min(cap, this.state.resources[rid] + n);
     }
     this.log(`Carovana ricevuta da ${from}.`, 'good');
-    this.emit();
   }
 
   // ───────────── Simulazione ─────────────
@@ -1010,7 +998,6 @@ export class Game {
       this.step(dt);
       left -= dt;
     }
-    this.emit();
   }
 
   private step(dt: number) {
@@ -1143,7 +1130,11 @@ export class Game {
     this.updateFlowRates(dt);
     if (this.visualDirty) {
       this.visualDirty = false;
+      this.stageDirty = false;
       this.changed();
+    } else if (this.stageDirty) {
+      this.stageDirty = false;
+      this.changedVisual();
     }
   }
 
@@ -1343,7 +1334,6 @@ export class Game {
     if (!this.canBuildEngine(type).ok) return false;
     pay(this.state.resources, ENGINES[type].cost);
     this.engines()[type]++;
-    this.emit();
     return true;
   }
 
@@ -1410,7 +1400,6 @@ export class Game {
     };
     (this.state.expeditions ??= []).push(e);
     this.log(`La spedizione è partita: arriverà al castello nemico tra ${formatDuration(e.arriveDay - e.departDay)}.`, 'info');
-    this.emit();
     return e;
   }
 
@@ -1423,7 +1412,6 @@ export class Game {
     const n = a.troops.infantry + a.troops.archers + a.troops.cavalry;
     const engines = a.troops.rams + a.troops.trebuchets;
     this.log(`⚠️ ${a.from} marcia contro di noi con circa ${n} soldati${engines ? ` e ${engines} macchine d'assedio` : ''}: arriverà tra ${formatDuration(days)}!`, 'bad');
-    this.emit();
   }
 
   /** Risultati già calcolati, da rimandare all'attaccante se si riconnette. */
@@ -1447,7 +1435,6 @@ export class Game {
     );
     (this.state.campaignLog ??= []).push({ day: this.state.day, text: `Attacco: ${names[r.outcome]}`, outcome: r.outcome, log: r.log });
     if (this.state.campaignLog.length > 10) this.state.campaignLog.shift();
-    this.emit();
   }
 
   private stepWar() {
@@ -1683,7 +1670,6 @@ export class Game {
       loot,
     };
     if (visual) this.changed();
-    else this.emit();
     return result;
   }
 
@@ -1786,7 +1772,6 @@ export class Game {
     const slot = this.state.match?.slot ?? 0;
     const c: Company = { id: `c${slot}-${this.state.nextUid++}`, troops: { ...f }, x, z, order: 'idle', formation: 'line', behavior: 'defensive' };
     this.companies().push(c);
-    this.emit();
     return c;
   }
 
@@ -1850,17 +1835,14 @@ export class Game {
     const list = this.own(ids);
     for (const c of list) c.target = undefined;
     this.orderGroup(list, tx, tz, 'move', append);
-    this.emit();
   }
 
   setFormation(ids: string[], f: Formation) {
     for (const c of this.companies()) if (ids.includes(c.id)) c.formation = f;
-    this.emit();
   }
 
   setBehavior(ids: string[], b: Behavior) {
     for (const c of this.companies()) if (ids.includes(c.id)) c.behavior = b;
-    this.emit();
   }
 
   /** Ordine d'attacco: marciare contro un edificio dell'avversario e assaltare il castello. */
@@ -1874,7 +1856,6 @@ export class Game {
     const list = this.own(ids);
     this.orderGroup(list, tx, tz, 'attack', false);
     for (const c of list) c.target = [tx, tz];
-    this.emit();
     return { ok: true };
   }
 
@@ -1885,7 +1866,6 @@ export class Game {
       c.order = 'home';
       c.target = undefined;
     }
-    this.emit();
   }
 
   orderStop(ids: string[]) {
@@ -1893,7 +1873,6 @@ export class Game {
       c.path = [];
       c.order = 'idle';
     }
-    this.emit();
   }
 
   /** Divide un reparto in due metà. */
@@ -1911,7 +1890,6 @@ export class Game {
     }
     const n: Company = { id: `c${this.state.match?.slot ?? 0}-${this.state.nextUid++}`, troops: half, x: c.x + 0.6, z: c.z + 0.4, order: 'idle' };
     this.companies().push(n);
-    this.emit();
     return n;
   }
 
@@ -2087,7 +2065,6 @@ export class Game {
         : `Un reparto è rientrato nel castello${goods ? ` con ${Math.round(goods)} unità di bottino` : ''}.`,
       'good',
     );
-    this.emit();
   }
 
   private nearEnemyWalls(c: Company): boolean {
@@ -2132,7 +2109,6 @@ export class Game {
       return;
     }
     for (const fn of this.assaultListeners) fn(a);
-    this.emit();
   }
 
   /** Assalto concluso: le perdite si dividono tra i reparti, il bottino va nei carri. */
@@ -2161,7 +2137,6 @@ export class Game {
     );
     (this.state.campaignLog ??= []).push({ day: this.state.day, text: `Assalto: ${names[r.outcome].toLowerCase()}`, outcome: r.outcome, log: r.log });
     if (this.state.campaignLog.length > 10) this.state.campaignLog.shift();
-    this.emit();
     return true;
   }
 
@@ -2249,7 +2224,6 @@ export class Game {
     }
     this.pruneCompanies();
     if (text) this.log(`${text} Caduti: ${dead}.`, text.startsWith('Vittoria') ? 'good' : 'bad');
-    this.emit();
   }
 
 
@@ -2292,7 +2266,7 @@ export class Game {
         this.mark(fb, fb.uid);
       }
     }
-    this.changed();
+    this.changedVisual();
   }
 
   /** Solo per i test: costruisce subito i castelli dei signori come sarebbero nella loro epoca. */
@@ -3101,7 +3075,6 @@ export class Game {
     c.path = findPath(this.terrain.size, [Math.floor(x), Math.floor(z)], [kx, kz], (xx, zz) => this.envoyMoveCost(xx, zz));
     this.companies().push(c);
     this.log(`🕊️ Un diplomatico parte verso ${l.castle} (${Game.MISSIONS[mission].name.toLowerCase()}).`, 'info');
-    this.emit();
     return c;
   }
 
@@ -3191,7 +3164,6 @@ export class Game {
         this.declareWar(l, 'Gli abbiamo dichiarato guerra');
         break;
     }
-    this.emit();
   }
 
   /** Testo breve per l'interfaccia. */
@@ -3210,7 +3182,6 @@ export class Game {
 
   setTaxLevel(level: number) {
     this.state.taxLevel = Math.max(0, Math.min(TAX_LEVELS.length - 1, Math.round(level)));
-    this.emit();
   }
 
   /** Gettito giornaliero delle tasse. */
@@ -3514,7 +3485,6 @@ export class Game {
     this.state.army.archers -= archers;
     this.state.army.infantry -= infantry;
     b.garrison = archers + infantry ? { infantry, archers } : undefined;
-    this.emit();
     return archers + infantry;
   }
 
@@ -3545,7 +3515,6 @@ export class Game {
       (this.state.companies ??= []).push(c);
       if (tx !== undefined && tz !== undefined) this.route(c, tx, tz);
       this.log('🐎 Un esploratore a cavallo è partito: selezionalo e mandalo dove vuoi vedere (tasto destro).', 'info');
-      this.emit();
       return c;
     }, 'event');
   }
@@ -3720,7 +3689,6 @@ export class Game {
 
   setBuilders(n: number | undefined) {
     this.state.builders = n === undefined ? undefined : Math.max(0, Math.min(500, Math.round(n)));
-    this.emit();
   }
 
   /** Giornate di lavoro che un costruttore svolge in un giorno, con le cause. */
@@ -3778,7 +3746,7 @@ export class Game {
         const stage = Math.min(3, Math.floor((j.done / j.work) * 4));
         if (this.siteStage.get(j.uid) !== stage) {
           this.siteStage.set(j.uid, stage);
-          if (j.kind === 'build') this.visualDirty = true;
+          if (j.kind === 'build') this.stageDirty = true;
         }
       }
     }
@@ -3897,7 +3865,6 @@ export class Game {
     const j = this.jobs().find((x) => x.id === id);
     if (!j) return;
     this.state.jobs = [j, ...this.jobs().filter((x) => x !== j)];
-    this.emit();
   }
 
   /** Porta in cima alla coda tutti i lavori dello stesso tipo (es. un intero tratto di mura). */
@@ -3908,7 +3875,6 @@ export class Game {
     const k = key(j);
     const same = this.jobs().filter((x) => key(x) === k);
     this.state.jobs = [...same, ...this.jobs().filter((x) => key(x) !== k)];
-    this.emit();
   }
 
   /** Giorni al prossimo assalto (per l'interfaccia). */

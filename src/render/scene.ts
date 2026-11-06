@@ -219,7 +219,8 @@ export class WorldRenderer {
   setQuality(q: Quality) {
     this.quality = q;
     const dpr = window.devicePixelRatio || 1;
-    this.renderer.setPixelRatio(q === 'high' ? Math.min(dpr, 2) : q === 'medium' ? Math.min(dpr, 1.5) : 1);
+    this.basePixelRatio = q === 'high' ? Math.min(dpr, 2) : q === 'medium' ? Math.min(dpr, 1.5) : 1;
+    this.renderer.setPixelRatio(this.basePixelRatio * this.renderScale);
     const map = q === 'high' ? 4096 : q === 'medium' ? 2048 : 1024;
     if (this.sun.shadow.mapSize.x !== map) {
       this.sun.shadow.mapSize.set(map, map);
@@ -645,6 +646,28 @@ export class WorldRenderer {
   }
 
   private fogTex: THREE.DataTexture;
+  /** Risoluzione adattiva: se il computer fatica si abbassa un po' la risoluzione interna. */
+  private basePixelRatio = 1;
+  private renderScale = 1;
+  private perfTime = 0;
+  private perfFrames = 0;
+
+  private adaptResolution(dt: number) {
+    this.perfTime += dt;
+    this.perfFrames++;
+    if (this.perfTime < 2) return;
+    const avg = this.perfTime / this.perfFrames;
+    this.perfTime = 0;
+    this.perfFrames = 0;
+    let next = this.renderScale;
+    if (avg > 1 / 30 && this.renderScale > 0.6) next = Math.max(0.6, this.renderScale - 0.1);
+    else if (avg < 1 / 55 && this.renderScale < 1) next = Math.min(1, this.renderScale + 0.05);
+    if (next === this.renderScale) return;
+    this.renderScale = next;
+    this.renderer.setPixelRatio(Math.max(0.5, this.basePixelRatio * next));
+    this.resize();
+  }
+  private syncTimer = 1;
   private fogTimer = 0;
   private revealVersion = -1;
 
@@ -672,6 +695,7 @@ export class WorldRenderer {
     const dt = Math.min(0.1, this.timer.getDelta());
     const t = this.timer.getElapsed();
     shared.uTime.value = t;
+    this.adaptResolution(dt);
     // Stagioni sfumate: si aggiorna a passi di 1/20 della transizione (ridipingere il terreno costa)
     const m = seasonMix(this.game.state.day);
     const key = `${m.from}:${Math.round(m.t * 20)}`;
@@ -687,7 +711,10 @@ export class WorldRenderer {
         if (b) applySeason(obj, b.defId, this.mix);
       }
     }
-    if (this.game.structureVersion !== this.structureVersion) {
+    // Ricostruire gli edifici costa: al massimo ~7 volte al secondo (ad alta velocità i cantieri cambiano di continuo)
+    this.syncTimer += dt;
+    if (this.game.structureVersion !== this.structureVersion && this.syncTimer > 0.15) {
+      this.syncTimer = 0;
       this.structureVersion = this.game.structureVersion;
       this.syncBuildings();
     }

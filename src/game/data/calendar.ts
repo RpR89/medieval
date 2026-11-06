@@ -9,7 +9,6 @@ export const SECONDS_PER_DAY = 150 / 90 / TIME_SCALE;
 export const DAYS_PER_SEASON = 90;
 export const DAYS_PER_YEAR = DAYS_PER_SEASON * 4;
 export const START_YEAR = 900;
-export const END_YEAR = 1400;
 
 export const SEASONS = ['spring', 'summer', 'autumn', 'winter'] as const;
 export type Season = (typeof SEASONS)[number];
