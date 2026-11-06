@@ -249,7 +249,7 @@ export function createInitialState(seed: number, castleName = 'Castello senza no
     nextJobId: 1,
     army: { infantry: 0, archers: 0, cavalry: 0 },
     nextUid: 1,
-    nextRaidDay: day + DAYS_PER_YEAR * 2 + 120 - (fx.earlyRaid ?? 0),
+    nextRaidDay: day + DAYS_PER_YEAR * 4 - (fx.earlyRaid ?? 0) * 2,
     preset: opts.preset,
     faction: opts.faction,
     match: opts.match,

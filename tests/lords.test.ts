@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { TIME_SCALE } from '../src/game/data/calendar';
 import { Game } from '../src/game/sim/game';
 import { createInitialState, type Force } from '../src/game/sim/state';
 import { mulberry32 } from '../src/game/world/terrain';
@@ -25,7 +26,8 @@ function single(lords: number, year = 1000, prebuilt = true) {
 }
 
 function run(g: Game, days: number, until?: () => boolean) {
-  for (let i = 0; i < days * 4; i++) {
+  // Durate in "giorni di prima": ora un giorno dura TIME_SCALE volte meno
+  for (let i = 0; i < days * 4 * TIME_SCALE; i++) {
     g.advance(0.25);
     if (until?.()) return true;
   }

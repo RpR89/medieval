@@ -684,6 +684,48 @@ function armoryRack(g: G, x: number, z: number) {
   g.add(flag(k.flagGold, x + 0.28, 0, z, 0.3));
 }
 
+/** Raggio della collina all'altezza relativa t (0 = base, 1 = sommità): profilo concavo. */
+function moundRadius(base: number, top: number, t: number): number {
+  return top + (base - top) * Math.pow(1 - t, 1.6);
+}
+
+/**
+ * Collina di terra liscia (tornio) con il bordo leggermente irregolare. Con t0/t1 e phi
+ * si ottiene solo una fascia o uno spicchio della stessa superficie (zolle di terra, sentieri).
+ */
+function mound(
+  base: number, top: number, h: number, y: number, seed: number, m: THREE.Material, wobble: number,
+  opts: { t0?: number; t1?: number; phi0?: number; phiLen?: number; lift?: number; cap?: boolean } = {},
+): THREE.Mesh {
+  const { t0 = 0, t1 = 1, phi0 = 0, phiLen = PI * 2, lift = 0, cap = true } = opts;
+  const pts: THREE.Vector2[] = [];
+  const n = Math.max(3, Math.round(14 * (t1 - t0)));
+  for (let i = 0; i <= n; i++) {
+    const t = t0 + ((t1 - t0) * i) / n;
+    pts.push(new THREE.Vector2(moundRadius(base, top, t) + lift, t * h));
+  }
+  if (cap && t1 >= 1) pts.push(new THREE.Vector2(0, h));
+  const geo = new THREE.LatheGeometry(pts, Math.max(6, Math.round((48 * phiLen) / (PI * 2))), phi0, phiLen);
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const z = pos.getZ(i);
+    const r = Math.hypot(x, z);
+    if (r < 1e-4) continue;
+    const a = Math.atan2(z, x);
+    const t = pos.getY(i) / h;
+    const k = 1 + wobble * (1 - t * 0.6) * (Math.sin(a * 3 + seed) * 0.6 + Math.sin(a * 7 + seed * 2.3) * 0.4);
+    pos.setX(i, x * k);
+    pos.setZ(i, z * k);
+  }
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, m);
+  mesh.position.y = y;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
 /**
  * Motta con torre lignea in scala: collina artificiale di terra (circa 8 metri, 20 di base)
  * con fossato ai piedi, palizzata sulla sommità, torre a due piani con piano sporgente
@@ -695,26 +737,54 @@ export function keepWood(g: G, c: ModelCtx) {
   const rand = mulberry32(c.seed ?? 1);
   const H = 1.1;
   const topR = 0.8;
-  // Fossato asciutto ai piedi e collina di terra dal profilo concavo, come un terrapieno vero
-  g.add(cyl(1.48, 1.48, 0.025, k.earth, 0, -0.01, 0, 28));
-  g.add(cyl(1.34, 1.4, 0.06, k.earth, 0, 0, 0, 28));
-  const prof: Array<[number, number, number]> = [[1.34, 1.08, 0.3], [1.08, 0.92, 0.32], [0.92, topR, 0.44]];
-  let y = 0.04;
-  for (const [rb, rt, h] of prof) {
-    g.add(cyl(rt, rb, h, k.grassMound, 0, y, 0, 28));
-    y += h;
+  const seed = (c.seed ?? 1) * 0.37;
+  // Fossato: anello di terra scura scavato attorno alla collina, con l'argine esterno erboso
+  const ditch = new THREE.Mesh(new THREE.RingGeometry(1.28, 1.47, 48, 1), k.soil);
+  ditch.rotation.x = -PI / 2;
+  ditch.position.y = 0.035;
+  ditch.receiveShadow = true;
+  g.add(ditch);
+  g.add(mound(1.5, 1.44, 0.09, 0.0, seed + 3, k.grassMound, 0.015, { cap: false }));
+  // Collina: profilo continuo e concavo, con il bordo un po' irregolare come un vero terrapieno
+  g.add(mound(1.34, topR, H, 0.04, seed, k.grassMound, 0.05));
+  // Terra smossa alla base (dove si è scavato il fossato) e sentieri erosi che salgono
+  g.add(mound(1.34, topR, H, 0.04, seed, k.earth, 0.05, { t0: 0, t1: 0.16, lift: 0.006, cap: false }));
+  for (let i = 0; i < 4; i++) {
+    const phi0 = rand() * PI * 2;
+    g.add(mound(1.34, topR, H, 0.04, seed, k.earth, 0.05, { t0: 0.1, t1: 0.55 + rand() * 0.35, phi0, phiLen: 0.12 + rand() * 0.18, lift: 0.006, cap: false }));
   }
-  // Zolle di terra scoperta e sentiero di servizio
-  for (let i = 0; i < 9; i++) {
+  // Sassi nel fossato
+  for (let i = 0; i < 6; i++) {
     const a = rand() * PI * 2;
-    const t = 0.2 + rand() * 0.6;
-    const r = 1.3 - t * 0.5;
-    const p = box(0.16 + rand() * 0.1, 0.03, 0.08, k.earth, Math.cos(a) * r, t * H, Math.sin(a) * r);
-    p.rotation.y = -a;
-    p.rotation.z = 0.5;
-    g.add(p);
+    const st = box(0.06 + rand() * 0.05, 0.04, 0.05, k.stone, Math.cos(a) * 1.38, 0.03, Math.sin(a) * 1.38);
+    st.rotation.y = rand() * PI;
+    g.add(st);
   }
-  g.add(cyl(topR, topR, 0.03, k.earth, 0, H + 0.03, 0, 28));
+  // Sommità spianata di terra battuta
+  const top = new THREE.Mesh(new THREE.CircleGeometry(topR - 0.02, 32), k.earth);
+  top.rotation.x = -PI / 2;
+  top.position.y = H + 0.045;
+  top.receiveShadow = true;
+  g.add(top);
+  // Cespugli e sassi sui fianchi, solchi di terra lasciati dalla pioggia
+  for (let i = 0; i < 10; i++) {
+    const a = rand() * PI * 2;
+    const t = 0.15 + rand() * 0.6;
+    const r = moundRadius(1.34, topR, t) + 0.01;
+    if (i < 6) {
+      // Cespuglio: tre palle di fogliame ravvicinate
+      for (let j = 0; j < 3; j++) {
+        const rr = 0.035 + rand() * 0.03;
+        const b = sphere(rr, k.leafGreen, Math.cos(a) * r + (rand() - 0.5) * 0.08, t * H + rr * 0.6, Math.sin(a) * r + (rand() - 0.5) * 0.08, 1);
+        b.scale.y = 0.75;
+        g.add(b);
+      }
+    } else {
+      const st = box(0.07, 0.04, 0.05, k.stoneDark, Math.cos(a) * r, t * H, Math.sin(a) * r);
+      st.rotation.y = rand() * PI;
+      g.add(st);
+    }
+  }
   const y0 = H + 0.05;
   // Palizzata sulla sommità (con un varco verso il ponte)
   const n = 30;
@@ -766,7 +836,19 @@ export function keepWood(g: G, c: ModelCtx) {
     g.add(box(0.05, 0.05, 0.22, k.beam, t, y0 + 0.74, side * (s / 2)));
   }
   g.add(box(U, 0.04, U, k.planks, 0, y0 + 0.78, 0));
-  g.add(box(U, 0.36, U, k.darkPlanks, 0, y0 + 0.82, 0));
+  // Piano superiore a graticcio: intonaco di argilla tra travi di legno
+  g.add(box(U, 0.36, U, k.wattle, 0, y0 + 0.82, 0));
+  for (let i = 0; i <= 4; i++) {
+    const t = -U / 2 + (i * U) / 4;
+    for (const side of [-1, 1]) {
+      g.add(box(0.035, 0.36, 0.02, k.beam, t, y0 + 0.82, side * (U / 2 + 0.005)));
+      g.add(box(0.02, 0.36, 0.035, k.beam, side * (U / 2 + 0.005), y0 + 0.82, t));
+    }
+  }
+  for (const side of [-1, 1]) {
+    g.add(box(U + 0.02, 0.035, 0.02, k.beam, 0, y0 + 1.16, side * (U / 2 + 0.006)));
+    g.add(box(0.02, 0.035, U + 0.02, k.beam, side * (U / 2 + 0.006), y0 + 1.16, 0));
+  }
   for (let i = -1; i <= 1; i++) {
     g.add(slit(i * 0.26, y0 + 0.98, U / 2 + 0.01, 0.06, 0.12));
     g.add(slit(i * 0.26, y0 + 0.98, -U / 2 - 0.01, 0.06, 0.12));

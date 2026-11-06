@@ -1,6 +1,11 @@
 /** Calendario di gioco: a velocità 1× un giorno dura SECONDS_PER_DAY secondi reali. */
 /** Una stagione (90 giorni) dura 2,5 minuti a velocità 1×. */
-export const SECONDS_PER_DAY = 150 / 90;
+/**
+ * Il tempo scorre 5 volte più veloce di prima: una stagione dura 30 secondi, un anno 2 minuti.
+ * Movimenti degli eserciti e lavori dei costruttori sono riscalati con TIME_SCALE.
+ */
+export const TIME_SCALE = 5;
+export const SECONDS_PER_DAY = 150 / 90 / TIME_SCALE;
 export const DAYS_PER_SEASON = 90;
 export const DAYS_PER_YEAR = DAYS_PER_SEASON * 4;
 export const START_YEAR = 900;

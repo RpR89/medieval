@@ -7,7 +7,7 @@ import {
   type BuildingDef,
   type UnitType,
 } from '../data/buildings';
-import { dateFromDays, DAYS_PER_SEASON, formatDuration, SEASON_NAMES, type GameDate } from '../data/calendar';
+import { dateFromDays, DAYS_PER_SEASON, formatDuration, SEASON_NAMES, TIME_SCALE, type GameDate } from '../data/calendar';
 import { eraForYear } from '../data/eras';
 import {
   canAfford,
@@ -59,7 +59,7 @@ const EATING_ORDER: ResourceId[] = [...FOOD_IDS].sort(
 const MAX_LOG = 60;
 
 /** Giornate di lavoro per unità di materiale (la pietra e la calce richiedono più fatica). */
-const WORK_PER_UNIT: Partial<Record<ResourceId, number>> = { wood: 0.3, stone: 0.55, lime: 0.5, coins: 0.03, gold: 0.5, charcoal: 0.1 };
+const WORK_PER_UNIT: Partial<Record<ResourceId, number>> = { wood: 3, stone: 5.5, lime: 5, coins: 0.3, gold: 5, charcoal: 1 };
 /** Paga giornaliera e cibo in più per ogni costruttore al lavoro. */
 export const BUILDER_WAGE = 0.06;
 export const BUILDER_FOOD = 0.05;
@@ -1353,7 +1353,7 @@ export class Game {
     for (const k of ['infantry', 'archers', 'cavalry'] as const) if (f[k] > 0) speed = Math.min(speed, MARCH_SPEED[k]);
     for (const k of ['rams', 'trebuchets'] as const) if (f[k] > 0) speed = Math.min(speed, ENGINES[k].speed);
     if (!isFinite(speed)) speed = 4;
-    return Math.max(2, Math.ceil(this.warDistance() / speed));
+    return Math.max(2, Math.ceil(this.warDistance() / (speed / TIME_SCALE)));
   }
 
   canLaunch(f: Force): PlaceCheck {
@@ -1610,7 +1610,7 @@ export class Game {
   private resolveRaid() {
     const s = this.state;
     const army = this.raiderArmy();
-    s.nextRaidDay = s.day + (300 + this.random() * 300) / (this.fx().raids ?? 1);
+    s.nextRaidDay = s.day + (1000 + this.random() * 1000) / (this.fx().raids ?? 1);
     this.besiege(army);
   }
 
@@ -1717,8 +1717,9 @@ export class Game {
     let v = Infinity;
     for (const k of ['infantry', 'archers', 'cavalry'] as const) if (c.troops[k] > 0) v = Math.min(v, MARCH_SPEED[k]);
     for (const k of ['rams', 'trebuchets'] as const) if (c.troops[k] > 0) v = Math.min(v, ENGINES[k].speed);
-    if (c.envoy) return 6;
-    v = (isFinite(v) ? v : 4) * FORMATIONS[c.formation ?? 'line'].speed;
+    // Le velocità sono in caselle al giorno: i giorni ora sono più brevi, la marcia resta uguale in tempo reale
+    if (c.envoy) return 6 / TIME_SCALE;
+    v = ((isFinite(v) ? v : 4) * FORMATIONS[c.formation ?? 'line'].speed) / TIME_SCALE;
     return c.groupSpeed ? Math.min(v, c.groupSpeed) : v;
   }
 
@@ -2825,7 +2826,7 @@ export class Game {
       }
       // Decisioni periodiche
       if (s.day < l.nextAction || this.locked) continue;
-      l.nextAction = s.day + 60 + this.random() * 120;
+      l.nextAction = s.day + 200 + this.random() * 400;
       const strong = this.lordPower(l) > this.myPower() * (l.personality === 'aggressive' ? 0.7 : 1.1);
       if (l.status === 'war' || (l.status === 'neutral' && l.personality === 'aggressive' && strong && l.relation < -20 && this.random() < 0.5)) {
         if (l.status !== 'war') this.declareWar(l, 'Ha scelto la via delle armi');
@@ -3363,7 +3364,7 @@ export class Game {
   /** Giornate di lavoro necessarie per dei materiali. */
   static workFor(cost: Cost): number {
     let w = 0;
-    for (const [id, n] of Object.entries(cost)) w += (n ?? 0) * (WORK_PER_UNIT[id as ResourceId] ?? 0.1);
+    for (const [id, n] of Object.entries(cost)) w += (n ?? 0) * (WORK_PER_UNIT[id as ResourceId] ?? 1);
     return Math.max(1, Math.round(w * 10) / 10);
   }
 

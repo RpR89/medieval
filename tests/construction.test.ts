@@ -30,7 +30,7 @@ describe('cantieri', () => {
     g.advance(2);
     expect(g.progressOf(b.uid)).toBeGreaterThan(0);
     expect(g.progressOf(b.uid)).toBeLessThan(1);
-    g.advance(60);
+    g.advance(400);
     expect(g.ownKeep()?.uid).toBe(b.uid);
     expect(g.castleLevel()).toBe(1);
     expect(g.sites()).toHaveLength(0);
@@ -47,8 +47,8 @@ describe('cantieri', () => {
     for (const g of [a, b]) for (let z = 20; z < 23; z++) for (let x = 10; x < 30; x++) g.place('palisade', x, z);
     a.advance(3);
     b.advance(3);
-    const left = (g: Game) => g.jobs().reduce((s, j) => s + j.work - j.done, 0);
-    expect(left(b)).toBeLessThan(left(a) * 0.75);
+    const done = (g: Game) => g.jobs().reduce((s, j) => s + j.done, 0);
+    expect(done(b)).toBeGreaterThan(done(a) * 2);
     expect(b.lastBuilders).toBeGreaterThan(a.lastBuilders);
     // Pagati e sfamati: compaiono nel registro delle risorse
     expect(a.resourceFlows('coins').expense.some((r) => r.label === 'Paga dei costruttori')).toBe(true);

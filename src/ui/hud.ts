@@ -59,7 +59,7 @@ export interface HudCallbacks {
 }
 
 type Tab = 'castle' | 'works' | 'army' | 'market' | 'realm' | 'diplomacy';
-const SPEEDS = [0, 1, 2, 4, 8];
+const SPEEDS = [0, 1, 2, 4, 8, 16];
 
 export class Hud {
   private top: HTMLElement;

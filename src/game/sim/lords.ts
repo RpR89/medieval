@@ -104,7 +104,7 @@ export function createLords(count: number, seed: number): Lord[] {
       jobs: [],
       buildings: [],
       companies: [],
-      nextAction: 360 * 2 + Math.floor(rand() * 200),
+      nextAction: 360 * 4 + Math.floor(rand() * 600),
       nextUid: 1,
     });
   }

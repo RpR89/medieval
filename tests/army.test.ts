@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { TIME_SCALE } from '../src/game/data/calendar';
 import { Game, lineTiles } from '../src/game/sim/game';
 import { createInitialState, type Force } from '../src/game/sim/state';
 import { mulberry32, Tile } from '../src/game/world/terrain';
@@ -23,7 +24,8 @@ function world(slot: 0 | 1 = 0, match = true) {
 }
 
 function run(gs: Game[], days: number, until?: () => boolean) {
-  for (let i = 0; i < days * 4; i++) {
+  // Durate in "giorni di prima": ora un giorno dura TIME_SCALE volte meno
+  for (let i = 0; i < days * 4 * TIME_SCALE; i++) {
     for (const g of gs) g.advance(0.25);
     if (until?.()) return;
   }
@@ -105,7 +107,9 @@ describe('reparti sul campo', () => {
     const coins = a.state.resources.coins;
     a.orderHome((a.state.companies ?? []).map((c) => c.id));
     run([a], 40, () => !a.state.companies?.length);
-    expect(a.state.resources.coins).toBeGreaterThan(coins);
+    // Il bottino entra nel tesoro (la paga della marcia di ritorno si conta a parte)
+    void coins;
+    expect(a.resourceFlows('coins').oneOff.find((r) => r.label === 'Bottino riportato dai reparti')?.amount).toBeGreaterThan(cargo * 0.9);
   });
 
   it('due reparti nemici che si incontrano combattono in campo aperto', () => {
