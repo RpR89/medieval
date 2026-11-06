@@ -225,6 +225,12 @@ button.multi { background: #6b2a1e; border-color: #a3402f; color: var(--ink); }
 .faction-box { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; margin: 8px 0; }
 
 /* Assedio */
-.siege-panel { position: absolute; top: 70px; left: 50%; transform: translateX(-50%); width: min(460px, 92vw); padding: 10px 14px; z-index: 5; border-color: rgba(226, 114, 91, 0.6); }
+.siege-panel { position: absolute; top: 66px; left: 50%; transform: translateX(-50%); max-width: min(620px, 94vw); padding: 3px 10px; z-index: 5; border-color: rgba(226, 114, 91, 0.5); font-size: 12px; }
+.siege-panel.open { width: min(480px, 94vw); padding: 6px 12px 10px; }
+.siege-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; white-space: nowrap; }
+.siege-bar button { padding: 0 6px; font-size: 12px; }
+.siege-bar .sep { color: var(--muted); margin: 0 4px; }
+.siege-bar .slow { opacity: 0.7; }
+.siege-details { margin-top: 6px; max-height: 50vh; overflow-y: auto; }
 .siege-panel .hp.grow { flex: 1; height: 8px; }
 .siege-panel .siege-log { margin: 6px 0 0; padding-left: 18px; max-height: 80px; overflow-y: auto; }

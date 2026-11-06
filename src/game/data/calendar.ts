@@ -6,6 +6,8 @@
  */
 export const TIME_SCALE = 5;
 export const SECONDS_PER_DAY = 150 / 90 / TIME_SCALE;
+/** Durante un assedio (giocatore singolo) il tempo scorre a questa frazione della velocità scelta. */
+export const SIEGE_TIME = 0.3;
 export const DAYS_PER_SEASON = 90;
 export const DAYS_PER_YEAR = DAYS_PER_SEASON * 4;
 export const START_YEAR = 900;

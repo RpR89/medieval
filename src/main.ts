@@ -1,7 +1,7 @@
 import './style.css';
 import { supabase } from './config/supabase';
 import { getBuilding } from './game/data/buildings';
-import { SECONDS_PER_DAY } from './game/data/calendar';
+import { SECONDS_PER_DAY, SIEGE_TIME } from './game/data/calendar';
 import { RESOURCES } from './game/data/resources';
 import { Game, lineTiles } from './game/sim/game';
 import type { GameState } from './game/sim/state';
@@ -384,7 +384,8 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
   const frame = (now: number) => {
     const dt = Math.min(0.25, (now - last) / 1000);
     last = now;
-    const eff = ms ? ms.speed(speed) : speed;
+    // In giocatore singolo, durante un assedio il tempo scorre più lento per seguirlo e decidere
+    const eff = ms ? ms.speed(speed) : speed * (game.siegeActive() ? SIEGE_TIME : 1);
     if (eff > 0) game.advance((dt * eff) / SECONDS_PER_DAY);
     ms?.tick(now);
     if (now - lastHud > 200) {

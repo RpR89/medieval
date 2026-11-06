@@ -100,13 +100,13 @@ describe('reparti sul campo', () => {
     const c1 = a.formCompany(F({ infantry: 25, archers: 12 }))!;
     const c2 = a.formCompany(F({ infantry: 15, cavalry: 6 }))!;
     expect(a.orderAttack([c1.id, c2.id], bx, bz).ok).toBe(true);
-    run([a, b], 40, () => !!a.state.campaignLog?.length);
+    run([a, b], 90, () => !!a.state.campaignLog?.length);
     expect(a.state.campaignLog?.[0].outcome).not.toBe('repelled');
     const cargo = (a.state.companies ?? []).reduce((s, c) => s + (c.cargo?.coins ?? 0), 0);
     expect(cargo).toBeGreaterThan(0);
     const coins = a.state.resources.coins;
     a.orderHome((a.state.companies ?? []).map((c) => c.id));
-    run([a], 40, () => !a.state.companies?.length);
+    run([a], 200, () => !a.state.companies?.length);
     // Il bottino entra nel tesoro (la paga della marcia di ritorno si conta a parte)
     void coins;
     expect(a.resourceFlows('coins').oneOff.find((r) => r.label === 'Bottino riportato dai reparti')?.amount).toBeGreaterThan(cargo * 0.9);

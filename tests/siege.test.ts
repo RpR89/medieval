@@ -140,7 +140,7 @@ describe('rifornimenti dei reparti', () => {
     c.path = [];
     g.advance(20);
     expect(g.supplyDays(c)).toBeLessThan(Game.SUPPLY_DAYS - 15);
-    g.advance(40);
+    g.advance(200);
     expect(c.troops.infantry).toBeLessThan(20);
   });
 });

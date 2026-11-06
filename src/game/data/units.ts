@@ -72,7 +72,7 @@ export const ENGINES: Record<EngineType, EngineDef> = {
     cost: { wood: 60, coins: 40 },
     upkeep: { coins: 0.2 },
     minYear: 1000,
-    speed: 1.8,
+    speed: 0.9,
     description: 'Tronco ferrato sotto una tettoia: sfonda le porte.',
   },
   trebuchets: {
@@ -82,14 +82,14 @@ export const ENGINES: Record<EngineType, EngineDef> = {
     cost: { wood: 150, stone: 30, coins: 120 },
     upkeep: { coins: 0.5 },
     minYear: 1200,
-    speed: 1.2,
+    speed: 0.6,
     description: 'Macchina a contrappeso: bombarda le mura prima dell\'assalto.',
   },
 };
 
 /** Velocità di marcia delle truppe (caselle al giorno). */
 /** Caselle al giorno (prima della scala del tempo): marce lente, il terreno e le strade contano. */
-export const MARCH_SPEED: Record<UnitType, number> = { infantry: 2.4, archers: 2.4, cavalry: 4.2 };
+export const MARCH_SPEED: Record<UnitType, number> = { infantry: 1.2, archers: 1.2, cavalry: 2.1 };
 
 /** Bottino trasportabile per soldato sopravvissuto. */
 export const CARRY: Record<UnitType, number> = { infantry: 12, archers: 10, cavalry: 25 };

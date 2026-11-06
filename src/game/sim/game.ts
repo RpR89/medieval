@@ -1785,7 +1785,9 @@ export class Game {
   // ───────────── Rifornimenti dei reparti ─────────────
 
   /** Giorni di viveri con cui parte un reparto (e che si reintegrano nel proprio territorio). */
-  static readonly SUPPLY_DAYS = 40;
+  static readonly SUPPLY_DAYS = 160;
+  /** In marcia si raziona e si foraggia: un quarto del consumo normale. */
+  static readonly FIELD_RATION = 0.25;
 
   /** Preleva cibo dai magazzini (prima quello che deperisce): restituisce quanto preso. */
   private takeFood(amount: number): number {
@@ -1812,7 +1814,7 @@ export class Game {
   /** Giorni di viveri rimasti a un reparto. */
   supplyDays(c: Company): number {
     const n = c.troops.infantry + c.troops.archers + c.troops.cavalry;
-    return n > 0 ? (c.food ?? 0) / (n * SOLDIER_FOOD) : Infinity;
+    return n > 0 ? (c.food ?? 0) / (n * SOLDIER_FOOD * Game.FIELD_RATION) : Infinity;
   }
 
   /** Fuori dal territorio i reparti consumano i viveri; senza, disertano. Dentro si riforniscono. */
@@ -1821,14 +1823,15 @@ export class Game {
       if (c.envoy || c.scout) continue;
       const n = c.troops.infantry + c.troops.archers + c.troops.cavalry;
       if (n <= 0) continue;
-      const full = n * SOLDIER_FOOD * Game.SUPPLY_DAYS;
+      const ration = n * SOLDIER_FOOD * Game.FIELD_RATION;
+      const full = ration * Game.SUPPLY_DAYS;
       if (this.ownsTile(Math.floor(c.x), Math.floor(c.z))) {
         // Nel proprio territorio i carri tornano a riempirsi dai granai
-        const want = Math.min(full - (c.food ?? 0), n * SOLDIER_FOOD * 4 * dt);
+        const want = Math.min(full - (c.food ?? 0), ration * 8 * dt);
         if (want > 0) c.food = (c.food ?? 0) + this.track('Viveri dei reparti', () => this.takeFood(want));
         continue;
       }
-      const eat = n * SOLDIER_FOOD * dt;
+      const eat = ration * dt;
       if ((c.food ?? 0) >= eat) {
         c.food = (c.food ?? 0) - eat;
         continue;
@@ -2160,6 +2163,11 @@ export class Game {
     return { food, days: perDay > 0 ? food / perDay : Infinity };
   }
 
+  /** C'è un assedio in corso (subito o nostro)? */
+  siegeActive(): boolean {
+    return !!this.state.siege || !!this.state.offense;
+  }
+
   /** Nome e durata residua della fase in corso. */
   siegePhase(): { name: string; days: number } | null {
     const sg = this.state.siege;
@@ -2467,8 +2475,8 @@ export class Game {
     for (const k of ['infantry', 'archers', 'cavalry'] as const) if (c.troops[k] > 0) v = Math.min(v, MARCH_SPEED[k]);
     for (const k of ['rams', 'trebuchets'] as const) if (c.troops[k] > 0) v = Math.min(v, ENGINES[k].speed);
     // Le velocità sono in caselle al giorno: i giorni ora sono più brevi, la marcia resta uguale in tempo reale
-    if (c.envoy) return 6 / TIME_SCALE;
-    if (c.scout) return 8 / TIME_SCALE;
+    if (c.envoy) return 3 / TIME_SCALE;
+    if (c.scout) return 4 / TIME_SCALE;
     v = ((isFinite(v) ? v : 4) * FORMATIONS[c.formation ?? 'line'].speed) / TIME_SCALE;
     return c.groupSpeed ? Math.min(v, c.groupSpeed) : v;
   }
@@ -2509,7 +2517,7 @@ export class Game {
     const [x, z] = this.spawnPoint();
     const slot = this.state.match?.slot ?? 0;
     const c: Company = { id: `c${slot}-${this.state.nextUid++}`, troops: { ...f }, x, z, order: 'idle', formation: 'line', behavior: 'defensive' };
-    c.food = this.track('Viveri dei reparti', () => this.takeFood((f.infantry + f.archers + f.cavalry) * SOLDIER_FOOD * Game.SUPPLY_DAYS));
+    c.food = this.track('Viveri dei reparti', () => this.takeFood((f.infantry + f.archers + f.cavalry) * SOLDIER_FOOD * Game.FIELD_RATION * Game.SUPPLY_DAYS));
     this.companies().push(c);
     return c;
   }

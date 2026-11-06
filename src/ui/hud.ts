@@ -209,7 +209,10 @@ export class Hud {
         if (!g.payRansom()) this.toast('Non hai abbastanza monete per il riscatto.', 'bad');
       } else if (t.dataset.act === 'focus' && g.state.siege) this.cb.focus?.(...g.state.siege.camp);
       else if (t.dataset.act === 'focus-off' && g.state.offense) this.cb.focus?.(...g.state.offense.camp);
-      else if (t.dataset.act === 'assault') g.offenseAssault();
+      else if (t.dataset.act === 'toggle') {
+        this.siegeOpen = !this.siegeOpen;
+        this.refreshSiege();
+      } else if (t.dataset.act === 'assault') g.offenseAssault();
       else if (t.dataset.act === 'lift') g.liftOffense();
       else if (t.dataset.act?.startsWith('aim-')) g.setOffenseAim(t.dataset.act.slice(4) as 'weakest' | 'gate' | 'tower');
     };
@@ -1347,15 +1350,7 @@ export class Hud {
   private defenseHtml(): string {
     const g = this.game;
     const sg = g.state.siege;
-    if (!sg) {
-      this.siegeStart = -1;
-      return '';
-    }
-    if (this.siegeStart !== sg.startDay) {
-      // Inizio dell'assedio: si torna a velocità normale per seguirlo
-      this.siegeStart = sg.startDay;
-      this.cb.onSpeed(1);
-    }
+    if (!sg) return '';
     const ph = g.siegePhase()!;
     const t = sg.troops;
     const size = Math.round(t.infantry + t.archers + t.cavalry);
@@ -1413,11 +1408,50 @@ export class Hud {
       <ol class="small siege-log">${o.log.slice(-4).map((x) => `<li>${escapeHtml(x.text)}</li>`).join('')}</ol>`;
   }
 
-  /** Pannello degli assedi in corso (subiti e nostri). */
+  /** Riga riassuntiva, sempre visibile, degli assedi in corso. */
+  private siegeSummary(): string {
+    const g = this.game;
+    const parts: string[] = [];
+    const sg = g.state.siege;
+    const start = sg?.startDay ?? g.state.offense?.startDay ?? -1;
+    if (start !== this.siegeStart) {
+      // Nuovo assedio: il pannello parte chiuso (il tempo intanto rallenta da solo)
+      this.siegeStart = start;
+      this.siegeOpen = false;
+    }
+    if (sg) {
+      const ph = g.siegePhase()!;
+      const food = g.siegeFood();
+      const short = { prepare: 'preparano', bombard: 'bombardano', assault: 'assalto!' }[sg.phase];
+      parts.push(
+        `<span class="bad">⚔️ Assediati</span> · ${short}${sg.phase !== 'assault' ? ` · assalto ~${formatDuration(ph.days)}` : ''} · 🍞 ${isFinite(food.days) ? formatDuration(food.days) : '—'} · morale ${Math.round(sg.morale * 100)}%
+        <button data-act="sortie" ${g.canSortie().ok ? '' : 'disabled'} title="${escapeHtml(g.canSortie().reason ?? 'Sortita: brucia scale e macchine')}">🔥</button><button data-act="ransom" title="Riscatto: ${g.ransomCost()} monete" ${g.state.resources.coins >= g.ransomCost() ? '' : 'disabled'}>💰</button>`,
+      );
+    }
+    const o = g.state.offense;
+    if (o) {
+      const l = g.lord(o.lord);
+      parts.push(
+        `<span class="good">⛺ ${escapeHtml(l?.castle ?? '')}</span> · 🪜 ${Math.floor(o.ladders)} · 🎯 ${Math.floor(o.mangonels) + g.offenseTroops().trebuchets}
+        <button data-act="assault" title="Assalta ora">⚔️</button><button data-act="lift" title="Togli l'assedio">🏳️</button>`,
+      );
+    }
+    return parts.join('<span class="sep">│</span>');
+  }
+
+  private siegeOpen = false;
+
+  /** Pannello degli assedi in corso (subiti e nostri): una barra compatta, i dettagli a richiesta. */
   private refreshSiege() {
-    const html = [this.defenseHtml(), this.offenseHtml()].filter(Boolean).join('<hr>');
-    this.siegePanel.classList.toggle('hidden', !html);
-    if (html) setHtml(this.siegePanel, html);
+    const summary = this.siegeSummary();
+    this.siegePanel.classList.toggle('hidden', !summary);
+    if (!summary) return;
+    const details = this.siegeOpen ? [this.defenseHtml(), this.offenseHtml()].filter(Boolean).join('<hr>') : '';
+    this.siegePanel.classList.toggle('open', this.siegeOpen);
+    setHtml(
+      this.siegePanel,
+      `<div class="siege-bar"><span class="slow" title="Durante l'assedio il tempo scorre più lento">⏳</span>${summary}<button data-act="toggle" class="link" title="${this.siegeOpen ? 'Chiudi i dettagli' : 'Dettagli e comandi'}">${this.siegeOpen ? '▴' : '▾'}</button></div>${details ? `<div class="siege-details">${details}</div>` : ''}`,
+    );
   }
 
   refresh(speed: number) {
