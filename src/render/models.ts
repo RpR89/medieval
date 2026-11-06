@@ -749,7 +749,8 @@ export function buildModel(def: BuildingDef, ctx: ModelCtx = {}): THREE.Group {
   }
   if (ctx.site !== undefined || ctx.works) {
     const stone = (def.cost.stone ?? 0) + (def.cost.lime ?? 0) > 0;
-    scaffold(g, w, d, ctx.site, stone, seed);
+    const selfGrow = def.id.startsWith('palisade') || MASONRY_WALLS.has(def.id);
+    scaffold(g, w, d, ctx.site, stone, seed, selfGrow, def.id.startsWith('palisade'));
   }
   return bake(g);
 }

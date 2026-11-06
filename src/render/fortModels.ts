@@ -70,49 +70,61 @@ function rubble(g: G, seed: number, n: number, m: THREE.Material, spread = 0.45)
 
 // ───────────── Palizzata ─────────────
 
+/**
+ * Palizzata in scala: tronchi di circa 30-40 cm alti 4 metri (0,6 unità), fitti,
+ * legati da traverse sul lato interno. Nei cantieri i pali compaiono uno alla volta.
+ */
 export function palisade(g: G, c: ModelCtx, double = false) {
   const k = mats();
   const rand = mulberry32(c.seed ?? 1);
   const ruin = c.state === 'ruin';
   const damaged = c.state === 'damaged';
+  const building = c.site !== undefined;
+  const done = building ? 0.12 + (c.site ?? 0) * 0.28 : 1;
+  const H = double ? 0.72 : 0.62;
+  const bank = has(c, 'earthbank');
+  const base = bank ? 0.14 : 0;
   const stake = (sub: G, x: number, z: number) => {
-    if (ruin && rand() < 0.65) return;
-    if (damaged && rand() < 0.2) return;
-    const h = (ruin ? 0.35 : 1.05) + rand() * 0.2;
-    const r = 0.075 + rand() * 0.02;
-    const s = cyl(r, r * 1.1, h, k.log, x, 0, z, 7);
-    s.rotation.z = (rand() - 0.5) * (ruin || damaged ? 0.4 : 0.05);
+    const r1 = rand();
+    const r2 = rand();
+    if (building && r1 > done) return;
+    if (ruin && r1 < 0.65) return;
+    if (damaged && r1 < 0.2) return;
+    const h = (ruin ? H * 0.4 : H) * (0.93 + r2 * 0.12);
+    const r = 0.036 + r2 * 0.012;
+    const s = cyl(r, r * 1.08, h, k.log, x, base, z, 6);
+    s.rotation.z = (r1 - 0.5) * (ruin || damaged ? 0.4 : 0.04);
     sub.add(s);
-    if (!ruin) sub.add(cone(r, 0.18, k.log, x, h, z, 7));
+    if (!ruin) sub.add(cone(r, 0.09, k.log, x, base + h, z, 6));
   };
-  const rows = double ? [-0.15, 0.15] : [0];
+  const rows = double ? [-0.12, 0.12] : [0];
   for (const z of rows) stake(g, 0, z);
-  if (double && !ruin) {
-    g.add(box(0.3, 0.55, 0.3, k.earth, 0, 0, 0));
-    g.add(box(0.34, 0.04, 0.34, k.planks, 0, 0.78, 0));
+  if (bank) g.add(box(0.34, base, 0.5, k.earth, 0, 0, 0));
+  if (double && !ruin && !building) {
+    g.add(box(0.2, 0.36, 0.2, k.earth, 0, 0, 0));
+    g.add(box(0.28, 0.03, 0.3, k.planks, 0, 0.46, 0));
   }
   for (const l of linksOrDefault(c)) {
     along(g, l, (sub, len) => {
-      const n = Math.max(1, Math.round(len * 6));
+      const n = Math.max(2, Math.round(len * 11));
       for (const z of rows) for (let i = 0; i < n; i++) stake(sub, ((i + 0.5) * len) / n, z);
-      if (ruin) return;
+      if (bank) {
+        sub.add(box(len, base, 0.5, k.earth, len / 2, 0, 0));
+        sub.add(box(len, 0.03, 0.36, k.grassMound, len / 2, base, 0.04));
+      }
+      if (ruin || building) return;
       if (double) {
-        // Riempimento di terra tra le due file e ballatoio in cima
-        sub.add(box(len, 0.55, 0.26, k.earth, len / 2, 0, 0));
-        sub.add(box(len, 0.04, 0.3, k.planks, len / 2, 0.78, 0));
-        sub.add(box(len, 0.06, 0.05, k.beam, len / 2, 0.7, 0.2));
-        sub.add(box(len, 0.06, 0.05, k.beam, len / 2, 0.7, -0.2));
+        // Terra battuta tra le due file e ballatoio di tavole per i difensori
+        sub.add(box(len, 0.36, 0.2, k.earth, len / 2, base, 0));
+        sub.add(box(len, 0.03, 0.3, k.planks, len / 2, base + 0.46, 0));
+        sub.add(box(len, 0.04, 0.03, k.beam, len / 2, base + 0.25, 0.155));
         return;
       }
-      sub.add(box(len, 0.06, 0.05, k.beam, len / 2, 0.7, 0.1));
-      if (has(c, 'earthbank')) {
-        const bank = box(len, 0.28, 0.42, k.earth, len / 2, -0.05, 0);
-        sub.add(bank);
-        sub.add(box(len, 0.06, 0.3, k.grassMound, len / 2, 0.22, 0));
-      }
+      // Traverse interne che tengono insieme i pali
+      for (const y of [0.15, 0.45]) sub.add(box(len, 0.035, 0.03, k.beam, len / 2, base + y, 0.055));
       if (has(c, 'walkway_wood')) {
-        sub.add(box(len, 0.04, 0.24, k.planks, len / 2, 0.6, 0.2));
-        sub.add(box(0.04, 0.6, 0.04, k.beam, len / 2, 0, 0.3));
+        sub.add(box(len, 0.025, 0.2, k.planks, len / 2, base + 0.4, 0.15));
+        for (const t of [0.1, len - 0.1]) sub.add(box(0.03, 0.4, 0.03, k.beam, t, base, 0.22));
       }
     });
   }
@@ -142,12 +154,14 @@ export function stoneWall(g: G, c: ModelCtx, style: WallStyle = 'mortar') {
   const rough = style === 'rubble';
   const body = rough ? k.stoneDark : k.stone;
   const W = S.W + (thick ? 0.16 : 0);
-  const H = ruin ? 0.45 + rand() * 0.25 : S.H + (walk && style === 'mortar' ? 0.15 : 0);
+  const building = c.site !== undefined;
+  const grow = building ? 0.22 + (c.site ?? 0) * 0.22 : 1;
+  const H = ruin ? 0.45 + rand() * 0.25 : (S.H + (walk && style === 'mortar' ? 0.15 : 0)) * grow;
   // Pilastro centrale (giunto)
   g.add(box(W + 0.12, H + (ruin ? 0 : 0.15), W + 0.12, body, 0, 0, 0));
   g.add(box(W + 0.12 + S.batter, S.batterH, W + 0.12 + S.batter, k.stoneDark, 0, 0, 0));
-  if (!ruin && !rough) crenels(g, W + 0.12, W + 0.12, H + 0.15, k.stoneLight, style === 'bastion' ? 0.15 : 0.11, 0.17);
-  if (!ruin && rough) g.add(box(W + 0.1, 0.04, W + 0.1, k.planks, 0, H + 0.15, 0));
+  if (!ruin && !rough && !building) crenels(g, W + 0.12, W + 0.12, H + 0.15, k.stoneLight, style === 'bastion' ? 0.15 : 0.11, 0.17);
+  if (!ruin && rough && !building) g.add(box(W + 0.1, 0.04, W + 0.1, k.planks, 0, H + 0.15, 0));
   for (const l of linksOrDefault(c)) {
     // Lato esterno nel sistema locale del segmento (z locale = (sinθ, cosθ) nel mondo)
     const th = Math.atan2(-l.dz, l.dx);
@@ -160,7 +174,7 @@ export function stoneWall(g: G, c: ModelCtx, style: WallStyle = 'mortar') {
       sub.add(box(len, S.batterH, W + S.batter + (thick ? 0.1 : 0), k.stoneDark, len / 2, 0, 0));
       if (S.batter > 0.3) sub.add(box(len, S.batterH * 0.5, W + S.batter * 1.5, k.stoneDark, len / 2, 0, 0));
       if (thick && S.batter < 0.3) sub.add(box(len, 0.5, W + 0.12, k.stoneDark, len / 2, 0, 0));
-      if (ruin) return;
+      if (ruin || building) return;
       if (rough) {
         // Pietrame: blocchi irregolari in facciata e parapetto di tavole
         for (let i = 0; i < Math.round(len * 5); i++) {
@@ -213,41 +227,51 @@ function hoardingRing(g: G, r: number, y: number, round: boolean) {
   }
 }
 
+/**
+ * Torre lignea di fiancheggiamento in scala (circa 15 metri): basamento di pietre,
+ * fusto di tronchi orizzontali, piano di combattimento sporgente e tetto di scandole.
+ */
 export function towerWood(g: G, c: ModelCtx) {
   const k = mats();
   const ruin = c.state === 'ruin';
-  const legs: Array<[number, number]> = [[-0.6, -0.6], [0.6, -0.6], [-0.6, 0.6], [0.6, 0.6]];
-  for (const [x, z] of legs) g.add(cyl(0.07, 0.08, ruin ? 0.9 : 2.4, k.log, x, 0, z, 7));
+  const s = 1.3;
+  g.add(box(s + 0.2, 0.12, s + 0.2, k.stoneDark, 0, 0, 0));
+  const posts: Array<[number, number]> = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
   if (ruin) {
-    rubble(g, c.seed ?? 3, 10, k.log, 0.8);
+    for (const [x, z] of posts) g.add(cyl(0.06, 0.07, 0.5, k.log, (x * s) / 2, 0.1, (z * s) / 2, 6));
+    g.add(box(s, 0.3, s, k.logWall, 0, 0.1, 0));
+    rubble(g, c.seed ?? 3, 12, k.log, 0.8);
     return;
   }
-  for (const [ax, az, rot] of [[0, -0.6, 0], [0, 0.6, 0], [-0.6, 0, PI / 2], [0.6, 0, PI / 2]] as const) {
-    for (const s of [-1, 1]) {
-      const b = box(1.65, 0.05, 0.05, k.log, ax, 0, az);
-      b.rotation.set(0, rot, s * 0.62);
-      b.position.y = 1.05;
-      g.add(b);
+  // Fusto: pareti di tronchi orizzontali tra quattro pali d'angolo
+  g.add(box(s, 1.05, s, k.logWall, 0, 0.1, 0));
+  for (const [x, z] of posts) g.add(cyl(0.06, 0.07, 1.62, k.log, (x * s) / 2, 0.1, (z * s) / 2, 6));
+  for (const y of [0.5, 0.85]) {
+    for (const [fx, fz, r] of [[0, s / 2 + 0.01, 0], [0, -s / 2 - 0.01, PI], [s / 2 + 0.01, 0, PI / 2], [-s / 2 - 0.01, 0, -PI / 2]] as const) g.add(slit(fx, y, fz, 0.05, 0.16, r));
+  }
+  // Piano di combattimento sporgente su mensole
+  const top = 1.15;
+  const S = has(c, 'hoarding') ? s + 0.42 : s + 0.24;
+  for (let i = 0; i < 4; i++) {
+    for (const t of [-0.45, 0, 0.45]) {
+      const a = (i * PI) / 2;
+      const cb = box(0.26, 0.06, 0.06, k.beam, Math.cos(a) * (s / 2) + Math.cos(a + PI / 2) * t, top - 0.08, Math.sin(a) * (s / 2) + Math.sin(a + PI / 2) * t);
+      cb.rotation.y = -a;
+      g.add(cb);
     }
   }
-  g.add(box(1.55, 0.1, 1.55, k.planks, 0, 2.15, 0));
-  for (const s of [-1, 1]) {
-    g.add(box(1.55, 0.45, 0.06, k.darkPlanks, 0, 2.25, s * 0.75));
-    g.add(box(0.06, 0.45, 1.55, k.darkPlanks, s * 0.75, 2.25, 0));
+  g.add(box(S, 0.05, S, k.planks, 0, top, 0));
+  g.add(box(S, 0.34, S, k.darkPlanks, 0, top + 0.05, 0));
+  for (let i = -1; i <= 1; i++) {
+    for (const [fx, fz, r] of [[i * 0.38, S / 2 + 0.01, 0], [i * 0.3, -S / 2 - 0.01, PI], [S / 2 + 0.01, i * 0.38, PI / 2], [-S / 2 - 0.01, i * 0.38, -PI / 2]] as const) g.add(slit(fx, top + 0.15, fz, 0.07, 0.12, r));
   }
-  for (const [x, z] of legs) g.add(box(0.06, 0.75, 0.06, k.log, x, 2.25, z));
-  if (has(c, 'hoarding')) {
-    g.add(box(1.85, 0.3, 1.85, k.darkPlanks, 0, 2.6, 0));
-    g.add(hipRoof(2.0, 2.0, 0.85, k.thatch, 0, 2.9, 0));
-  } else {
-    g.add(hipRoof(1.75, 1.75, 0.75, k.thatch, 0, 3.0, 0));
-  }
-  const ladder = new THREE.Group();
-  for (const s of [-0.1, 0.1]) ladder.add(box(0.03, 2.3, 0.03, k.planks, s, 0, 0));
-  for (let i = 1; i < 11; i++) ladder.add(box(0.2, 0.02, 0.02, k.planks, 0, i * 0.2, 0));
-  ladder.position.set(0.2, 0, 0.95);
-  ladder.rotation.x = -0.18;
-  g.add(ladder);
+  g.add(hipRoof(S + 0.16, S + 0.16, 0.62, has(c, 'hoarding') ? k.thatch : k.shingle, 0, top + 0.39, 0));
+  // Ingresso rialzato con scala
+  g.add(box(0.18, 0.28, 0.03, k.darkPlanks, 0.2, 0.42, s / 2 + 0.015));
+  const stair = box(0.18, 0.04, 0.62, k.planks, 0.2, 0.2, s / 2 + 0.3);
+  stair.rotation.x = 0.72;
+  g.add(stair);
+  g.add(flag(k.flag, 0, top + 1.0, 0, 0.3));
 }
 
 export function towerSquare(g: G, c: ModelCtx) {
@@ -361,14 +385,14 @@ export function towerBastion(g: G, c: ModelCtx) {
  * dei lavori (0-3), circondata da impalcature e materiali. Con `site` assente
  * aggiunge solo le impalcature (lavori su un edificio finito).
  */
-export function scaffold(g: G, w: number, d: number, site: number | undefined, stone: boolean, seed: number) {
+export function scaffold(g: G, w: number, d: number, site: number | undefined, stone: boolean, seed: number, selfGrow = false, noPoles = false) {
   const k = mats();
   const rand = mulberry32(seed);
   g.updateMatrixWorld(true);
   const bounds = new THREE.Box3().setFromObject(g);
   const fullH = Math.max(0.1, bounds.max.y);
-  const frac = site === undefined ? 1 : 0.15 + site * 0.22;
-  if (site !== undefined) {
+  const frac = site === undefined || selfGrow ? 1 : 0.15 + site * 0.22;
+  if (site !== undefined && !selfGrow) {
     // La struttura non è ancora finita: si mostra solo fino all'altezza raggiunta
     const sub = new THREE.Group();
     for (const ch of [...g.children]) sub.add(ch);
@@ -380,6 +404,19 @@ export function scaffold(g: G, w: number, d: number, site: number | undefined, s
     });
     // Tracciato delle fondamenta
     g.add(box(w * 0.98, 0.04, d * 0.98, stone ? k.stoneDark : k.earth, 0, 0, 0));
+  }
+  if (noPoles) {
+    // Palizzate: tronchi pronti accanto al tracciato
+    if (site !== undefined) {
+      for (let i = 0; i < 3; i++) {
+        const log = cyl(0.035, 0.035, 0.5, k.log, 0, 0, 0, 6);
+        log.geometry.translate(0, -0.25, 0);
+        log.rotation.z = PI / 2;
+        log.position.set(0, 0.04 + (i === 2 ? 0.06 : 0), 0.3 + (i % 2) * 0.07);
+        g.add(log);
+      }
+    }
+    return;
   }
   if (fullH < 0.35) {
     // Edifici bassi (campi, recinti, strade): solo picchetti e corde
@@ -476,37 +513,46 @@ function gateStubs(g: G, c: ModelCtx, angle: number, stone: boolean) {
           for (const s of [-0.2, 0.2]) sub.add(box(0.12, 0.19, 0.1, k.stoneLight, from + (i + 0.5) * (L / Math.max(1, Math.round(L * 3))), 1.5, s));
         }
       } else {
-        const n = Math.max(1, Math.round(L * 6));
+        const n = Math.max(1, Math.round(L * 11));
         for (let i = 0; i < n; i++) {
           const t = from + (i + 0.5) * (L / n);
-          sub.add(cyl(0.08, 0.09, 1.1, k.log, t, 0, 0, 7));
-          sub.add(cone(0.08, 0.18, k.log, t, 1.1, 0, 7));
+          sub.add(cyl(0.04, 0.044, 0.62, k.log, t, 0, 0, 6));
+          sub.add(cone(0.04, 0.09, k.log, t, 0.62, 0, 6));
         }
       }
     });
   }
 }
 
+/** Porta lignea in scala: due grossi pali, battenti di 4 metri e ballatoio coperto sopra il passaggio. */
 export function gateWood(g: G, c: ModelCtx) {
   const k = mats();
   const inner = new THREE.Group();
   const ruin = c.state === 'ruin';
   for (const s of [-1, 1]) {
-    inner.add(cyl(0.1, 0.11, ruin ? 0.7 : 1.9, k.log, s * 0.43, 0, 0, 7));
-    if (!ruin) inner.add(cone(0.1, 0.15, k.log, s * 0.43, 1.9, 0, 7));
+    inner.add(cyl(0.075, 0.085, ruin ? 0.4 : 1.0, k.log, s * 0.42, 0, 0, 7));
+    inner.add(cyl(0.06, 0.07, ruin ? 0.3 : 0.95, k.log, s * 0.42, 0, 0.16, 6));
   }
   if (!ruin) {
-    inner.add(box(1.05, 0.12, 0.22, k.log, 0, 1.45, 0));
-    inner.add(box(1.0, 0.05, 0.3, k.planks, 0, 1.57, 0));
+    // Battenti
     for (const s of [-1, 1]) {
       const leaf = new THREE.Group();
-      leaf.add(box(0.36, 1.2, 0.06, k.darkPlanks, -s * 0.18, 0, 0));
-      for (const y of [0.25, 0.95]) leaf.add(box(0.34, 0.04, 0.07, k.iron, -s * 0.18, y, 0));
+      leaf.add(box(0.36, 0.56, 0.05, k.darkPlanks, -s * 0.18, 0, 0));
+      for (const y of [0.1, 0.42]) leaf.add(box(0.34, 0.035, 0.06, k.iron, -s * 0.18, y, 0));
+      const brace = box(0.03, 0.5, 0.06, k.beam, -s * 0.18, 0.03, 0.005);
+      brace.rotation.z = s * 0.6;
+      leaf.add(brace);
       leaf.position.x = s * 0.36;
       leaf.rotation.y = s * -0.25;
       inner.add(leaf);
     }
-    if (has(c, 'pitch')) pitchCauldron(inner, 0.2, 1.62, 0);
+    // Architrave, ballatoio e parapetto
+    inner.add(box(1.0, 0.08, 0.28, k.log, 0, 0.6, 0.05));
+    inner.add(box(1.02, 0.04, 0.34, k.planks, 0, 0.68, 0.05));
+    inner.add(box(1.02, 0.2, 0.035, k.darkPlanks, 0, 0.72, -0.11));
+    for (const x of [-0.42, 0.42]) inner.add(box(0.04, 0.3, 0.04, k.beam, x, 0.68, 0.2));
+    inner.add(gableRoof(1.1, 0.42, 0.22, k.shingle, k.darkPlanks, 0, 0.98, 0.05, 0.06));
+    if (has(c, 'pitch')) pitchCauldron(inner, 0.2, 0.72, 0.06);
   } else rubble(inner, c.seed ?? 2, 6, k.log, 0.4);
   const angle = gateAngle(c);
   inner.rotation.y = angle;
@@ -521,23 +567,24 @@ export function gateStrong(g: G, c: ModelCtx) {
   const inner = new THREE.Group();
   const ruin = c.state === 'ruin';
   for (const s of [-1, 1]) {
-    inner.add(box(0.26, ruin ? 0.6 : 1.75, 0.34, k.stoneDark, s * 0.44, 0, 0));
-    if (!ruin) inner.add(box(0.3, 0.08, 0.38, k.stone, s * 0.44, 1.75, 0));
+    inner.add(box(0.26, ruin ? 0.45 : 1.1, 0.34, k.stoneDark, s * 0.44, 0, 0));
+    if (!ruin) inner.add(box(0.3, 0.06, 0.38, k.stone, s * 0.44, 1.1, 0));
   }
   if (!ruin) {
-    inner.add(box(1.15, 0.14, 0.3, k.log, 0, 1.5, 0));
-    inner.add(box(1.1, 0.05, 0.4, k.planks, 0, 1.64, 0));
-    inner.add(gableRoof(1.2, 0.5, 0.32, k.shingle, k.darkPlanks, 0, 1.69, 0, 0.05));
+    inner.add(box(1.15, 0.1, 0.3, k.log, 0, 0.66, 0));
+    inner.add(box(1.1, 0.04, 0.4, k.planks, 0, 0.76, 0));
+    inner.add(box(0.62, 0.3, 0.04, k.darkPlanks, 0, 0.8, -0.16));
+    inner.add(gableRoof(1.2, 0.5, 0.26, k.shingle, k.darkPlanks, 0, 1.16, 0, 0.05));
     for (const s of [-1, 1]) {
       const leaf = new THREE.Group();
-      leaf.add(box(0.33, 1.3, 0.08, k.darkPlanks, -s * 0.165, 0, 0));
-      for (const y of [0.15, 0.6, 1.05]) leaf.add(box(0.31, 0.05, 0.09, k.iron, -s * 0.165, y, 0));
+      leaf.add(box(0.33, 0.62, 0.07, k.darkPlanks, -s * 0.165, 0, 0));
+      for (const y of [0.08, 0.3, 0.52]) leaf.add(box(0.31, 0.05, 0.09, k.iron, -s * 0.165, y, 0));
       leaf.position.x = s * 0.33;
       leaf.rotation.y = s * -0.2;
       inner.add(leaf);
     }
-    if (has(c, 'portcullis')) inner.add(box(0.7, 0.9, 0.04, k.iron, 0, 0.55, 0.12));
-    if (has(c, 'pitch')) pitchCauldron(inner, 0.2, 1.68, 0);
+    if (has(c, 'portcullis')) inner.add(box(0.62, 0.3, 0.03, k.iron, 0, 0.36, 0.12));
+    if (has(c, 'pitch')) pitchCauldron(inner, 0.2, 0.8, 0);
   } else rubble(inner, c.seed ?? 2, 7, k.stoneDark, 0.4);
   const angle = gateAngle(c);
   inner.rotation.y = angle;
@@ -637,60 +684,111 @@ function armoryRack(g: G, x: number, z: number) {
   g.add(flag(k.flagGold, x + 0.28, 0, z, 0.3));
 }
 
+/**
+ * Motta con torre lignea in scala: collina artificiale di terra (circa 8 metri, 20 di base)
+ * con fossato ai piedi, palizzata sulla sommità, torre a due piani con piano sporgente
+ * e ponte inclinato su cavalletti che scende verso il cortile.
+ */
 export function keepWood(g: G, c: ModelCtx) {
   const k = mats();
   const ruin = c.state === 'ruin';
-  g.add(cyl(0.95, 1.45, 0.85, k.grassMound, 0, 0, 0, 18));
-  const ramp = box(0.3, 0.06, 1.0, k.planks, 0.9, 0.38, 0.65);
-  ramp.rotation.x = 0.55;
-  ramp.rotation.y = -0.6;
-  g.add(ramp);
   const rand = mulberry32(c.seed ?? 1);
-  for (let i = 0; i < 28; i++) {
-    const a = (i / 28) * PI * 2;
-    if (i === 3 || (ruin && rand() < 0.6)) continue;
-    const h = 0.42 + rand() * 0.1;
-    g.add(cyl(0.045, 0.05, h, k.log, Math.cos(a) * 0.9, 0.85, Math.sin(a) * 0.9, 6));
-    g.add(cone(0.045, 0.08, k.log, Math.cos(a) * 0.9, 0.85 + h, Math.sin(a) * 0.9, 6));
+  const H = 1.1;
+  const topR = 0.8;
+  // Fossato asciutto ai piedi e collina di terra dal profilo concavo, come un terrapieno vero
+  g.add(cyl(1.48, 1.48, 0.025, k.earth, 0, -0.01, 0, 28));
+  g.add(cyl(1.34, 1.4, 0.06, k.earth, 0, 0, 0, 28));
+  const prof: Array<[number, number, number]> = [[1.34, 1.08, 0.3], [1.08, 0.92, 0.32], [0.92, topR, 0.44]];
+  let y = 0.04;
+  for (const [rb, rt, h] of prof) {
+    g.add(cyl(rt, rb, h, k.grassMound, 0, y, 0, 28));
+    y += h;
   }
+  // Zolle di terra scoperta e sentiero di servizio
+  for (let i = 0; i < 9; i++) {
+    const a = rand() * PI * 2;
+    const t = 0.2 + rand() * 0.6;
+    const r = 1.3 - t * 0.5;
+    const p = box(0.16 + rand() * 0.1, 0.03, 0.08, k.earth, Math.cos(a) * r, t * H, Math.sin(a) * r);
+    p.rotation.y = -a;
+    p.rotation.z = 0.5;
+    g.add(p);
+  }
+  g.add(cyl(topR, topR, 0.03, k.earth, 0, H + 0.03, 0, 28));
+  const y0 = H + 0.05;
+  // Palizzata sulla sommità (con un varco verso il ponte)
+  const n = 30;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * PI * 2;
+    const r1 = rand();
+    if ((a > PI * 0.15 && a < PI * 0.33) || (ruin && r1 < 0.6)) continue;
+    const h = 0.4 + r1 * 0.05;
+    g.add(cyl(0.032, 0.036, h, k.log, Math.cos(a) * (topR - 0.04), y0, Math.sin(a) * (topR - 0.04), 6));
+    g.add(cone(0.032, 0.07, k.log, Math.cos(a) * (topR - 0.04), y0 + h, Math.sin(a) * (topR - 0.04), 6));
+  }
+  // Ponte su cavalletti dalla sommità al cortile (verso l'angolo +x +z)
+  const br = new THREE.Group();
+  br.rotation.y = -PI / 4;
+  const from = topR - 0.05;
+  const to = 2.0;
+  const run = to - from;
+  const deck = box(Math.hypot(run, y0), 0.035, 0.2, k.planks, 0, 0, 0);
+  deck.position.set(from, y0, 0);
+  deck.geometry.translate(Math.hypot(run, y0) / 2, 0, 0);
+  deck.rotation.z = -Math.atan2(y0, run);
+  br.add(deck);
+  for (let i = 1; i < 4; i++) {
+    const t = i / 4;
+    const x = from + run * t;
+    const y = y0 * (1 - t);
+    for (const zz of [-0.09, 0.09]) br.add(box(0.03, y + 0.18, 0.03, k.beam, x, 0, zz));
+  }
+  const rail = box(Math.hypot(run, y0), 0.025, 0.025, k.beam, 0, 0, 0);
+  rail.geometry.translate(Math.hypot(run, y0) / 2, 0, 0);
+  rail.position.set(from, y0 + 0.2, 0.1);
+  rail.rotation.z = -Math.atan2(y0, run);
+  br.add(rail);
+  g.add(br);
   if (ruin) {
-    g.add(box(1.0, 0.5, 1.0, k.darkPlanks, 0, 0.85, 0));
+    g.add(box(0.7, 0.35, 0.7, k.darkPlanks, 0, y0, 0));
     rubble(g, c.seed ?? 1, 10, k.log, 0.6);
     return;
   }
-  g.add(box(1.0, 1.1, 1.0, k.planks, 0, 0.85, 0));
-  for (const [cx, cz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(box(0.08, 1.9, 0.08, k.log, cx * 0.5, 0.85, cz * 0.5));
-  g.add(box(1.25, 0.08, 1.25, k.beam, 0, 1.95, 0));
-  g.add(box(1.2, 0.5, 1.2, k.darkPlanks, 0, 2.0, 0));
+  // Torre: fusto di tronchi e piano superiore sporgente
+  const s = 0.9;
+  g.add(box(s, 0.78, s, k.logWall, 0, y0, 0));
+  for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(cyl(0.045, 0.05, 1.2, k.log, (x * s) / 2, y0, (z * s) / 2, 6));
+  for (const [fx, fz, r] of [[0, -s / 2 - 0.01, PI], [s / 2 + 0.01, 0, PI / 2], [-s / 2 - 0.01, 0, -PI / 2]] as const) g.add(slit(fx, y0 + 0.45, fz, 0.05, 0.14, r));
+  const U = s + 0.2;
+  for (let i = 0; i < 8; i++) {
+    const t = -0.42 + (i % 4) * 0.28;
+    const side = i < 4 ? 1 : -1;
+    g.add(box(0.05, 0.05, 0.22, k.beam, t, y0 + 0.74, side * (s / 2)));
+  }
+  g.add(box(U, 0.04, U, k.planks, 0, y0 + 0.78, 0));
+  g.add(box(U, 0.36, U, k.darkPlanks, 0, y0 + 0.82, 0));
   for (let i = -1; i <= 1; i++) {
-    g.add(slit(i * 0.35, 2.15, 0.61));
-    g.add(slit(i * 0.35, 2.15, -0.61));
+    g.add(slit(i * 0.26, y0 + 0.98, U / 2 + 0.01, 0.06, 0.12));
+    g.add(slit(i * 0.26, y0 + 0.98, -U / 2 - 0.01, 0.06, 0.12));
   }
-  for (let i = 0; i < 10; i++) {
-    const t = -0.55 + i * 0.122;
-    for (const s of [-1, 1]) {
-      const cb = box(0.04, 0.08, 0.12, k.beam, t, 1.88, s * 0.58);
-      cb.rotation.x = s * 0.6;
-      g.add(cb);
-    }
-  }
-  g.add(hipRoof(1.55, 1.55, 0.9, k.thatch, 0, 2.5, 0));
+  g.add(hipRoof(U + 0.16, U + 0.16, 0.55, k.shingle, 0, y0 + 1.18, 0));
+  // Porta verso il ponte
   const dr = new THREE.Group();
-  door(dr, 0, 0.51, 0, 0.2, 0.36);
-  dr.position.y = 0.85;
+  door(dr, 0.2, s / 2 + 0.01, 0, 0.16, 0.28);
+  dr.position.y = y0;
+  dr.rotation.y = -PI / 4;
   g.add(dr);
-  if (has(c, 'cistern')) cisternWell(g, -1.15, 1.15);
-  if (has(c, 'armory')) armoryRack(g, 1.0, -1.25);
+  if (has(c, 'cistern')) cisternWell(g, -1.2, 1.2);
+  if (has(c, 'armory')) armoryRack(g, 1.05, -1.3);
   if (has(c, 'bailey')) {
     // Livello 2: sala e stalla nel cortile ai piedi della motta
-    g.add(box(0.75, 0.38, 0.42, k.planks, 1.0, 0, 1.15));
-    g.add(gableRoof(0.8, 0.42, 0.3, k.thatch, k.planks, 1.0, 0.38, 1.15, 0.06));
-    g.add(box(0.5, 0.3, 0.36, k.darkPlanks, -1.15, 0, -1.05));
-    g.add(gableRoof(0.55, 0.36, 0.22, k.thatch, k.darkPlanks, -1.15, 0.3, -1.05, 0.05));
-    for (let i = 0; i < 6; i++) g.add(cyl(0.035, 0.04, 0.4, k.log, -1.45 + i * 0.12, 0, 1.45, 5));
-    g.add(flag(k.flag, 1.3, 0.38, 1.3, 0.25));
+    g.add(box(0.62, 0.3, 0.36, k.planks, 1.12, 0, 1.22));
+    g.add(gableRoof(0.66, 0.36, 0.24, k.thatch, k.planks, 1.12, 0.3, 1.22, 0.05));
+    g.add(box(0.44, 0.24, 0.3, k.darkPlanks, -1.2, 0, -1.15));
+    g.add(gableRoof(0.48, 0.3, 0.18, k.thatch, k.darkPlanks, -1.2, 0.24, -1.15, 0.04));
+    g.add(flag(k.flag, 1.4, 0.3, 1.4, 0.22));
   }
-  g.add(flag(k.flag, 0, 3.35, 0, 0.4));
+  g.add(flag(k.flag, 0, y0 + 1.73, 0, 0.36));
   if (c.state === 'damaged') rubble(g, c.seed ?? 1, 5, k.log, 1.2);
 }
 
