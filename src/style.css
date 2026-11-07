@@ -69,10 +69,9 @@ td:last-child { text-align: right; }
 .res-tip .net { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--accent); }
 
 /* Costruzioni */
-.build { left: 10px; top: 86px; bottom: 120px; width: 270px; padding: 10px; display: flex; flex-direction: column; }
 .cats { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 8px; }
 .cats button { font-size: 16px; padding: 3px 7px; }
-.build-list { overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding-right: 2px; }
+.build-list { display: flex; flex-direction: column; gap: 4px; padding-right: 2px; }
 .build-item { display: flex; flex-direction: row; align-items: center; gap: 8px; text-align: left; padding: 5px 6px; }
 .build-item .text { display: flex; flex-direction: column; min-width: 0; }
 .build-item .thumb { position: relative; flex: none; width: 46px; height: 46px; border-radius: 6px; background: rgba(0, 0, 0, 0.25); display: grid; place-items: center; overflow: hidden; }
@@ -88,7 +87,6 @@ td:last-child { text-align: right; }
 .build-item.done { opacity: 0.55; }
 
 /* Pannello laterale */
-.side { right: 10px; top: 86px; width: 310px; max-height: calc(100% - 210px); display: flex; flex-direction: column; }
 .tabs { display: flex; gap: 2px; padding: 6px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .tabs button { font-size: 12px; padding: 3px 6px; }
 .panel-body { padding: 10px; overflow-y: auto; }
@@ -99,14 +97,7 @@ td:last-child { text-align: right; }
 .chat { max-height: 160px; overflow-y: auto; background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 4px 8px; margin-bottom: 6px; min-height: 40px; }
 .chat p { font-size: 13px; }
 
-.selection { right: 10px; bottom: 120px; width: 310px; padding: 10px; }
-
-/* Registro eventi */
-.log { left: 290px; right: 330px; bottom: 34px; padding: 6px 10px; max-height: 120px; overflow: hidden; font-size: 13px; }
-.log p { margin: 2px 0; }
-.log .good { color: var(--good); }
-.log .bad { color: var(--bad); }
-.hint { position: absolute; left: 0; right: 0; bottom: 8px; text-align: center; color: var(--ink); text-shadow: 0 1px 3px #000; font-size: 12px; pointer-events: none; }
+.hint { position: absolute; left: 330px; right: 0; bottom: 8px; text-align: center; color: var(--ink); text-shadow: 0 1px 3px #000; font-size: 12px; pointer-events: none; }
 .toasts { position: absolute; top: 96px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; z-index: 3; max-width: min(560px, 90vw); }
 .toast { background: var(--panel-solid); border: 1px solid var(--line); border-left: 4px solid var(--accent); padding: 8px 12px; border-radius: 6px; transition: opacity 0.6s; }
 .toast.good { border-left-color: var(--good); }
@@ -142,7 +133,6 @@ td:last-child { text-align: right; }
 .upgrade { border-top: 1px solid var(--line); padding: 6px 0; }
 .upgrade.done strong { color: var(--good); }
 .upgrade .row { margin-top: 3px; }
-.selection { max-height: calc(100% - 330px); overflow-y: auto; }
 .good { color: var(--good); }
 .bad { color: var(--bad); }
 .siege-log { padding-left: 18px; margin: 4px 0; max-height: 140px; overflow-y: auto; }
@@ -183,7 +173,6 @@ button.multi { background: #6b2a1e; border-color: #a3402f; color: var(--ink); }
 
 .tax-levels button { font-size: 12px; padding: 3px 6px; }
 
-.companies-panel { right: 10px; bottom: 120px; padding: 8px 12px; width: 310px; z-index: 2; }
 @media (max-width: 900px) { .companies-panel { bottom: 200px; right: 0; left: 0; width: auto; } }
 .companies-panel .row button { font-size: 12px; }
 .company-list .row { border-bottom: 1px solid var(--line); padding: 3px 0; }
@@ -193,7 +182,6 @@ button.multi { background: #6b2a1e; border-color: #a3402f; color: var(--ink); }
 .formations { gap: 3px; margin: 3px 0 6px; }
 .formations button { font-size: 11px; padding: 2px 5px; }
 .strong { font-weight: bold; color: var(--accent); margin-top: 4px; }
-.companies-panel { max-height: calc(100% - 330px); overflow-y: auto; }
 
 .castle-level .stars { color: var(--accent); letter-spacing: 2px; }
 .castle-level button { width: 100%; margin: 4px 0; }
@@ -234,3 +222,27 @@ button.multi { background: #6b2a1e; border-color: #a3402f; color: var(--ink); }
 .siege-details { margin-top: 6px; max-height: 50vh; overflow-y: auto; }
 .siege-panel .hp.grow { flex: 1; height: 8px; }
 .siege-panel .siege-log { margin: 6px 0 0; padding-left: 18px; max-height: 80px; overflow-y: auto; }
+
+/* Un solo pannello a sinistra, su tutta l'altezza */
+.sidebar { position: absolute; left: 0; top: 66px; bottom: 0; width: 330px; display: flex; flex-direction: column; border-radius: 0 10px 0 0; border-left: none; z-index: 2; transition: width 0.15s; }
+.sidebar .tabs { align-items: center; }
+.sidebar .tabs .ti { font-size: 15px; }
+.sidebar .tabs .tl { margin-left: 3px; }
+.sidebar .tabs .fold { margin-right: 4px; font-weight: bold; }
+.sidebar .side-content { flex: 1; overflow-y: auto; min-height: 0; }
+.sidebar .panel-body { overflow: visible; }
+.sidebar .selection, .sidebar .companies-panel { position: static; width: auto; max-height: none; padding: 10px 12px; border-bottom: 1px solid var(--line); background: rgba(217, 164, 65, 0.07); }
+.sidebar .cats { position: sticky; top: 0; background: var(--panel-solid); padding: 4px 0; z-index: 1; }
+.sidebar.collapsed { width: 52px; }
+.sidebar.collapsed .tabs { flex-direction: column; border-bottom: none; }
+.sidebar.collapsed .tabs .tl, .sidebar.collapsed .side-content { display: none; }
+/* Registro degli eventi discreto: tre righe sbiadite, si apre con un clic */
+.log { position: absolute; left: 345px; bottom: 28px; max-width: min(520px, calc(100vw - 370px)); padding: 3px 10px; font-size: 12px; background: rgba(38, 30, 22, 0.5); border-radius: 8px; cursor: pointer; z-index: 1; }
+.log p { margin: 1px 0; text-shadow: 0 1px 2px #000; }
+.log p:not(:last-child) { opacity: 0.6; }
+.log.open { background: var(--panel); max-height: 45vh; overflow-y: auto; }
+.log.open p { opacity: 1; }
+.log .good { color: var(--good); }
+.log .bad { color: var(--bad); }
+.sidebar.collapsed ~ .log { left: 64px; max-width: min(520px, calc(100vw - 90px)); }
+.sidebar.collapsed ~ .hint { left: 52px; }

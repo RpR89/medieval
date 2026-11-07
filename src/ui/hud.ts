@@ -59,7 +59,7 @@ export interface HudCallbacks {
   };
 }
 
-type Tab = 'castle' | 'works' | 'army' | 'market' | 'realm' | 'diplomacy';
+type Tab = 'build' | 'castle' | 'works' | 'army' | 'market' | 'realm' | 'diplomacy';
 const SPEEDS = [0, 1, 2, 4, 8, 16];
 
 export class Hud {
@@ -173,28 +173,42 @@ export class Hud {
       cats.append(b);
     }
     this.buildList = el('div', { class: 'build-list' });
-    const build = el('aside', { class: 'build panel' }, el('h3', { text: 'Costruisci' }), cats, this.buildList);
+    this.buildCats = cats;
 
-    // ───── Pannello laterale ─────
+    // ───── Un solo pannello a sinistra: schede, selezione (quando c'è) e contenuto ─────
     const tabs = el('div', { class: 'tabs' });
-    const tabNames: Record<Tab, string> = { castle: '🏰 Castello', works: '🏗️ Cantieri', army: '⚔️ Esercito', market: '⚖️ Mercato', diplomacy: '🤝 Diplomazia', realm: '👥 Regno' };
+    const tabNames: Record<Tab, string> = { build: '🔨 Costruisci', castle: '🏰 Castello', works: '🏗️ Cantieri', army: '⚔️ Esercito', market: '⚖️ Mercato', diplomacy: '🤝 Diplomazia', realm: '👥 Regno' };
     for (const t of Object.keys(tabNames) as Tab[]) {
       if (t === 'diplomacy' && !game.lords().length) continue;
       if (t === 'realm' && game.lords().length) continue;
-      const b = el('button', { text: tabNames[t] });
-      b.onclick = () => this.setTab(t);
+      const [icon, ...rest] = tabNames[t].split(' ');
+      const b = el('button', { title: rest.join(' ') }, el('span', { class: 'ti', text: icon }), el('span', { class: 'tl', text: rest.join(' ') }));
+      b.onclick = () => {
+        this.setCollapsed(false);
+        this.setTab(t);
+      };
       this.tabBtns.set(t, b);
       tabs.append(b);
     }
+    const fold = el('button', { class: 'fold', title: 'Riduci o allarga il pannello' , text: '«' });
+    fold.onclick = () => this.setCollapsed(!this.sidebar.classList.contains('collapsed'));
+    this.foldBtn = fold;
+    tabs.prepend(fold);
     this.panelBody = el('div', { class: 'panel-body' });
-    this.panel = el('aside', { class: 'side panel' }, tabs, this.panelBody);
-    this.selPanel = el('div', { class: 'selection panel hidden' });
+    this.selPanel = el('div', { class: 'selection hidden' });
+    this.compPanel.className = 'companies-panel hidden';
+    this.panel = el('div', { class: 'side-content' }, this.selPanel, this.compPanel, this.panelBody);
+    this.sidebar = el('aside', { class: 'sidebar panel' }, tabs, this.panel);
 
-    this.logEl = el('div', { class: 'log panel' });
+    this.logEl = el('div', { class: 'log', title: 'Clic: mostra più messaggi' });
+    this.logEl.onclick = () => {
+      this.logEl.classList.toggle('open');
+      this.logKey = '';
+    };
     this.toastEl = el('div', { class: 'toasts' });
     this.hintEl = el('div', {
       class: 'hint',
-      text: 'Trascina: sposta · Tasto destro: ruota · Rotella: zoom · WASD: muovi · Spazio: pausa',
+      text: 'W/S avanti e indietro · A/D gira · Q/E inclina · ←/→ di lato · Rotella: zoom · Trascina: sposta · Spazio: pausa',
     });
 
     root.append(this.resTip, this.siegePanel);
@@ -216,9 +230,16 @@ export class Hud {
       else if (t.dataset.act === 'lift') g.liftOffense();
       else if (t.dataset.act?.startsWith('aim-')) g.setOffenseAim(t.dataset.act.slice(4) as 'weakest' | 'gate' | 'tower');
     };
-    root.append(this.top, build, this.panel, this.selPanel, this.compPanel, this.logEl, this.toastEl, this.hintEl);
+    root.append(this.top, this.sidebar, this.logEl, this.toastEl, this.hintEl);
+    // Il pannello parte sotto la barra in alto, qualunque sia la sua altezza
+    const place = () => {
+      this.sidebar.style.top = `${this.top.offsetHeight}px`;
+      this.siegePanel.style.top = `${this.top.offsetHeight + 4}px`;
+    };
+    requestAnimationFrame(place);
+    window.addEventListener('resize', place);
     this.renderBuildList();
-    this.setTab('castle');
+    this.setTab('build');
     game.onEvent((e) => {
       if (e.kind !== 'info') this.toast(e.text, e.kind);
     });
@@ -301,7 +322,7 @@ export class Hud {
     this.refreshBuildList();
     this.hintEl.textContent = defId
       ? `Costruisci: ${getBuilding(defId).name} — ${getBuilding(defId).draggable ? 'clic, oppure trascina per tracciare una linea (anche in diagonale)' : 'clic per piazzare'} · Esc o tasto destro: annulla`
-      : 'Trascina: sposta · Tasto destro: ruota · Rotella: zoom · WASD: muovi · Spazio: pausa';
+      : 'W/S avanti e indietro · A/D gira · Q/E inclina · ←/→ di lato · Rotella: zoom · Trascina: sposta · Spazio: pausa';
   }
 
   // ───────────── Selezione ─────────────
@@ -316,6 +337,9 @@ export class Hud {
     this.selKey = '';
     this.selPanel.classList.toggle('hidden', !b);
     if (!b) return;
+    // Il pannello si apre dove serve: la selezione compare in cima
+    this.setCollapsed(false);
+    this.panel.scrollTop = 0;
     const def = getBuilding(b.defId);
     const isSite = !!this.game.siteByUid(b.uid);
     this.selWasSite = isSite;
@@ -576,6 +600,10 @@ export class Hud {
 
   setCompanySelection(ids: string[]) {
     this.compIds = ids;
+    if (ids.length) {
+      this.setCollapsed(false);
+      this.panel.scrollTop = 0;
+    }
     this.compKey = '';
     this.refreshCompanies();
   }
@@ -669,10 +697,24 @@ export class Hud {
 
   // ───────────── Pannelli ─────────────
 
+  private sidebar!: HTMLElement;
+  private foldBtn!: HTMLElement;
+  private buildCats!: HTMLElement;
+
+  /** Riduce il pannello alla sola colonna delle icone (o lo riapre). */
+  private setCollapsed(on: boolean) {
+    this.sidebar.classList.toggle('collapsed', on);
+    this.foldBtn.textContent = on ? '»' : '«';
+  }
+
   private setTab(t: Tab) {
     for (const [k, b] of this.tabBtns) b.classList.toggle('active', k === t);
     this.panelBody.replaceChildren();
-    if (t === 'castle') this.buildCastleTab();
+    this.refreshTab = () => {};
+    if (t === 'build') {
+      this.panelBody.append(this.buildCats, this.buildList);
+      this.renderBuildList();
+    } else if (t === 'castle') this.buildCastleTab();
     else if (t === 'works') this.buildWorksTab();
     else if (t === 'army') this.buildArmyTab();
     else if (t === 'market') this.buildMarketTab();
@@ -1488,9 +1530,9 @@ export class Hud {
     const logKey = `${g.state.log.length}:${last?.day}:${last?.text}`;
     if (logKey !== this.logKey) {
       this.logKey = logKey;
-      this.logEl.replaceChildren(
-        ...g.state.log.slice(-6).map((e) => el('p', { class: e.kind, text: e.text })),
-      );
+      // Discreto: gli ultimi tre messaggi; con un clic la cronaca più lunga
+      const n = this.logEl.classList.contains('open') ? 16 : 3;
+      this.logEl.replaceChildren(...g.state.log.slice(-n).map((e) => el('p', { class: e.kind, text: e.text })));
     }
   }
 

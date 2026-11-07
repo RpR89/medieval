@@ -208,7 +208,7 @@ export class WorldRenderer {
     this.composer.addPass(new OutputPass());
 
     window.addEventListener('keydown', (e) => {
-      if ((e.target as HTMLElement).closest('input, textarea, select')) return;
+      if ((e.target as HTMLElement).closest('input, textarea, select') || e.ctrlKey || e.metaKey) return;
       this.keys.add(e.key.toLowerCase());
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
@@ -626,23 +626,41 @@ export class WorldRenderer {
     this.controls.mouseButtons.LEFT = enabled ? THREE.MOUSE.PAN : (null as unknown as THREE.MOUSE);
   }
 
+  /**
+   * Telecamera da tastiera: W/S avanti e indietro, A/D gira attorno al punto inquadrato,
+   * Q/E inclina la vista, frecce ←/→ spostano di lato. Lo zoom resta sulla rotellina.
+   */
   private panWithKeys(dt: number) {
-    const speed = 18 * dt * (this.camera.position.distanceTo(this.controls.target) / 30);
+    const k = this.keys;
+    const tg = this.controls.target;
+    const off = this.camera.position.clone().sub(tg);
+    // Rotazione e inclinazione attorno al punto inquadrato
+    const turn = (k.has('d') ? 1 : 0) - (k.has('a') ? 1 : 0);
+    const tilt = (k.has('e') ? 1 : 0) - (k.has('q') ? 1 : 0);
+    if (turn || tilt) {
+      const sph = new THREE.Spherical().setFromVector3(off);
+      sph.theta += turn * 1.6 * dt;
+      sph.phi = THREE.MathUtils.clamp(sph.phi - tilt * 0.9 * dt, 0.2, this.controls.maxPolarAngle);
+      off.setFromSpherical(sph);
+      this.camera.position.copy(tg).add(off);
+    }
+    const speed = 18 * dt * (off.length() / 30);
     const forward = new THREE.Vector3();
     this.camera.getWorldDirection(forward);
     forward.y = 0;
     forward.normalize();
     const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0));
     const move = new THREE.Vector3();
-    if (this.keys.has('w') || this.keys.has('arrowup')) move.add(forward);
-    if (this.keys.has('s') || this.keys.has('arrowdown')) move.sub(forward);
-    if (this.keys.has('d') || this.keys.has('arrowright')) move.add(right);
-    if (this.keys.has('a') || this.keys.has('arrowleft')) move.sub(right);
+    if (k.has('w') || k.has('arrowup')) move.add(forward);
+    if (k.has('s') || k.has('arrowdown')) move.sub(forward);
+    if (k.has('arrowright')) move.add(right);
+    if (k.has('arrowleft')) move.sub(right);
     if (move.lengthSq() === 0) return;
     move.normalize().multiplyScalar(speed);
     this.camera.position.add(move);
-    this.controls.target.add(move);
+    tg.add(move);
   }
+
 
   private fogTex: THREE.DataTexture;
   private siegeView: SiegeView;
