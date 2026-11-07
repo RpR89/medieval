@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  // Versione della build: serve a rigenerare le miniature salvate dopo un aggiornamento
+  define: { __BUILD__: JSON.stringify(Date.now().toString(36)) },
   build: {
     target: 'es2022',
     chunkSizeWarningLimit: 1500,

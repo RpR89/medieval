@@ -95,12 +95,15 @@ export class TerrainView {
   private noise: Float32Array;
   private decorByTile = new Map<number, Decor[]>();
   private hidden = new Set<number>();
-  private grass: THREE.InstancedMesh;
-  private flowers: THREE.InstancedMesh;
+  private grass: THREE.Object3D;
+  private flowers: THREE.Object3D;
+  /** Blocchi di vegetazione minuta, spenti quando sono lontani dall'inquadratura. */
+  private lod: Array<{ mesh: THREE.InstancedMesh; x: number; z: number }> = [];
+  static readonly CHUNK = 24;
   private leafMat: THREE.MeshStandardMaterial;
   private coniferMat: THREE.MeshStandardMaterial;
   private grassMat: THREE.MeshStandardMaterial;
-  private leaves: THREE.InstancedMesh;
+  private leaves: THREE.Object3D;
   private skirtMat: THREE.MeshStandardMaterial;
 
   /** Altezze in una texture (per l'acqua): h = v * H_RANGE + H_MIN. */
@@ -504,6 +507,13 @@ export class TerrainView {
     this.flowers.visible = on && mixNumber(this.mix, BLOOM) > 0.4;
   }
 
+  /** Accende solo i blocchi di vegetazione minuta vicini al punto inquadrato. */
+  updateLod(x: number, z: number, camDist: number) {
+    const r = Math.min(60, Math.max(22, camDist * 1.4)) + TerrainView.CHUNK * 0.7;
+    const r2 = r * r;
+    for (const c of this.lod) c.mesh.visible = (c.x - x) ** 2 + (c.z - z) ** 2 <= r2;
+  }
+
   private register(tile: number, mesh: THREE.InstancedMesh, index: number, matrix: THREE.Matrix4) {
     if (!this.decorByTile.has(tile)) this.decorByTile.set(tile, []);
     this.decorByTile.get(tile)!.push({ mesh, index, matrix: matrix.clone() });
@@ -630,61 +640,75 @@ export class TerrainView {
       }
     }
 
-    const inst = (geo: THREE.BufferGeometry, mat: THREE.Material, list: THREE.Matrix4[], shadow = true) => {
-      const im = new THREE.InstancedMesh(geo, mat, Math.max(1, list.length));
-      im.count = list.length;
-      list.forEach((mx, i) => im.setMatrixAt(i, mx));
-      im.castShadow = shadow;
-      im.receiveShadow = true;
-      this.group.add(im);
-      return im;
-    };
-    const tint = (im: THREE.InstancedMesh, n: number, spread: number) => {
-      const c = new THREE.Color();
-      for (let i = 0; i < n; i++) {
-        c.setRGB(1, 1, 1).offsetHSL((rand() - 0.5) * spread, 0, (rand() - 0.5) * 0.2);
-        im.setColorAt(i, c);
+    // Vegetazione minuta a blocchi di mappa: i blocchi fuori dall'inquadratura non si disegnano
+    // e quelli lontani si spengono (da lontano un ciuffo d'erba non si vede comunque)
+    const chunked = (
+      geo: THREE.BufferGeometry,
+      mat: THREE.Material,
+      list: Array<[THREE.Matrix4, number]>,
+      shadow: boolean,
+      color: (i: number, c: THREE.Color) => void,
+      fade = true,
+      C = TerrainView.CHUNK,
+      register = true,
+    ): THREE.Group => {
+      const group = new THREE.Group();
+      const byChunk = new Map<number, Array<[THREE.Matrix4, number]>>();
+      const per = Math.ceil(t.size / C);
+      for (const it of list) {
+        const key = it[1];
+        const x = key % t.size;
+        const z = (key - x) / t.size;
+        const ck = Math.floor(z / C) * per + Math.floor(x / C);
+        if (!byChunk.has(ck)) byChunk.set(ck, []);
+        byChunk.get(ck)!.push(it);
       }
-      if (im.instanceColor) im.instanceColor.needsUpdate = true;
+      const c = new THREE.Color();
+      for (const [ck, items] of byChunk) {
+        const im = new THREE.InstancedMesh(geo, mat, items.length);
+        items.forEach(([mx, key], i) => {
+          im.setMatrixAt(i, mx);
+          color(i, c);
+          im.setColorAt(i, c);
+          if (register) this.register(key, im, i, mx);
+        });
+        if (im.instanceColor) im.instanceColor.needsUpdate = true;
+        im.castShadow = shadow;
+        im.receiveShadow = true;
+        im.computeBoundingSphere();
+        const cx = ((ck % per) + 0.5) * C;
+        const cz = (Math.floor(ck / per) + 0.5) * C;
+        if (fade) this.lod.push({ mesh: im, x: cx, z: cz });
+        group.add(im);
+      }
+      this.group.add(group);
+      return group;
     };
-
-    const con = inst(conGeo, this.coniferMat, conifers);
-    tint(con, conifers.length, 0.04);
-    inst(trunkGeo, bark, conifers);
-    const leaves = inst(leafGeo, this.leafMat, decid);
-    tint(leaves, decid.length, 0.06);
-    inst(branchGeo, bark, decid);
-    const con2 = inst(con2Geo, this.coniferMat, conifers2);
-    tint(con2, conifers2.length, 0.05);
-    inst(trunkGeo, bark, conifers2);
-    const birchLeaves = inst(birchGeo, this.leafMat, birches);
-    tint(birchLeaves, birches.length, 0.08);
-    inst(birchTrunk, new THREE.MeshStandardMaterial({ color: 0xe8e2d4, roughness: 0.9 }), birches);
+    const tintFn = (spread: number) => (_: number, c: THREE.Color) => c.setRGB(1, 1, 1).offsetHSL((rand() - 0.5) * spread, 0, (rand() - 0.5) * 0.2);
     const reedMat = new THREE.MeshStandardMaterial({ color: 0x8a9a4a, roughness: 1, side: THREE.DoubleSide });
     addWind(reedMat, 0.05, 0.25);
-    const reed = inst(reedGeo, reedMat, reeds.map((r) => r[0]), false);
-    tint(reed, reeds.length, 0.06);
+    chunked(reedGeo, reedMat, reeds, false, tintFn(0.06));
     const fernMat = new THREE.MeshStandardMaterial({ color: 0x3f6a2a, roughness: 1, side: THREE.DoubleSide });
     addWind(fernMat, 0.02, 0.15);
-    const fern = inst(fernGeo, fernMat, ferns.map((r) => r[0]), false);
-    tint(fern, ferns.length, 0.05);
-    reeds.forEach(([mx, key], i) => this.register(key, reed, i, mx));
-    ferns.forEach(([mx, key], i) => this.register(key, fern, i, mx));
-    const bush = inst(bushGeo, this.bushMat, bushes.map((b) => b[0]));
-    tint(bush, bushes.length, 0.05);
-    const rock = inst(rockGeo, new THREE.MeshStandardMaterial({ color: 0x8a857d, roughness: 1, flatShading: true }), rocks.map((r) => r[0]));
-    tint(rock, rocks.length, 0.02);
-    const grass = inst(tuftGeo, this.grassMat, tufts.map((r) => r[0]), false);
-    tint(grass, tufts.length, 0.05);
-    const flowerMesh = inst(flowerGeo, new THREE.MeshStandardMaterial({ roughness: 0.8 }), flowers.map((r) => r[0]), false);
+    chunked(fernGeo, fernMat, ferns, false, tintFn(0.05));
+    chunked(bushGeo, this.bushMat, bushes, true, tintFn(0.05), false);
+    chunked(rockGeo, new THREE.MeshStandardMaterial({ color: 0x8a857d, roughness: 1, flatShading: true }), rocks, true, tintFn(0.02), false);
+    // Alberi a blocchi più grandi: si scartano quelli fuori dallo schermo (si vedono anche da lontano)
+    const keyed = (list: THREE.Matrix4[]): Array<[THREE.Matrix4, number]> =>
+      list.map((m) => [m, Math.floor(m.elements[14]) * t.size + Math.floor(m.elements[12])]);
+    const trees = (geo: THREE.BufferGeometry, mat: THREE.Material, list: THREE.Matrix4[], spread: number) =>
+      chunked(geo, mat, keyed(list), true, spread ? tintFn(spread) : (_, c) => c.setRGB(1, 1, 1), false, 32, false);
+    trees(conGeo, this.coniferMat, conifers, 0.04);
+    trees(trunkGeo, bark, conifers, 0);
+    const leaves = trees(leafGeo, this.leafMat, decid, 0.06);
+    trees(branchGeo, bark, decid, 0);
+    trees(con2Geo, this.coniferMat, conifers2, 0.05);
+    trees(trunkGeo, bark, conifers2, 0);
+    trees(birchGeo, this.leafMat, birches, 0.08);
+    trees(birchTrunk, new THREE.MeshStandardMaterial({ color: 0xe8e2d4, roughness: 0.9 }), birches, 0);
+    const grass = chunked(tuftGeo, this.grassMat, tufts, false, tintFn(0.05));
     const palette = [0xf4f0e0, 0xf2d040, 0xd84a4a, 0x9a6ad0, 0x6a8ae0].map((h) => new THREE.Color(h));
-    flowers.forEach((_, i) => flowerMesh.setColorAt(i, palette[Math.floor(rand() * palette.length)]));
-    if (flowerMesh.instanceColor) flowerMesh.instanceColor.needsUpdate = true;
-
-    bushes.forEach(([mx, key], i) => this.register(key, bush, i, mx));
-    rocks.forEach(([mx, key], i) => this.register(key, rock, i, mx));
-    tufts.forEach(([mx, key], i) => this.register(key, grass, i, mx));
-    flowers.forEach(([mx, key], i) => this.register(key, flowerMesh, i, mx));
+    const flowerMesh = chunked(flowerGeo, new THREE.MeshStandardMaterial({ roughness: 0.8 }), flowers, false, (_, c) => c.copy(palette[Math.floor(rand() * palette.length)]));
     return { leaves, grass, flowers: flowerMesh };
   }
 

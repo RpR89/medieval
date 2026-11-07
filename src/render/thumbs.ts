@@ -19,8 +19,43 @@ function ctxFor(def: BuildingDef): ModelCtx {
   return { seed: 3 };
 }
 
+/** Le miniature si conservano nel browser: si rigenerano solo dopo un aggiornamento del gioco. */
+const CACHE_KEY = `medieval.thumbs.${__BUILD__}`;
+
+function loadCache(): Record<string, string> {
+  try {
+    // Via le versioni vecchie
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k?.startsWith('medieval.thumbs.') && k !== CACHE_KEY) localStorage.removeItem(k);
+    }
+    return JSON.parse(localStorage.getItem(CACHE_KEY) ?? '{}');
+  } catch {
+    return {};
+  }
+}
+
+function saveCache(c: Record<string, string>) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify(c));
+  } catch {
+    /* spazio esaurito: pazienza, si rigenerano la prossima volta */
+  }
+}
+
+/** Esegue quando il browser è libero (niente scatti durante il gioco). */
+const idle = (fn: () => void) => {
+  const w = window as unknown as { requestIdleCallback?: (f: () => void, o?: { timeout: number }) => void };
+  if (w.requestIdleCallback) w.requestIdleCallback(fn, { timeout: 2000 });
+  else setTimeout(fn, 60);
+};
+
 export function makeThumbnails(onReady: (id: string, url: string) => void): () => void {
   let cancelled = false;
+  const cache = loadCache();
+  for (const def of BUILDINGS) if (cache[def.id]) onReady(def.id, cache[def.id]);
+  const missing = BUILDINGS.filter((d) => !cache[d.id]);
+  if (!missing.length) return () => {};
   let renderer: THREE.WebGLRenderer;
   try {
     const canvas = document.createElement('canvas');
@@ -48,7 +83,7 @@ export function makeThumbnails(onReady: (id: string, url: string) => void): () =
   scene.add(ground);
   const camera = new THREE.PerspectiveCamera(32, 1, 0.05, 100);
 
-  const queue = [...BUILDINGS];
+  const queue = [...missing];
   const next = () => {
     if (cancelled) return;
     const def = queue.shift();
@@ -68,7 +103,22 @@ export function makeThumbnails(onReady: (id: string, url: string) => void): () =
       camera.position.set(center.x + dist * 0.75, center.y + dist * 0.7, center.z + dist * 0.85);
       camera.lookAt(center.x, center.y * 0.8, center.z);
       renderer.render(scene, camera);
-      onReady(def.id, renderer.domElement.toDataURL('image/png'));
+      // Codifica asincrona (WebP, leggera) invece di toDataURL, che blocca il gioco
+      renderer.domElement.toBlob(
+        (blob) => {
+          if (!blob || cancelled) return;
+          const fr = new FileReader();
+          fr.onload = () => {
+            const url = fr.result as string;
+            cache[def.id] = url;
+            onReady(def.id, url);
+            if (!queue.length) saveCache(cache);
+          };
+          fr.readAsDataURL(blob);
+        },
+        'image/webp',
+        0.85,
+      );
       scene.remove(obj);
       obj.traverse((o) => {
         if (o instanceof THREE.Mesh) o.geometry.dispose();
@@ -76,9 +126,9 @@ export function makeThumbnails(onReady: (id: string, url: string) => void): () =
     } catch {
       /* se un modello non si disegna resta l'icona */
     }
-    setTimeout(next, 16);
+    idle(next);
   };
-  setTimeout(next, 300);
+  setTimeout(() => idle(next), 1500);
   return () => {
     cancelled = true;
   };

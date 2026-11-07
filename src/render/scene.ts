@@ -232,7 +232,7 @@ export class WorldRenderer {
       this.shadowDirty = true;
     }
     this.sun.shadow.radius = q === 'low' ? 1 : 2.5;
-    this.aoPass.enabled = q !== 'low';
+    this.aoPass.enabled = q === 'high';
     this.bloomPass.enabled = q === 'high';
     this.terrainView.setDetail(q !== 'low');
     this.resize();
@@ -447,13 +447,17 @@ export class WorldRenderer {
     return [...this.game.state.buildings, ...this.game.sites(), ...this.game.others.filter((b) => this.game.isRevealed(b))];
   }
 
+  private footprintKey = '';
+
   private syncBuildings() {
     const alive = new Set<number>();
+    let changed = false;
     for (const b of this.allBuildings()) {
       alive.add(b.uid);
       const ctx = this.ctxFor(b);
       const key = JSON.stringify(ctx);
       if (this.visualKeys.get(b.uid) === key) continue;
+      changed = true;
       const old = this.buildingObjs.get(b.uid);
       if (old) this.disposeObject(old);
       const obj = this.makeObject(b, ctx);
@@ -472,6 +476,7 @@ export class WorldRenderer {
     }
     for (const [uid, obj] of this.buildingObjs) {
       if (!alive.has(uid)) {
+        changed = true;
         this.disposeObject(obj);
         this.batches.remove(uid);
         this.buildingObjs.delete(uid);
@@ -499,8 +504,13 @@ export class WorldRenderer {
         dry: b.defId === 'moat' ? !this.game.moatFlooded(b) : undefined,
       });
     }
-    this.terrainView.setFootprints(fps);
-    this.shadowDirty = true;
+    // Il terreno (spianate, fossati) si ricalcola solo se cambiano gli ingombri: costa caro
+    const fkey = fps.map((f) => `${f.x},${f.z},${f.defId},${f.depth ?? ''},${f.dry ?? ''}`).join(';');
+    if (fkey !== this.footprintKey) {
+      this.footprintKey = fkey;
+      this.terrainView.setFootprints(fps);
+    }
+    if (changed) this.shadowDirty = true;
   }
 
   /** Anteprima di una fila di caselle (verde = si può, rosso = no). */
@@ -766,6 +776,7 @@ export class WorldRenderer {
     tg.x = THREE.MathUtils.clamp(tg.x, 0, lim);
     tg.z = THREE.MathUtils.clamp(tg.z, 0, lim);
     this.controls.update();
+    this.terrainView.updateLod(tg.x, tg.z, this.camera.position.distanceTo(tg));
     this.updateSunShadow();
     // Mappa delle ombre: solo quando cambia qualcosa (costruzioni, stagione, inquadratura).
     // Ciò che si muove di continuo non proietta ombre: così il ritmo dei fotogrammi resta regolare.
