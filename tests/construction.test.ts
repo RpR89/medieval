@@ -7,11 +7,13 @@ import { Tile } from '../src/game/world/terrain';
 function site(year = 900) {
   const st = createInitialState(1);
   st.day = (year - 900) * 360 + 95; // estate: niente rallentamenti invernali
-  st.population = 60;
+  st.population = 24; // quanti ne ospitano i ripari iniziali: niente emigrazione
   const g = new Game(st, () => 0.5);
   g.instantBuild = false;
   g.terrain.tiles.fill(Tile.Grass);
   Object.assign(g.state.resources, { wood: 1e4, stone: 1e4, lime: 1e4, coins: 1e4, grain: 1e4 });
+  // Cantieri lunghi: i magazzini non devono svuotarsi per fame a metà prova
+  g.storageCap = () => 1e9;
   return g;
 }
 
@@ -30,7 +32,7 @@ describe('cantieri', () => {
     g.advance(2);
     expect(g.progressOf(b.uid)).toBeGreaterThan(0);
     expect(g.progressOf(b.uid)).toBeLessThan(1);
-    g.advance(400);
+    g.advance(1200);
     expect(g.ownKeep()?.uid).toBe(b.uid);
     expect(g.castleLevel()).toBe(1);
     expect(g.sites()).toHaveLength(0);
@@ -120,7 +122,7 @@ describe('evoluzione delle mura', () => {
     expect(g.evolve(w)).toBe(true);
     expect(w.defId).toBe('wall_rubble'); // ancora in lavorazione: resta com'era
     expect(g.canUpgrade(w, 'walkway').reason).toBe('Lavori già in corso');
-    g.advance(40);
+    g.advance(400);
     expect(w.defId).toBe('wall_stone');
     expect(w.hp).toBe(g.maxHp(w));
   });

@@ -637,15 +637,15 @@ export class WorldRenderer {
   }
 
   /**
-   * Telecamera da tastiera: W/S avanti e indietro, A/D gira attorno al punto inquadrato,
-   * Q/E inclina la vista, frecce ←/→ spostano di lato. Lo zoom resta sulla rotellina.
+   * Telecamera da tastiera: W/S avanti e indietro, A/D a sinistra e a destra,
+   * Z/C gira attorno al punto inquadrato, Q/E inclina la vista. Lo zoom resta sulla rotellina.
    */
   private panWithKeys(dt: number) {
     const k = this.keys;
     const tg = this.controls.target;
     const off = this.camera.position.clone().sub(tg);
     // Rotazione e inclinazione attorno al punto inquadrato
-    const turn = (k.has('d') ? 1 : 0) - (k.has('a') ? 1 : 0);
+    const turn = (k.has('c') ? 1 : 0) - (k.has('z') ? 1 : 0);
     const tilt = (k.has('e') ? 1 : 0) - (k.has('q') ? 1 : 0);
     if (turn || tilt) {
       const sph = new THREE.Spherical().setFromVector3(off);
@@ -663,8 +663,8 @@ export class WorldRenderer {
     const move = new THREE.Vector3();
     if (k.has('w') || k.has('arrowup')) move.add(forward);
     if (k.has('s') || k.has('arrowdown')) move.sub(forward);
-    if (k.has('arrowright')) move.add(right);
-    if (k.has('arrowleft')) move.sub(right);
+    if (k.has('d') || k.has('arrowright')) move.add(right);
+    if (k.has('a') || k.has('arrowleft')) move.sub(right);
     if (move.lengthSq() === 0) return;
     move.normalize().multiplyScalar(speed);
     this.camera.position.add(move);

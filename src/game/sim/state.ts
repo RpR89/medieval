@@ -115,6 +115,8 @@ export interface Company {
   groupSpeed?: number;
   /** Proprietario per i reparti dei signori controllati dal gioco (indice del signore). */
   owner?: number;
+  /** Spedizione di un signore contro un altro signore. */
+  targetLord?: number;
   /** Diplomatico in missione (nessun soldato). */
   envoy?: { lord: number; mission: DiploMission; gift?: Cost };
   /** Esploratore a cavallo (nessun soldato): vede lontano. */
@@ -176,6 +178,19 @@ export interface OffensiveSiege {
   log: Array<{ day: number; text: string }>;
 }
 
+/** Proposta di un signore al giocatore: si accetta o si rifiuta. */
+export interface Proposal {
+  id: number;
+  lord: number;
+  kind: 'help' | 'alliance' | 'marriage' | 'trade' | 'tribute' | 'spy';
+  text: string;
+  expires: number;
+  coins?: number;
+  goods?: Cost;
+  /** Signore contro cui si chiede aiuto. */
+  target?: number;
+}
+
 /** Esercito nemico in marcia verso il proprio castello. */
 export interface IncomingAttack {
   id: string;
@@ -221,6 +236,11 @@ export interface GameState {
   siege?: ActiveSiege;
   /** Nostro assedio in corso a un signore. */
   offense?: OffensiveSiege;
+  /** Proposte dei signori in attesa di risposta. */
+  proposals?: Proposal[];
+  nextProposalId?: number;
+  /** Agitatori stranieri che sobillano il popolo fino a questo giorno. */
+  agitation?: { lord: number; until: number };
   /** Partita multigiocatore: id e posto (0 = chi l'ha creata, 1 = chi si è unito). */
   match?: { id: string; slot: 0 | 1 };
   /** Signori controllati dal gioco (solo in giocatore singolo). */

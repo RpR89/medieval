@@ -92,11 +92,11 @@ export const PRESET_LIST = Object.values(PRESETS);
 /** Lato della mappa secondo il numero di castelli (giocatori e signori). */
 export function mapSize(sites: number): number {
   // Mappe ampie: tra un castello e l'altro c'è spazio per campi, boschi ed esplorazione
-  if (sites <= 1) return 112;
-  if (sites === 2) return 128;
-  if (sites === 3) return 144;
-  if (sites === 4) return 160;
-  return 176;
+  if (sites <= 1) return 144;
+  if (sites === 2) return 160;
+  if (sites === 3) return 184;
+  if (sites === 4) return 208;
+  return 232;
 }
 
 /** Centri dei siti dei castelli: due ai lati, tre o più in cerchio (il primo è il giocatore, a sud). */

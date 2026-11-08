@@ -21,7 +21,7 @@ import {
 import { CARRY, ENGINES, FORMATIONS, MARCH_SPEED, SOLDIER_FOOD, STANCES, UNITS, type Behavior, type EngineType, type Formation, type Stance } from '../data/units';
 import { CASTLE_LEVELS, KEEP_EVOLVE, UPGRADE_BY_ID, upgradesFor, type UpgradeDef } from '../data/upgrades';
 import { factionEffects, FACTIONS, type FactionDef, type FactionEffects } from '../data/factions';
-import { eraIndex as eraIndexOf, isLevelable, levelEffects, levelUpCost, maxLevelFor } from '../data/levels';
+import { eraIndex as eraIndexOf, escalatedCost, isLevelable, levelEffects, levelUpCost, maxLevelFor } from '../data/levels';
 import {
   generateTerrain,
   isBuildableLand,
@@ -62,7 +62,7 @@ const EATING_ORDER: ResourceId[] = [...FOOD_IDS].sort(
 const MAX_LOG = 60;
 
 /** Giornate di lavoro per unità di materiale (la pietra e la calce richiedono più fatica). */
-const WORK_PER_UNIT: Partial<Record<ResourceId, number>> = { wood: 3, stone: 5.5, lime: 5, coins: 0.3, gold: 5, charcoal: 1 };
+const WORK_PER_UNIT: Partial<Record<ResourceId, number>> = { wood: 12, stone: 22, lime: 18, coins: 1.2, gold: 18, charcoal: 4 };
 /** Paga giornaliera e cibo in più per ogni costruttore al lavoro. */
 export const BUILDER_WAGE = 0.06;
 export const BUILDER_FOOD = 0.05;
@@ -264,9 +264,10 @@ export class Game {
   }
 
   /** Costo di un edificio per il nostro schieramento. */
-  costOf(def: BuildingDef): Cost {
+  costOf(def: BuildingDef, extra = 0): Cost {
     const stoneFort = !!def.fort && def.fort !== 'moat' && (def.cost.stone ?? 0) > 0;
-    return this.scaleCost(def.cost, stoneFort ? this.fx().stoneFortCost ?? 1 : 1);
+    const already = Math.max(0, this.count(def.id) + this.sites().filter((b) => b.defId === def.id).length + extra);
+    return this.scaleCost(escalatedCost(def, already), stoneFort ? this.fx().stoneFortCost ?? 1 : 1);
   }
 
   /** Costo di un miglioramento per il nostro schieramento. */
@@ -957,7 +958,8 @@ export class Game {
     if (i < 0) return false;
     const b = this.state.buildings[i];
     const def = getBuilding(b.defId);
-    for (const [id, n] of Object.entries(this.costOf(def))) {
+    // Metà di quanto era costato (senza contare l'edificio stesso nella maggiorazione)
+    for (const [id, n] of Object.entries(this.costOf(def, -1))) {
       this.state.resources[id as ResourceId] += Math.floor((n ?? 0) * 0.5);
     }
     if (def.herd && b.herd) this.slaughter(def.herd.species, Math.floor(b.herd));
@@ -1020,7 +1022,9 @@ export class Game {
   }
 
   buyPrice(id: ResourceId): number {
-    return Math.ceil(this.price(id) * 1.25 * (this.fx().buy ?? 1) * 10) / 10;
+    // I materiali da costruzione al mercato costano cari: non devono sostituire cave e boschi
+    const scarce = id === 'wood' || id === 'stone' || id === 'lime' || id === 'gold' ? 1.6 : 1.25;
+    return Math.ceil(this.price(id) * scarce * (this.fx().buy ?? 1) * 10) / 10;
   }
 
   sellPrice(id: ResourceId): number {
@@ -1139,7 +1143,7 @@ export class Game {
     if (fed < 0.99) {
       s.population -= pop * 0.004 * (1 - fed) * dt;
     } else if (pop < a.housing && hm >= 30) {
-      const growth = (0.03 + pop * 0.0008) * (1 + 0.08 * Math.max(0, variety - 1)) * Math.min(1.5, hm / 55) * (this.fx().growth ?? 1);
+      const growth = (0.006 + pop * 0.00013) * (1 + 0.08 * Math.max(0, variety - 1)) * Math.min(1.5, hm / 55) * (this.fx().growth ?? 1);
       s.population = Math.min(a.housing, pop + growth * dt);
     }
     if (hm < 30) s.population -= pop * 0.0015 * ((30 - hm) / 30) * dt;
@@ -1190,7 +1194,7 @@ export class Game {
     });
 
     // Deperimento e magazzini
-    const cap = a.storage;
+    const cap = this.storageCap(); // durante un assedio vale la capienza dei soli magazzini dentro le mura
     this.track('Deperimento', () => {
       for (const id of RESOURCE_IDS) {
         const sp = RESOURCES[id].spoilage;
@@ -1870,6 +1874,283 @@ export class Game {
     }
     return cost / v;
   }
+
+  // ───────────── Intrighi, guerre tra signori e proposte ─────────────
+
+  /** Notizie dal regno: le mosse dei signori arrivano come voci. */
+  private news(text: string) {
+    this.log(`📰 ${text}`, 'info');
+  }
+
+  /** Rapporto tra due signori (simmetrico). */
+  tie(a: Lord, b: Lord): number {
+    a.ties ??= {};
+    b.ties ??= {};
+    if (a.ties[b.id] === undefined) {
+      const base = (PERSONALITIES[a.personality].base + PERSONALITIES[b.personality].base) / 2;
+      const v = Math.round(base + (mulberry32(this.state.seed + a.id * 31 + b.id * 17)() - 0.5) * 50);
+      a.ties[b.id] = v;
+      b.ties[a.id] = v;
+    }
+    return a.ties[b.id];
+  }
+
+  private setTie(a: Lord, b: Lord, v: number) {
+    const x = Math.max(-100, Math.min(100, v));
+    a.ties ??= {};
+    b.ties ??= {};
+    a.ties[b.id] = x;
+    b.ties[a.id] = x;
+  }
+
+  private lordWar(a: Lord, b: Lord, why: string) {
+    if ((a.foes ?? []).includes(b.id)) return;
+    a.foes = [...(a.foes ?? []), b.id];
+    b.foes = [...(b.foes ?? []), a.id];
+    (a.warSince ??= {})[b.id] = this.state.day;
+    (b.warSince ??= {})[a.id] = this.state.day;
+    a.friends = (a.friends ?? []).filter((x) => x !== b.id);
+    b.friends = (b.friends ?? []).filter((x) => x !== a.id);
+    this.setTie(a, b, Math.min(this.tie(a, b), -60));
+    this.news(`${a.name} dichiara guerra a ${b.name}: ${why}.`);
+    // Gli alleati del signore attaccato entrano in guerra
+    for (const id of b.friends ?? []) {
+      const ally = this.lord(id);
+      if (ally && ally !== a && !(ally.foes ?? []).includes(a.id)) {
+        ally.foes = [...(ally.foes ?? []), a.id];
+        a.foes = [...(a.foes ?? []), ally.id];
+        (ally.warSince ??= {})[a.id] = this.state.day;
+        (a.warSince ??= {})[ally.id] = this.state.day;
+        this.news(`${ally.name}, alleato di ${b.name}, entra in guerra contro ${a.name}.`);
+      }
+    }
+  }
+
+  private makePeace(a: Lord, b: Lord) {
+    a.foes = (a.foes ?? []).filter((x) => x !== b.id);
+    b.foes = (b.foes ?? []).filter((x) => x !== a.id);
+    this.setTie(a, b, Math.max(this.tie(a, b), -20));
+  }
+
+  private proposals(): NonNullable<GameState['proposals']> {
+    return (this.state.proposals ??= []);
+  }
+
+  private propose(p: Omit<NonNullable<GameState['proposals']>[number], 'id' | 'expires'>) {
+    if (this.proposals().some((x) => x.lord === p.lord)) return;
+    const id = this.state.nextProposalId ?? 1;
+    this.state.nextProposalId = id + 1;
+    this.proposals().push({ ...p, id, expires: this.state.day + 75 });
+    this.log(`📜 ${p.text} (rispondi nella scheda Diplomazia)`, p.kind === 'tribute' || p.kind === 'spy' ? 'bad' : 'info');
+  }
+
+  /** Una mossa di un signore: rapporti con gli altri, guerre, alleanze, proposte a noi, intrighi. */
+  private intrigue(l: Lord) {
+    const power = this.lordPower(l);
+    for (const o of this.lords()) {
+      if (o === l) continue;
+      let t = this.tie(l, o);
+      // I rapporti si muovono: chi è in guerra si odia, i vicini bellicosi litigano
+      t += (this.random() - 0.5) * 26 + (l.personality === 'aggressive' ? -5 : l.personality === 'greedy' ? -2 : l.personality === 'peaceful' ? 2 : 0);
+      if ((l.foes ?? []).includes(o.id)) t -= 4;
+      this.setTie(l, o, t);
+      const atWar = (l.foes ?? []).includes(o.id);
+      if (!atWar && l.liege !== o.id && o.liege !== l.id && t < -40 && power > this.lordPower(o) * (l.personality === 'aggressive' ? 0.7 : 1.0) && this.random() < 0.6) {
+        this.lordWar(l, o, t < -70 ? 'un vecchio rancore' : 'vuole le sue terre');
+      } else if (!atWar && t > 50 && !(l.friends ?? []).includes(o.id) && this.random() < 0.5) {
+        l.friends = [...(l.friends ?? []), o.id];
+        o.friends = [...(o.friends ?? []), l.id];
+        this.news(`${l.name} e ${o.name} stringono un'alleanza.`);
+      } else if (atWar && this.state.day - (l.warSince?.[o.id] ?? 0) > 720 && (t > -30 || this.random() < 0.12)) {
+        this.makePeace(l, o);
+        this.news(`${l.name} e ${o.name} firmano la pace.`);
+      }
+    }
+    // In guerra con un altro signore: spedizione contro di lui
+    const foes = (l.foes ?? []).map((id) => this.lord(id)).filter((x): x is Lord => !!x);
+    if (foes.length && !l.companies.length && this.random() < 0.6) this.launchLordRaid(l, foes[Math.floor(this.random() * foes.length)].id);
+    // Gli alleati entrano nelle nostre guerre
+    if (l.status === 'alliance') {
+      for (const w of this.lords()) {
+        if (w !== l && w.status === 'war' && !(l.foes ?? []).includes(w.id) && this.random() < 0.4) {
+          this.lordWar(l, w, `per tenere fede all'alleanza con ${this.state.castleName}`);
+          break;
+        }
+      }
+    }
+    // Chi è alleato di un nostro nemico ci diventa ostile
+    if (l.status === 'neutral') {
+      const enemyFriend = (l.friends ?? []).map((id) => this.lord(id)).find((x) => x?.status === 'war');
+      if (enemyFriend && this.random() < 0.3) {
+        l.relation -= 25;
+        if (l.relation < -50) this.declareWar(l, `È alleato di ${enemyFriend.name}`);
+      }
+    }
+    if (l.status === 'war' || l.status === 'vassal') return;
+    // Proposte e intrighi verso di noi: di rado (uno o due anni tra una e l'altra) e non troppe insieme
+    if (this.state.day < (l.nextProposal ?? 0) || this.proposals().length >= 3 || this.random() < 0.5) return;
+    const asked = this.proposals().length;
+    const r = this.random();
+    const strong = power > this.myPower() * 1.1;
+    if (foes.length && l.relation >= 0 && r < 0.35) {
+      const target = foes[0];
+      if (target.status !== 'war') {
+        const coins = Math.round(80 + l.level * 60);
+        this.propose({ lord: l.id, kind: 'help', target: target.id, coins, text: `${l.name} ti chiede di unirti alla guerra contro ${target.name}: offre ${coins} monete.` });
+      }
+    } else if (l.relation > 60 && l.status !== 'alliance' && r < 0.5) {
+      const coins = Math.round(150 + l.level * 80);
+      this.propose({ lord: l.id, kind: 'marriage', coins, text: `${l.name} propone un matrimonio tra le casate: alleanza e una dote di ${coins} monete.` });
+    } else if (l.relation > 35 && l.status === 'neutral' && r < 0.5) {
+      this.propose({ lord: l.id, kind: 'alliance', text: `${l.name} propone un'alleanza.` });
+    } else if (l.personality === 'greedy' && strong && r < 0.4) {
+      const coins = Math.round(60 + l.level * 50);
+      this.propose({ lord: l.id, kind: 'tribute', coins, text: `${l.name} pretende un tributo di ${coins} monete, o ci saranno conseguenze.` });
+    } else if (l.relation < -10 && r < 0.3) {
+      if (this.random() < 0.5) {
+        this.propose({ lord: l.id, kind: 'spy', text: `Le guardie hanno catturato una spia di ${l.name}. Imprigionarla (scopri il suo castello, rapporti peggiori) o rimandarla indietro?` });
+      } else {
+        this.state.agitation = { lord: l.id, until: this.state.day + 120 };
+        this.log(`🕯️ Agitatori al soldo di ${l.name} sobillano i contadini: il contento cala per qualche mese.`, 'bad');
+      }
+    } else if (r < 0.55) {
+      // Commercio: il signore vende ciò che ha in abbondanza, o compra grano se gli manca
+      const res = l.res!;
+      const st = this.lordStats(l, 0, true);
+      const spare: Array<'stone' | 'wood'> = (['stone', 'wood'] as const).filter((k) => res[k] > 300);
+      const hungry = res.food < st.use.food * 12;
+      const sell = spare.length > 0 && (!hungry || this.random() < 0.5);
+      if (!sell && !hungry) return;
+      const id: ResourceId = sell ? spare[Math.floor(this.random() * spare.length)] : 'grain';
+      const n = Math.round(sell ? Math.min(res[id as 'stone'] * 0.3, 60 + this.random() * 80) : 80 + this.random() * 120);
+      if (sell) res[id as 'stone'] -= n;
+      const coins = Math.round(n * RESOURCES[id].basePrice * (sell ? 1.1 : 1.2));
+      this.propose({
+        lord: l.id,
+        kind: 'trade',
+        coins: sell ? -coins : coins,
+        goods: { [id]: sell ? n : -n },
+        text: sell ? `${l.name} offre ${n} ${RESOURCES[id].name.toLowerCase()} per ${coins} monete.` : `${l.name} vuole comprare ${n} di grano per ${coins} monete.`,
+      });
+    }
+    if (this.proposals().length > asked || this.state.agitation?.lord === l.id) l.nextProposal = this.state.day + 360 * (1 + this.random());
+  }
+
+  /** Proposte in attesa. */
+  pendingProposals() {
+    return this.proposals();
+  }
+
+  /** Risposta a una proposta. */
+  answerProposal(id: number, accept: boolean): string {
+    const i = this.proposals().findIndex((x) => x.id === id);
+    if (i < 0) return '';
+    const p = this.proposals()[i];
+    const l = this.lord(p.lord);
+    const r = this.state.resources;
+    if (!l) {
+      this.proposals().splice(i, 1);
+      return '';
+    }
+    let msg = '';
+    if (accept) {
+      if (p.kind === 'tribute' && r.coins < (p.coins ?? 0)) return 'Non hai abbastanza monete';
+      if (p.kind === 'trade' && (p.coins ?? 0) < 0 && r.coins < -(p.coins ?? 0)) return 'Non hai abbastanza monete';
+      if (p.kind === 'trade') {
+        const [[gid, gn]] = Object.entries(p.goods ?? {}) as Array<[ResourceId, number]>;
+        if (gn < 0 && r[gid] < -gn) return `Non hai abbastanza ${RESOURCES[gid].name.toLowerCase()}`;
+      }
+    }
+    this.proposals().splice(i, 1);
+    switch (p.kind) {
+      case 'help': {
+        const target = this.lord(p.target ?? -1);
+        if (accept && target) {
+          this.track('Diplomazia', () => (r.coins += p.coins ?? 0), 'event');
+          l.relation += 20;
+          this.declareWar(target, `Ci siamo uniti a ${l.name}`);
+          msg = `Siamo in guerra con ${target.name} al fianco di ${l.name} (+${p.coins} monete).`;
+        } else {
+          l.relation -= 8;
+          msg = `Rifiutiamo di entrare in guerra: ${l.name} è deluso.`;
+        }
+        break;
+      }
+      case 'alliance':
+      case 'marriage':
+        if (accept) {
+          l.status = 'alliance';
+          l.relation += 15;
+          if (p.kind === 'marriage') this.track('Diplomazia', () => (r.coins += p.coins ?? 0), 'event');
+          msg = p.kind === 'marriage' ? `Nozze celebrate: ${l.name} è nostro alleato (dote ${p.coins} monete).` : `Alleanza con ${l.name}!`;
+        } else {
+          l.relation -= p.kind === 'marriage' ? 12 : 5;
+          msg = `Proposta di ${l.name} rifiutata.`;
+        }
+        break;
+      case 'tribute':
+        if (accept) {
+          this.track('Diplomazia', () => (r.coins -= p.coins ?? 0), 'event');
+          l.relation += 10;
+          msg = `Pagato il tributo a ${l.name}.`;
+        } else {
+          l.relation -= 20;
+          msg = `Rifiutiamo il tributo: ${l.name} è furioso.`;
+          if (l.relation < -45 || l.personality === 'aggressive') this.declareWar(l, 'Abbiamo rifiutato il tributo');
+        }
+        break;
+      case 'trade':
+        if (accept) {
+          this.track('Commercio con i signori', () => {
+            r.coins += p.coins ?? 0;
+            for (const [gid, gn] of Object.entries(p.goods ?? {})) r[gid as ResourceId] += gn ?? 0;
+          }, 'event');
+          l.relation += 4;
+          l.wealth -= p.coins ?? 0;
+          msg = `Affare concluso con ${l.name}.`;
+        } else msg = `Nessun accordo con ${l.name}.`;
+        break;
+      case 'spy':
+        if (accept) {
+          l.relation -= 10;
+          // La spia, interrogata, rivela il castello del suo signore
+          this.revealAround(...this.lordKeep(l), 11);
+          msg = `La spia di ${l.name} è in catene: ora conosciamo il suo castello.`;
+        } else {
+          l.relation += 5;
+          msg = `La spia torna da ${l.name}: un gesto apprezzato.`;
+        }
+        break;
+    }
+    if (msg) this.log(`📜 ${msg}`, accept ? 'good' : 'info');
+    return msg;
+  }
+
+  /** Le proposte scadute valgono come rifiuto (i tributi ignorati irritano). */
+  private expireProposals() {
+    for (const p of [...this.proposals()]) {
+      if (this.state.day < p.expires) continue;
+      // Il tributo ignorato è un rifiuto (e irrita); il resto scade senza clamore
+      if (p.kind === 'tribute') this.answerProposal(p.id, false);
+      else {
+        this.proposals().splice(this.proposals().indexOf(p), 1);
+        const l = this.lord(p.lord);
+        if (l && p.kind === 'help') l.relation -= 4;
+      }
+    }
+  }
+
+  /** Scopre le caselle attorno a un punto (informazioni ottenute senza andarci). */
+  private revealAround(cx: number, cz: number, r: number) {
+    const { exp } = this.fogGrids();
+    const n = this.terrain.size;
+    for (let z = Math.max(0, cz - r); z <= Math.min(n - 1, cz + r); z++) {
+      for (let x = Math.max(0, cx - r); x <= Math.min(n - 1, cx + r); x++) if ((x - cx) ** 2 + (z - cz) ** 2 <= r * r) exp[z * n + x] = 1;
+    }
+    this.lastRevealed = -1;
+    this.forceExploredSave = true;
+  }
+  private forceExploredSave = false;
 
   // ───────────── Il nostro assedio a un signore ─────────────
 
@@ -3106,7 +3387,7 @@ export class Game {
       for (const [x, z] of shuffle(cands)) if (this.lordCanPlace(l, def, x, z)) return [x, z];
       return null;
     }
-    for (let ring = R + 3; ring <= R + 16; ring++) {
+    for (let ring = R + 3; ring <= R + 26; ring++) {
       const cands: Array<[number, number]> = [];
       for (let i = -ring; i <= ring; i++) cands.push([cx + i, cz - ring], [cx + i, cz + ring], [cx - ring, cz + i], [cx + ring, cz + i]);
       for (const [x, z] of shuffle(cands)) if (this.lordCanPlace(l, def, x, z)) return [x, z];
@@ -3230,11 +3511,11 @@ export class Game {
     r.food += st.prod.food * (blockaded ? 0.15 : 1);
     const fed = st.use.food > 0 ? Math.min(1, r.food / st.use.food) : 1;
     r.food = Math.max(0, r.food - st.use.food);
-    if (fed > 0.95 && l.pop! < st.housing) l.pop! += 0.03 + l.pop! * 0.001; // come la nostra gente
+    if (fed > 0.95 && l.pop! < st.housing) l.pop! += 0.006 + l.pop! * 0.00013; // come la nostra gente
     else if (fed < 0.8) l.pop! = Math.max(5, l.pop! - l.pop! * 0.012 * (1 - fed));
     l.pop! = Math.min(l.pop!, st.housing + 2);
     for (const k of ['food', 'wood', 'stone', 'lime'] as const) r[k] = Math.max(0, Math.min(st.storage, r[k]));
-    l.wealth = Math.min(l.wealth, 2000 + l.level * 1000);
+    l.wealth = Math.min(l.wealth, 4000 + l.level * 2000);
     // Arruolamento: costa monete e uomini
     // ...ma solo quanti ne può pagare con le tasse (più i bellicosi)
     const taxes = l.pop! * TAX_PER_PERSON * 1.1;
@@ -3284,8 +3565,8 @@ export class Game {
       if (id === 'wood' || id === 'stone' || id === 'lime') {
         const have = Math.min(r[id], need);
         take[id] = have;
-        coins += (need - have) * RESOURCES[id].basePrice * 1.6;
-      } else coins += need * RESOURCES[id as ResourceId].basePrice * 1.6;
+        coins += (need - have) * RESOURCES[id].basePrice * 2.5;
+      } else coins += need * RESOURCES[id as ResourceId].basePrice * 2.5;
     }
     // Tiene sempre una piccola riserva di monete
     if (coins > 0 && l.wealth - coins < reserve) return false;
@@ -3305,7 +3586,7 @@ export class Game {
     const build = (defId: string, at: [number, number] | null) => {
       if (!at) return null;
       const def = getBuilding(defId);
-      return { job: { kind: 'build' as const, uid: l.nextUid, defId, x: at[0], z: at[1], work: this.buildWork(def) }, cost: def.cost };
+      return { job: { kind: 'build' as const, uid: l.nextUid, defId, x: at[0], z: at[1], work: this.buildWork(def) }, cost: escalatedCost(def, this.lordCount(l, defId)) };
     };
     const keep = l.buildings.find((b) => getBuilding(b.defId).fort === 'keep');
     const keepJob = l.jobs!.find((j) => j.kind === 'build' && getBuilding(j.defId).fort === 'keep');
@@ -3591,6 +3872,11 @@ export class Game {
           this.declareWar(l, 'Si è ribellato al tributo');
         }
       }
+      // Intrighi e diplomazia tra i signori (e verso di noi)
+      if (!this.locked && s.day >= (l.nextIntrigue ?? 0)) {
+        l.nextIntrigue = s.day + 50 + this.random() * 70;
+        this.intrigue(l);
+      }
       // Decisioni periodiche
       if (s.day < l.nextAction || this.locked) continue;
       l.nextAction = s.day + 200 + this.random() * 400;
@@ -3610,9 +3896,10 @@ export class Game {
     }
     if (dirty) this.syncLords(true);
     this.watchtowerSkirmishes();
+    this.expireProposals();
   }
 
-  private launchLordRaid(l: Lord) {
+  private launchLordRaid(l: Lord, targetLord?: number) {
     if (l.companies.length) return;
     const k = 0.55;
     const troops: Force = {
@@ -3628,10 +3915,23 @@ export class Game {
     l.army.cavalry -= troops.cavalry;
     const [sx, sz] = this.lordKeep(l);
     const c: Company = { id: `l${l.id}-${l.nextUid++}`, troops, x: sx + 0.5, z: sz + 4.5, order: 'attack', formation: 'line', behavior: 'aggressive' };
+    const n = troops.infantry + troops.archers + troops.cavalry;
+    const foe = targetLord !== undefined ? this.lord(targetLord) : undefined;
+    if (foe) {
+      // Contro un altro signore: si ferma davanti alle sue mura, poi assalta
+      const [tx, tz] = this.lordKeep(foe);
+      const d = Math.hypot(sx - tx, sz - tz) || 1;
+      const ax = Math.round(tx + ((sx - tx) / d) * 9);
+      const az = Math.round(tz + ((sz - tz) / d) * 9);
+      c.targetLord = foe.id;
+      c.path = findPath(this.terrain.size, [Math.floor(c.x), Math.floor(c.z)], [ax, az], (x, z) => this.lordMoveCost(x, z));
+      l.companies.push(c);
+      this.news(`${l.name} marcia con ${n} soldati contro ${foe.castle}, il castello di ${foe.name}.`);
+      return;
+    }
     const [kx, kz] = this.keepCenter();
     c.path = findPath(this.terrain.size, [Math.floor(c.x), Math.floor(c.z)], [Math.floor(kx), Math.floor(kz)], (x, z) => this.lordMoveCost(x, z));
     l.companies.push(c);
-    const n = troops.infantry + troops.archers + troops.cavalry;
     this.log(`⚔️ ${l.name} marcia contro di noi con ${n} soldati${troops.rams + troops.trebuchets ? ' e macchine d\'assedio' : ''}!`, 'bad');
   }
 
@@ -3652,9 +3952,77 @@ export class Game {
     return t === Tile.Forest ? 2.2 : t === Tile.Rock || t === Tile.Gold ? 1.4 : 1;
   }
 
+  /** Muove un reparto di un signore lungo il suo percorso. */
+  private moveLordCompany(c: Company, dt: number) {
+    let budget = this.companySpeed(c) * dt;
+    while (budget > 1e-6 && c.path?.length) {
+      const [nx, nz] = c.path[0];
+      const dx = nx + 0.5 - c.x;
+      const dz = nz + 0.5 - c.z;
+      const d = Math.hypot(dx, dz);
+      const cost = this.lordMoveCost(nx, nz);
+      if (!isFinite(cost)) {
+        c.path = [];
+        break;
+      }
+      const step = budget / cost;
+      if (step >= d) {
+        c.x = nx + 0.5;
+        c.z = nz + 0.5;
+        c.path.shift();
+        budget -= d * cost;
+      } else {
+        c.x += (dx / d) * step;
+        c.z += (dz / d) * step;
+        budget = 0;
+      }
+      if (d > 1e-6) c.heading = Math.atan2(-dz, dx);
+    }
+  }
+
+  /** Un signore assalta il castello di un altro signore. */
+  private lordVsLord(l: Lord, c: Company) {
+    const foe = this.lord(c.targetLord!);
+    c.targetLord = undefined;
+    c.order = 'home';
+    const [sx, sz] = this.lordKeep(l);
+    c.path = findPath(this.terrain.size, [Math.floor(c.x), Math.floor(c.z)], [sx, sz + 4], (x, z) => this.lordMoveCost(x, z));
+    if (!foe || !(l.foes ?? []).includes(foe.id)) return;
+    const army: AttackerArmy = { name: `L'esercito di ${l.name}`, ...c.troops, morale: l.personality === 'aggressive' ? 0.65 : 0.55 };
+    const res = resolveSiege(this.lordDefense(foe), army, this.random);
+    for (const [uid, hp] of res.damage) {
+      const b = foe.buildings.find((x) => x.uid === uid);
+      if (b) b.hp = Math.max(0, Math.round(hp));
+    }
+    for (const k of ['infantry', 'archers', 'cavalry'] as const) {
+      foe.army[k] = Math.max(0, foe.army[k] - res.defenderLosses[k]);
+      c.troops[k] = Math.max(0, c.troops[k] - res.attackerLosses[k]);
+    }
+    if (res.outcome === 'repelled') {
+      this.news(`${foe.name} ha respinto l'assalto di ${l.name} a ${foe.castle}.`);
+    } else {
+      const share = res.outcome === 'sacked' ? 0.4 : 0.15;
+      const coins = Math.floor(foe.wealth * share);
+      foe.wealth -= coins;
+      l.wealth += coins;
+      if (res.outcome === 'sacked') {
+        // Il vinto diventa vassallo e la guerra finisce
+        foe.liege = l.id;
+        this.makePeace(l, foe);
+        this.news(`${l.name} ha espugnato ${foe.castle}: ${foe.name} ora è suo vassallo!`);
+      } else this.news(`${l.name} ha saccheggiato il borgo di ${foe.castle}, ma il mastio di ${foe.name} resiste.`);
+    }
+    this.syncLords(true);
+  }
+
   private stepLordCompanies(l: Lord, dt: number) {
     for (const c of [...l.companies]) {
       if (c.order === 'siege') continue; // accampati: l'assedio decide
+      if (c.order === 'attack' && c.targetLord !== undefined) {
+        this.moveLordCompany(c, dt);
+        if (!c.path?.length) this.lordVsLord(l, c);
+        continue;
+      }
       let budget = this.companySpeed(c) * dt;
       while (budget > 1e-6 && c.path?.length) {
         const [nx, nz] = c.path[0];
@@ -3735,11 +4103,8 @@ export class Game {
     return lord;
   }
 
-  private assaultLord(lead: Company, a: IncomingAttack, extra: { ladders?: number; starving?: number } = {}) {
-    // Il signore è quello del castello più vicino
-    const lord = this.nearestLord(lead.x, lead.z);
-    if (!lord) return;
-    if (lord.status !== 'war') this.declareWar(lord, 'Hai assaltato le sue mura');
+  /** Le difese del castello di un signore, per un assalto. */
+  private lordDefense(lord: Lord, extra: { ladders?: number; starving?: number } = {}): DefenderSnapshot {
     const segments: SiegeSegment[] = [];
     for (const b of lord.buildings) {
       const def = getBuilding(b.defId);
@@ -3747,7 +4112,7 @@ export class Game {
       const max = this.maxHp(b);
       segments.push({ uid: b.uid, defId: b.defId, role: def.fort, hp: b.hp ?? max, maxHp: max, upgrades: [...(def.builtIn ?? []), ...(b.upgrades ?? [])], defense: def.defense ?? 0 });
     }
-    const snap: DefenderSnapshot = {
+    return {
       segments,
       closed: this.lordRingClosed(lord),
       moat: { tiles: 0, coverage: 0, depth: 1, flooded: 0, stakes: 0 },
@@ -3758,6 +4123,14 @@ export class Game {
       ladders: extra.ladders,
       starving: extra.starving,
     };
+  }
+
+  private assaultLord(lead: Company, a: IncomingAttack, extra: { ladders?: number; starving?: number } = {}) {
+    // Il signore è quello del castello più vicino
+    const lord = this.nearestLord(lead.x, lead.z);
+    if (!lord) return;
+    if (lord.status !== 'war') this.declareWar(lord, 'Hai assaltato le sue mura');
+    const snap = this.lordDefense(lord, extra);
     const army: AttackerArmy = { name: `L'esercito di ${this.state.castleName}`, ...a.troops, morale: 0.6, arrows: a.tactics?.arrows, melee: a.tactics?.melee };
     const res = resolveSiege(snap, army, this.random);
     for (const [uid, hp] of res.damage) {
@@ -3984,6 +4357,8 @@ export class Game {
     else if (crowd < 0.85) parts.push(['Case spaziose', 4]);
     if (this.has((d) => !!d.market)) parts.push(['Mercato', 5]);
     if (this.fx().mood) parts.push([`${this.faction()!.name}`, this.fx().mood!]);
+    const ag = this.state.agitation;
+    if (ag && this.state.day < ag.until) parts.push([`Agitatori di ${this.lord(ag.lord)?.name ?? 'un signore'}`, -10]);
     if (this.state.lastSiege && this.state.day - this.state.lastSiege.day < 120 && this.state.lastSiege.outcome !== 'repelled') {
       parts.push(['Saccheggio recente', -15]);
     }
@@ -4206,7 +4581,8 @@ export class Game {
         }
       }
     }
-    if (grew) {
+    if (grew || this.forceExploredSave) {
+      this.forceExploredSave = false;
       // Salva le caselle esplorate e mostra gli edifici stranieri appena scoperti
       const bytes = new Uint8Array(Math.ceil((n * n) / 8));
       for (let i = 0; i < n * n; i++) if (exp[i]) bytes[i >> 3] |= 1 << (i & 7);

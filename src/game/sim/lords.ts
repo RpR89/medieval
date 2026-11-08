@@ -30,6 +30,19 @@ export interface Lord {
   jobs?: LordJob[];
   /** Schieramento del signore. */
   faction?: FactionId;
+  /** Rapporti con gli altri signori (id → da -100 a 100). */
+  ties?: Record<number, number>;
+  /** Signori con cui è in guerra e alleati. */
+  foes?: number[];
+  friends?: number[];
+  /** Signore di cui è diventato vassallo. */
+  liege?: number;
+  /** Prossima mossa di intrighi e diplomazia. */
+  nextIntrigue?: number;
+  /** Prossima proposta possibile al giocatore. */
+  nextProposal?: number;
+  /** Inizio delle guerre in corso con altri signori (id → giorno). */
+  warSince?: Record<number, number>;
 }
 
 export interface LordResources {

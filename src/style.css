@@ -246,3 +246,9 @@ button.multi { background: #6b2a1e; border-color: #a3402f; color: var(--ink); }
 .log .bad { color: var(--bad); }
 .sidebar.collapsed ~ .log { left: 64px; max-width: min(520px, calc(100vw - 90px)); }
 .sidebar.collapsed ~ .hint { left: 52px; }
+
+/* Proposte dei signori */
+.proposal { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; margin: 6px 0; background: rgba(217, 164, 65, 0.06); }
+.proposal .row button { padding: 2px 8px; font-size: 12px; }
+.tabs button.badge { position: relative; }
+.tabs button.badge::after { content: attr(data-badge); position: absolute; top: -5px; right: -5px; background: var(--bad); color: #fff; border-radius: 9px; font-size: 10px; min-width: 16px; height: 16px; line-height: 16px; text-align: center; padding: 0 3px; }

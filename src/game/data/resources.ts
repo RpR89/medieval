@@ -34,11 +34,11 @@ export interface ResourceDef {
 
 export const RESOURCES: Record<ResourceId, ResourceDef> = {
   coins: { id: 'coins', name: 'Monete', icon: '🪙', basePrice: 1 },
-  wood: { id: 'wood', name: 'Legna', icon: '🪵', basePrice: 2 },
-  stone: { id: 'stone', name: 'Pietra', icon: '🪨', basePrice: 4 },
+  wood: { id: 'wood', name: 'Legna', icon: '🪵', basePrice: 4 },
+  stone: { id: 'stone', name: 'Pietra', icon: '🪨', basePrice: 10 },
   gold: { id: 'gold', name: 'Oro', icon: '✨', basePrice: 40 },
   charcoal: { id: 'charcoal', name: 'Carbone', icon: '⚫', basePrice: 6 },
-  lime: { id: 'lime', name: 'Calce', icon: '⚪', basePrice: 6 },
+  lime: { id: 'lime', name: 'Calce', icon: '⚪', basePrice: 14 },
   grain: { id: 'grain', name: 'Grano', icon: '🌾', basePrice: 2, food: true, spoilage: 0.0005 },
   vegetables: { id: 'vegetables', name: 'Ortaggi', icon: '🥬', basePrice: 2, food: true, spoilage: 0.004 },
   hay: { id: 'hay', name: 'Fieno', icon: '🌿', basePrice: 1, spoilage: 0.001 },

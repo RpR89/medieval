@@ -6,7 +6,8 @@ import { textures } from './textures';
 import { addCloudShadows, addLeafScale, addSnow, addWind, shared } from './effects';
 
 /** Vertici per lato di ogni casella (meno sulle mappe grandi, per le prestazioni). */
-const resFor = (size: number) => (size > 100 ? 3 : 4);
+// Vertici per casella: meno sulle mappe grandi (resta liscio, costa molto meno)
+const resFor = (size: number) => (size > 180 ? 2 : size > 100 ? 3 : 4);
 export const WATER_LEVEL = -0.18;
 
 const TARGET: Record<Tile, number> = {

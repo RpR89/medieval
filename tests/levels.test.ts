@@ -73,7 +73,7 @@ describe('livelli degli edifici civili', () => {
     expect(g.levelOf(hut)).toBe(1);
     expect(g.canLevelUp(hut).reason).toBe('Lavori già in corso');
     g.state.population = 40;
-    g.advance(60);
+    g.advance(400);
     expect(g.levelOf(hut)).toBe(2);
   });
 });

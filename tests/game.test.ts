@@ -2,15 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { Game } from '../src/game/sim/game';
 import { createInitialState, migrateState } from '../src/game/sim/state';
 import { dateFromDays, DAYS_PER_YEAR, formatDate, formatDuration } from '../src/game/data/calendar';
-import { generateTerrain, isBuildableLand, MAP_SIZE, Tile, tileAt } from '../src/game/world/terrain';
+import { generateTerrain, isBuildableLand, Tile, tileAt } from '../src/game/world/terrain';
 import { getBuilding } from '../src/game/data/buildings';
 
 // Nei test le costruzioni sono immediate, salvo dove si provano i cantieri
 Game.instantByDefault = true;
 
 function findSpot(game: Game, defId: string): [number, number] {
-  for (let z = 0; z < MAP_SIZE; z++) {
-    for (let x = 0; x < MAP_SIZE; x++) {
+  for (let z = 0; z < game.terrain.size; z++) {
+    for (let x = 0; x < game.terrain.size; x++) {
       if (game.canPlace(defId, x, z).ok) return [x, z];
     }
   }

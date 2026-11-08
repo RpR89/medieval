@@ -208,7 +208,7 @@ export class Hud {
     this.toastEl = el('div', { class: 'toasts' });
     this.hintEl = el('div', {
       class: 'hint',
-      text: 'W/S avanti e indietro · A/D gira · Q/E inclina · ←/→ di lato · Rotella: zoom · Trascina: sposta · Spazio: pausa',
+      text: 'W/S avanti e indietro · A/D sinistra e destra · Z/C gira · Q/E inclina · Rotella: zoom · Trascina: sposta · Spazio: pausa',
     });
 
     root.append(this.resTip, this.siegePanel);
@@ -322,7 +322,7 @@ export class Hud {
     this.refreshBuildList();
     this.hintEl.textContent = defId
       ? `Costruisci: ${getBuilding(defId).name} — ${getBuilding(defId).draggable ? 'clic, oppure trascina per tracciare una linea (anche in diagonale)' : 'clic per piazzare'} · Esc o tasto destro: annulla`
-      : 'W/S avanti e indietro · A/D gira · Q/E inclina · ←/→ di lato · Rotella: zoom · Trascina: sposta · Spazio: pausa';
+      : 'W/S avanti e indietro · A/D sinistra e destra · Z/C gira · Q/E inclina · Rotella: zoom · Trascina: sposta · Spazio: pausa';
   }
 
   // ───────────── Selezione ─────────────
@@ -1145,7 +1145,15 @@ export class Hud {
     const g = this.game;
     const list = el('div');
     const travel = el('div');
+    const props = el('div', { class: 'proposals' });
+    props.onpointerdown = (e) => {
+      const t = (e.target as HTMLElement).closest<HTMLElement>('[data-prop]');
+      if (!t) return;
+      const msg = g.answerProposal(Number(t.dataset.prop), t.dataset.yes === '1');
+      if (msg) this.toast(msg, t.dataset.yes === '1' ? 'good' : 'info');
+    };
     this.panelBody.append(
+      props,
       el('p', { class: 'small muted', text: 'Manda un diplomatico ai castelli dei signori vicini: viaggia sulla mappa e porta la tua proposta. Un dono rende tutto più facile.' }),
       list,
       el('h4', { text: '🕊️ Diplomatici in viaggio' }),
@@ -1193,14 +1201,36 @@ export class Hud {
     }
     let lastTravel = '';
     this.refreshTab = () => {
+      // Proposte dei signori in attesa di risposta
+      const pend = g.pendingProposals();
+      const icons = { help: '⚔️', alliance: '🤝', marriage: '💍', trade: '⚖️', tribute: '💰', spy: '🕵️' };
+      const yesNo = { help: ['Entra in guerra', 'Rifiuta'], alliance: ['Accetta', 'Rifiuta'], marriage: ['Accetta le nozze', 'Rifiuta'], trade: ['Accetta', 'Rifiuta'], tribute: ['Paga', 'Rifiuta'], spy: ['Imprigiona', 'Rimandala'] };
+      setHtml(
+        props,
+        pend.length
+          ? `<h4>📜 Proposte (${pend.length})</h4>${pend
+              .map(
+                (p) => `<div class="proposal"><p class="small">${icons[p.kind]} ${escapeHtml(p.text)}</p>
+                <div class="row"><button data-prop="${p.id}" data-yes="1" class="primary">${yesNo[p.kind][0]}</button><button data-prop="${p.id}" data-yes="0">${yesNo[p.kind][1]}</button><span class="small muted">scade tra ${formatDuration(p.expires - g.state.day)}</span></div></div>`,
+              )
+              .join('')}<hr>`
+          : '',
+      );
+      const nameOf = (id: number) => escapeHtml(g.lord(id)?.name ?? '?');
       for (const l of g.lords()) {
         const r = rows.get(l.id);
         if (!r) continue;
+        const ties = [
+          (l.foes ?? []).length ? `⚔️ in guerra con ${(l.foes ?? []).map(nameOf).join(', ')}` : '',
+          (l.friends ?? []).length ? `🤝 alleato di ${(l.friends ?? []).map(nameOf).join(', ')}` : '',
+          l.liege !== undefined ? `👑 vassallo di ${nameOf(l.liege)}` : '',
+        ].filter(Boolean).join(' · ');
         const soldiers = Math.round(l.army.infantry + l.army.archers + l.army.cavalry);
         const html = `<div class="row"><span class="swatch" style="background:#${SIDE_COLORS[(l.id + 1) % SIDE_COLORS.length].toString(16).padStart(6, '0')}"></span>
           <strong>${escapeHtml(l.name)}</strong></div>
           <div class="small">${l.faction ? `${emblemHtml(l.faction, 14)} ${escapeHtml(FACTIONS[l.faction].name)} · ` : ''}${escapeHtml(l.castle)} · ${l.level ? `${'★'.repeat(l.level)}${'☆'.repeat(5 - l.level)}` : 'accampamento'} · ${PERSONALITIES[l.personality].name}</div>
           <div class="small ${l.status === 'war' ? 'bad' : l.status === 'alliance' || l.status === 'vassal' ? 'good' : ''}">${escapeHtml(g.lordStatusName(l))} · rapporto ${Math.round(l.relation)} · circa ${Math.round(soldiers / 5) * 5} soldati${l.companies.length ? ' · <span class="bad">esercito in marcia</span>' : ''}</div>
+          ${ties ? `<div class="small">${ties}</div>` : ''}
           <div class="small muted">👪 ${Math.round(l.pop ?? 0)} abitanti${(() => {
             const act = g.lordActivity(l);
             if (!act.length) return '';
@@ -1522,6 +1552,15 @@ export class Hud {
     }
     if (this.resHover) this.refreshResTip();
     this.refreshSiege();
+    // Numero di proposte in attesa sulla scheda Diplomazia
+    const dip = this.tabBtns.get('diplomacy');
+    if (dip) {
+      const n = g.pendingProposals().length;
+      if (dip.dataset.badge !== String(n)) {
+        dip.dataset.badge = String(n);
+        dip.classList.toggle('badge', n > 0);
+      }
+    }
     this.refreshBuildList();
     this.refreshTab();
     this.refreshSelection();

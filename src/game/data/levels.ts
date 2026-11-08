@@ -40,6 +40,19 @@ export function levelName(level: number): string {
   return `Livello ${level} · ${ERAS[t].name} ${((level - 1) % LEVELS_PER_ERA) + 1}/${LEVELS_PER_ERA}`;
 }
 
+/**
+ * Costo crescente: ogni edificio civile dello stesso tipo costa l'8% in più del precedente
+ * (fino al triplo). Le mura, i fossati e le strade, che si costruiscono a tratti, no.
+ */
+export function escalatedCost(def: BuildingDef, already: number): Cost {
+  if (def.fort || def.road || def.draggable) return def.cost;
+  const k = Math.min(3.5, 1 + 0.12 * already);
+  if (k === 1) return def.cost;
+  const out: Cost = {};
+  for (const [id, n] of Object.entries(def.cost)) out[id as ResourceId] = Math.ceil((n ?? 0) * k);
+  return out;
+}
+
 /** Effetti del livello: moltiplicatori di produzione, alloggi, magazzini, capi e lavoratori. */
 export function levelEffects(level: number) {
   const l = Math.max(1, level) - 1;
@@ -63,12 +76,12 @@ export function levelUpCost(def: BuildingDef, level: number): Cost {
   const add = (id: ResourceId, n: number) => {
     if (n > 0) out[id] = Math.ceil((out[id] ?? 0) + n);
   };
-  const f = 0.3 + 0.08 * level;
+  const f = 0.8 + 0.25 * level;
   for (const [id, n] of Object.entries(def.cost)) add(id as ResourceId, (n ?? 0) * f);
-  add('wood', 4 + level * 1.5);
-  add('coins', 3 + level * 2);
-  if (t >= 1) add('stone', 3 + level * 1.5);
-  if (t >= 2) add('lime', 1 + level * 0.5);
+  add('wood', 14 + level * 5);
+  add('coins', 10 + level * 6);
+  if (t >= 1) add('stone', 10 + level * 4);
+  if (t >= 2) add('lime', 3 + level * 1.5);
   if (t >= 3) add('coins', level * 3);
   if (t >= 4) add('stone', level);
   return out;

@@ -475,7 +475,7 @@ export const BUILDINGS: BuildingDef[] = [
     minYear: 900,
     placement: 'land',
     workers: 2,
-    produces: { hay: 3 },
+    produces: { hay: 1.6 },
     seasonal: [0.4, 2, 0.6, 0],
   },
 
@@ -546,7 +546,7 @@ export const BUILDINGS: BuildingDef[] = [
     minYear: 900,
     placement: 'nearForest',
     workers: 2,
-    produces: { wood: 2.5 },
+    produces: { wood: 0.22 },
     seasonal: [1, 1, 1.1, 0.8],
   },
   {
@@ -588,7 +588,7 @@ export const BUILDINGS: BuildingDef[] = [
     minYear: 900,
     placement: 'rock',
     workers: 4,
-    produces: { stone: 2.5 },
+    produces: { stone: 0.18 },
     seasonal: [1, 1.1, 1, 0.6],
   },
   {
@@ -603,7 +603,7 @@ export const BUILDINGS: BuildingDef[] = [
     placement: 'goldVein',
     workers: 5,
     consumes: { charcoal: 0.6 },
-    produces: { gold: 0.25 },
+    produces: { gold: 0.06 },
   },
 
   // ───── Produzione ─────
@@ -618,8 +618,8 @@ export const BUILDINGS: BuildingDef[] = [
     minYear: 900,
     placement: 'nearForest',
     workers: 1,
-    consumes: { wood: 2 },
-    produces: { charcoal: 0.8 },
+    consumes: { wood: 0.5 },
+    produces: { charcoal: 0.2 },
   },
   {
     id: 'watchtower',
@@ -664,8 +664,8 @@ export const BUILDINGS: BuildingDef[] = [
     minYear: 1000,
     placement: 'land',
     workers: 3,
-    consumes: { stone: 2, wood: 2 },
-    produces: { lime: 1.5 },
+    consumes: { stone: 0.25, wood: 0.25 },
+    produces: { lime: 0.1 },
     seasonal: [1, 1, 1, 0.5],
   },
   {

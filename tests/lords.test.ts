@@ -37,7 +37,7 @@ function run(g: Game, days: number, until?: () => boolean) {
 describe('signori rivali', () => {
   it('la mappa si ingrandisce e ogni signore ha il suo castello e il suo territorio', () => {
     const g = single(3);
-    expect(g.terrain.size).toBe(160);
+    expect(g.terrain.size).toBe(208);
     expect(g.terrain.sites).toHaveLength(4);
     expect(g.lords()).toHaveLength(3);
     for (const l of g.lords()) {
@@ -60,7 +60,7 @@ describe('signori rivali', () => {
     expect(l.jobs!.length).toBeGreaterThan(0);
     expect(g.others.some((b) => b.owner === l.id && b.site !== undefined && b.site < 4)).toBe(true);
     // In un paio d'anni: motta, campi, case e una cinta che cresce
-    run(g, 720);
+    run(g, 2500);
     expect(l.level).toBeGreaterThanOrEqual(1);
     const own = (pred: (id: string) => boolean) => l.buildings.filter((b) => pred(b.defId)).length;
     expect(own((id) => id.startsWith('field_'))).toBeGreaterThan(1);
@@ -73,7 +73,7 @@ describe('signori rivali', () => {
     const g = single(1, 1046, false);
     const l = g.lords()[0];
     l.wealth = 3000;
-    run(g, 1400);
+    run(g, 4500);
     const walls = l.buildings.filter((b) => getBuilding(b.defId).fort === 'wall').map((b) => b.defId);
     expect(walls.length).toBeGreaterThan(10);
     // Le palizzate costruite prima del 1050 sono diventate muri in pietrame
@@ -84,12 +84,19 @@ describe('signori rivali', () => {
   it('il diplomatico viaggia, porta il dono e torna', () => {
     const g = single(1);
     const l = g.lords()[0];
-    const before = l.relation;
+    // Durante il viaggio i rapporti cambiano anche per gli intrighi: si guarda il salto all'arrivo
+    l.nextIntrigue = 1e9;
     const c = g.sendDiplomat(l.id, 'gift', { coins: 400 })!;
     expect(c).not.toBeNull();
     expect(g.canSendDiplomat(l.id, {}).reason).toMatch(/già in viaggio/);
-    expect(run(g, 80, () => !g.state.companies?.length)).toBe(true);
-    expect(l.relation).toBeGreaterThan(before + 20);
+    let before = l.relation;
+    let jumped = 0;
+    expect(run(g, 200, () => {
+      if (l.relation - before > 15) jumped = l.relation - before;
+      before = l.relation;
+      return !g.state.companies?.length;
+    })).toBe(true);
+    expect(jumped).toBeGreaterThan(15);
   });
 
   it('l\'alleanza richiede buoni rapporti; gli alleati mandano rinforzi', () => {
