@@ -123,6 +123,8 @@ export interface Company {
   scout?: boolean;
   /** Viveri portati dietro (unità di cibo): fuori dal territorio i soldati mangiano questi. */
   food?: number;
+  /** Carri delle salmerie al seguito. */
+  wagons?: number;
 }
 
 export type DiploMission = 'alliance' | 'pact' | 'peace' | 'gift' | 'tribute' | 'war';
@@ -234,6 +236,8 @@ export interface GameState {
   explored?: string;
   /** Assedio in corso. */
   siege?: ActiveSiege;
+  /** Carri delle salmerie al castello. */
+  wagons?: number;
   /** Nostro assedio in corso a un signore. */
   offense?: OffensiveSiege;
   /** Proposte dei signori in attesa di risposta. */

@@ -18,7 +18,7 @@ import {
   type Cost,
   type ResourceId,
 } from '../data/resources';
-import { CARRY, ENGINES, FORMATIONS, MARCH_SPEED, SOLDIER_FOOD, STANCES, UNITS, type Behavior, type EngineType, type Formation, type Stance } from '../data/units';
+import { CARRY, ENGINES, FORMATIONS, MARCH_SPEED, SOLDIER_FOOD, STANCES, UNITS, WAGON, type Behavior, type EngineType, type Formation, type Stance } from '../data/units';
 import { CASTLE_LEVELS, KEEP_EVOLVE, UPGRADE_BY_ID, upgradesFor, type UpgradeDef } from '../data/upgrades';
 import { factionEffects, FACTIONS, type FactionDef, type FactionEffects } from '../data/factions';
 import { eraIndex as eraIndexOf, escalatedCost, isLevelable, levelEffects, levelUpCost, maxLevelFor } from '../data/levels';
@@ -1788,8 +1788,8 @@ export class Game {
 
   // ───────────── Rifornimenti dei reparti ─────────────
 
-  /** Giorni di viveri con cui parte un reparto (e che si reintegrano nel proprio territorio). */
-  static readonly SUPPLY_DAYS = 160;
+  /** Giorni di viveri che i soldati portano nello zaino (i carri ne aggiungono molti di più). */
+  static readonly SUPPLY_DAYS = 40;
   /** In marcia si raziona e si foraggia: un quarto del consumo normale. */
   static readonly FIELD_RATION = 0.25;
 
@@ -1815,6 +1815,27 @@ export class Game {
     return n;
   }
 
+  /** Cibo che un reparto può portare: zaini dei soldati più i carri delle salmerie. */
+  supplyCap(c: Company): number {
+    const n = c.troops.infantry + c.troops.archers + c.troops.cavalry;
+    return n * SOLDIER_FOOD * Game.FIELD_RATION * Game.SUPPLY_DAYS + (c.wagons ?? 0) * WAGON.capacity;
+  }
+
+  canBuildWagon(): PlaceCheck {
+    if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
+    if (!canAfford(this.state.resources, WAGON.cost)) return { ok: false, reason: 'Risorse insufficienti' };
+    return { ok: true };
+  }
+
+  buildWagon(): boolean {
+    return this.track('Carri delle salmerie', () => {
+      if (!this.canBuildWagon().ok) return false;
+      pay(this.state.resources, WAGON.cost);
+      this.state.wagons = (this.state.wagons ?? 0) + 1;
+      return true;
+    }, 'event');
+  }
+
   /** Giorni di viveri rimasti a un reparto. */
   supplyDays(c: Company): number {
     const n = c.troops.infantry + c.troops.archers + c.troops.cavalry;
@@ -1828,10 +1849,11 @@ export class Game {
       const n = c.troops.infantry + c.troops.archers + c.troops.cavalry;
       if (n <= 0) continue;
       const ration = n * SOLDIER_FOOD * Game.FIELD_RATION;
-      const full = ration * Game.SUPPLY_DAYS;
+      const full = this.supplyCap(c);
       if (this.ownsTile(Math.floor(c.x), Math.floor(c.z))) {
         // Nel proprio territorio i carri tornano a riempirsi dai granai
-        const want = Math.min(full - (c.food ?? 0), ration * 8 * dt);
+        // Si riempie in fretta: i carri caricano dai granai
+        const want = Math.min(full - (c.food ?? 0), Math.max(ration * 8, (c.wagons ?? 0) * 40) * dt);
         if (want > 0) c.food = (c.food ?? 0) + this.track('Viveri dei reparti', () => this.takeFood(want));
         continue;
       }
@@ -2758,6 +2780,7 @@ export class Game {
     // Le velocità sono in caselle al giorno: i giorni ora sono più brevi, la marcia resta uguale in tempo reale
     if (c.envoy) return 3 / TIME_SCALE;
     if (c.scout) return 4 / TIME_SCALE;
+    if (c.wagons) v = Math.min(v, WAGON.speed);
     v = ((isFinite(v) ? v : 4) * FORMATIONS[c.formation ?? 'line'].speed) / TIME_SCALE;
     return c.groupSpeed ? Math.min(v, c.groupSpeed) : v;
   }
@@ -2791,14 +2814,19 @@ export class Game {
   }
 
   /** Forma un reparto con truppe della guarnigione: esce dal castello e si può muovere sulla mappa. */
-  formCompany(f: Force): Company | null {
+  formCompany(f: Force, wagons = 0): Company | null {
     if (!this.canForm(f).ok) return null;
+    wagons = Math.max(0, Math.min(Math.floor(wagons), this.state.wagons ?? 0));
     for (const k of ['infantry', 'archers', 'cavalry'] as const) this.state.army[k] -= f[k];
     for (const k of ['rams', 'trebuchets'] as const) this.engines()[k] -= f[k];
     const [x, z] = this.spawnPoint();
     const slot = this.state.match?.slot ?? 0;
     const c: Company = { id: `c${slot}-${this.state.nextUid++}`, troops: { ...f }, x, z, order: 'idle', formation: 'line', behavior: 'defensive' };
-    c.food = this.track('Viveri dei reparti', () => this.takeFood((f.infantry + f.archers + f.cavalry) * SOLDIER_FOOD * Game.FIELD_RATION * Game.SUPPLY_DAYS));
+    if (wagons) {
+      c.wagons = wagons;
+      this.state.wagons = (this.state.wagons ?? 0) - wagons;
+    }
+    c.food = this.track('Viveri dei reparti', () => this.takeFood(this.supplyCap(c)));
     this.companies().push(c);
     return c;
   }
@@ -2917,6 +2945,10 @@ export class Game {
       return null;
     }
     const n: Company = { id: `c${this.state.match?.slot ?? 0}-${this.state.nextUid++}`, troops: half, x: c.x + 0.6, z: c.z + 0.4, order: 'idle' };
+    // I viveri si dividono: il nuovo reparto prende quanto entra nei suoi zaini
+    const share = Math.min(c.food ?? 0, this.supplyCap(n));
+    n.food = share;
+    c.food = (c.food ?? 0) - share;
     this.companies().push(n);
     return n;
   }
@@ -3080,6 +3112,10 @@ export class Game {
 
   private mergeHome(c: Company) {
     for (const k of ['infantry', 'archers', 'cavalry'] as const) this.state.army[k] += c.troops[k];
+    // I carri tornano al castello e i viveri avanzati nei granai
+    if (c.wagons) this.state.wagons = (this.state.wagons ?? 0) + c.wagons;
+    if (c.food) this.track('Viveri dei reparti', () => (this.state.resources.grain += c.food ?? 0));
+    c.food = 0;
     for (const k of ['rams', 'trebuchets'] as const) this.engines()[k] += c.troops[k];
     const cap = this.storageCap();
     let goods = 0;

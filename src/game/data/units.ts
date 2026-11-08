@@ -48,6 +48,17 @@ export const UNITS: Record<UnitType, UnitDef> = {
 /** Cibo consumato al giorno da ogni soldato (come un abitante, un po' di più). */
 export const SOLDIER_FOOD = 0.12;
 
+/** Carro delle salmerie: porta i viveri del castello dietro all'esercito (e lo rallenta un po'). */
+export const WAGON = {
+  name: 'Carro delle salmerie',
+  icon: '🛒',
+  cost: { wood: 40, coins: 25 },
+  /** Unità di cibo trasportate. */
+  capacity: 500,
+  /** Caselle al giorno (prima della scala del tempo): poco più lento dei fanti. */
+  speed: 1.0,
+};
+
 // ───────────── Macchine d'assedio e spedizioni ─────────────
 
 export type EngineType = 'rams' | 'trebuchets';

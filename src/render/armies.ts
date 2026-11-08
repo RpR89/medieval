@@ -214,6 +214,36 @@ function buildArmy(f: Force, enemy: boolean, formation: Formation = 'line', colo
 }
 
 /** Diplomatico a cavallo con il drappo bianco. */
+/** Carri delle salmerie in fila dietro al reparto (verso -x, la marcia va verso +x). */
+function wagonTrain(n: number): THREE.Group {
+  const k = mats();
+  const g = new THREE.Group();
+  for (let i = 0; i < Math.min(4, n); i++) {
+    const w = new THREE.Group();
+    w.add(box(0.36, 0.1, 0.2, k.darkPlanks, 0, 0.08, 0));
+    // Tela tesa sugli archi
+    const cover = cyl(0.11, 0.11, 0.34, k.cloth[2], 0, 0, 0, 8);
+    cover.rotation.z = Math.PI / 2;
+    cover.position.set(0, 0.2, 0);
+    cover.scale.set(1, 1, 0.9);
+    w.add(cover);
+    for (const [x, z] of [[-0.12, -0.11], [0.12, -0.11], [-0.12, 0.11], [0.12, 0.11]]) {
+      const wh = cyl(0.06, 0.06, 0.02, k.planks, 0, 0, 0, 8);
+      wh.rotation.x = Math.PI / 2;
+      wh.position.set(x, 0.06, z);
+      w.add(wh);
+    }
+    // Cavallo da tiro davanti
+    w.add(box(0.2, 0.09, 0.07, k.horse, 0.32, 0.1, 0));
+    w.add(box(0.06, 0.08, 0.05, k.horse, 0.44, 0.17, 0));
+    for (const [x, z] of [[0.25, -0.025], [0.25, 0.025], [0.38, -0.025], [0.38, 0.025]]) w.add(box(0.02, 0.1, 0.02, k.horseDark, x, 0, z));
+    w.add(box(0.2, 0.012, 0.012, k.beam, 0.2, 0.12, 0));
+    w.position.set(-0.75 - i * 0.62, 0, (i % 2) * 0.12 - 0.06);
+    g.add(w);
+  }
+  return g;
+}
+
 function envoyModel(color: number): THREE.Group {
   const k = mats();
   const g = soldier(tabardFor(color), 'cavalry');
@@ -292,15 +322,17 @@ export class ArmyView {
       formation: Formation = 'line',
       color?: number,
       envoy = false,
+      wagons = 0,
     ) => {
       // Chiave con numeri interi: le truppe calano di frazioni (assedi, fame) e non serve ricostruire a ogni fotogramma
-      const key = `${id}:${Math.round(f.infantry)},${Math.round(f.archers)},${Math.round(f.cavalry)},${f.rams},${f.trebuchets}:${formation}:${color}:${envoy}`;
+      const key = `${id}:${Math.round(f.infantry)},${Math.round(f.archers)},${Math.round(f.cavalry)},${f.rams},${f.trebuchets}:${formation}:${color}:${envoy}:${wagons}`;
       seen.add(id);
       let a = this.armies.get(id);
       if (!a || a.key !== key) {
         if (a) this.group.remove(a.obj);
         const root = new THREE.Group();
         const body = envoy ? envoyModel(color ?? 0xffffff) : buildArmy(f, enemy, formation, color);
+        if (wagons) body.add(wagonTrain(wagons));
         body.userData.body = true;
         body.traverse((o) => {
           if (o instanceof THREE.Mesh) o.castShadow = false;
@@ -332,7 +364,7 @@ export class ArmyView {
       const r = (n: number) => Math.round(n);
       place('siege-raiders', { infantry: r(sg.troops.infantry), archers: r(sg.troops.archers), cavalry: r(sg.troops.cavalry), rams: sg.troops.rams, trebuchets: 0 }, sg.camp[0] + 0.5 + Math.cos(Math.atan2(kz - sg.camp[1], kx - sg.camp[0])) * 1.5, sg.camp[1] + 0.5 + Math.sin(Math.atan2(kz - sg.camp[1], kx - sg.camp[0])) * 1.5, Math.atan2(-(kz - sg.camp[1]), kx - sg.camp[0]), false, true, 'line', 0x6a5a4a);
     }
-    for (const c of g.state.companies ?? []) place(c.id, c.troops, c.x, c.z, c.heading ?? 0, !!c.path?.length, false, c.formation, c.scout ? 0x3f8a4a : undefined, !!c.envoy || !!c.scout);
+    for (const c of g.state.companies ?? []) place(c.id, c.troops, c.x, c.z, c.heading ?? 0, !!c.path?.length, false, c.formation, c.scout ? 0x3f8a4a : undefined, !!c.envoy || !!c.scout, c.wagons ?? 0);
     this.updatePaths(g.state.companies ?? []);
     for (const c of g.enemyCompanies) {
       const prev = this.shown.get(c.id) ?? { x: c.x, z: c.z };

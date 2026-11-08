@@ -143,6 +143,32 @@ describe('rifornimenti dei reparti', () => {
     g.advance(200);
     expect(c.troops.infantry).toBeLessThan(20);
   });
+
+  it('i carri delle salmerie portano i viveri del castello e rallentano la marcia', () => {
+    const st = createInitialState(21, 'Rocca', { preset: 'pianura', lords: 1 });
+    st.nextRaidDay = 1e9;
+    const g = new Game(st, () => 0.5);
+    const [x, z] = g.homeSite();
+    g.place('keep_wood', x - 1, z - 1);
+    Object.assign(g.state.resources, { grain: 5000, wood: 500, coins: 500 });
+    g.storageCap = () => 1e9;
+    g.state.army.infantry = 40;
+    expect(g.buildWagon()).toBe(true);
+    expect(g.buildWagon()).toBe(true);
+    expect(g.state.wagons).toBe(2);
+    const F = { infantry: 20, archers: 0, cavalry: 0, rams: 0, trebuchets: 0 };
+    const bare = g.formCompany(F)!;
+    const c = g.formCompany(F, 2)!;
+    expect(g.state.wagons).toBe(0);
+    expect(c.wagons).toBe(2);
+    expect(g.supplyDays(c)).toBeGreaterThan(g.supplyDays(bare) * 5);
+    expect(g.companySpeed(c)).toBeLessThan(g.companySpeed(bare));
+    // Tornati a casa, i carri rientrano e i viveri avanzati finiscono nei granai
+    const grain = g.state.resources.grain;
+    (g as unknown as { mergeHome(c: unknown): void }).mergeHome(c);
+    expect(g.state.wagons).toBe(2);
+    expect(g.state.resources.grain).toBeGreaterThan(grain);
+  });
 });
 
 describe('il nostro assedio a un signore', () => {

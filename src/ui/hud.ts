@@ -10,7 +10,7 @@ import {
 import { formatDate, formatDuration } from '../game/data/calendar';
 import { eraForYear } from '../game/data/eras';
 import { canAfford, formatCost, RESOURCE_IDS, RESOURCES, TAX_LEVELS, type ResourceId } from '../game/data/resources';
-import { BEHAVIORS, ENGINES, FORMATIONS, UNITS, type Behavior, type EngineType, type Formation, type Stance } from '../game/data/units';
+import { BEHAVIORS, ENGINES, FORMATIONS, SOLDIER_FOOD, UNITS, WAGON, type Behavior, type EngineType, type Formation, type Stance } from '../game/data/units';
 import type { Force } from '../game/sim/state';
 import { CASTLE_LEVELS, UPGRADE_BY_ID } from '../game/data/upgrades';
 import { BUILDER_FOOD, BUILDER_WAGE, Game } from '../game/sim/game';
@@ -676,7 +676,7 @@ export class Hud {
       el('div', { class: 'row' }, el('strong', { text: comps.length === 1 ? '🚩 Reparto' : `🚩 ${comps.length} reparti` }), el('span', { class: 'spacer' })),
       el('p', {
         class: 'small',
-        text: `${t.infantry} 🛡️ fanti · ${t.archers} 🏹 arcieri · ${t.cavalry} 🐎 cavalieri${t.rams ? ` · ${t.rams} 🪵 arieti` : ''}${t.trebuchets ? ` · ${t.trebuchets} 🎯 trabucchi` : ''}${cargo ? ` · 💰 bottino ${Math.round(cargo)}` : ''}`,
+        text: `${t.infantry} 🛡️ fanti · ${t.archers} 🏹 arcieri · ${t.cavalry} 🐎 cavalieri${t.rams ? ` · ${t.rams} 🪵 arieti` : ''}${t.trebuchets ? ` · ${t.trebuchets} 🎯 trabucchi` : ''}${comps.reduce((a, c) => a + (c.wagons ?? 0), 0) ? ` · ${comps.reduce((a, c) => a + (c.wagons ?? 0), 0)} 🛒 carri` : ''}${cargo ? ` · 💰 bottino ${Math.round(cargo)}` : ''}`,
       }),
       el('p', { class: 'small muted', text: comps.some((c) => c.engaged) ? 'In battaglia…' : `${FORMATIONS[curF].description}` }),
       el('p', {
@@ -1044,10 +1044,26 @@ export class Hud {
       for (const k of keys) f[k] = Math.max(0, Math.floor(Number(inputs.get(k)!.value) || 0));
       return f;
     };
+    // Carri delle salmerie: si costruiscono qui e si portano dietro al reparto
+    const wagonsIn = el('input', { type: 'number', min: '0', value: '0', class: 'amount' });
+    const wagonsAll = el('button', { class: 'link small', text: 'tutti' });
+    wagonsAll.onclick = () => {
+      wagonsIn.value = String(this.game.state.wagons ?? 0);
+      refreshWar();
+    };
+    wagonsIn.oninput = () => refreshWar();
+    grid.append(el('span', { text: `${WAGON.icon} Carri salmerie` }), wagonsIn, wagonsAll);
+    const wagonInfo = el('span', { class: 'small' });
+    const buildWagon = el('button', { text: `🔨 Costruisci un carro (${formatCost(WAGON.cost)})`, title: `Porta ${WAGON.capacity} di cibo dietro all'esercito: senza carri i soldati hanno viveri solo per 40 giorni` });
+    buildWagon.onclick = () => {
+      if (!this.game.buildWagon()) this.toast(this.game.canBuildWagon().reason ?? 'Impossibile', 'bad');
+      refreshWar();
+    };
     const estimate = el('p', { class: 'small' });
     const form = el('button', { class: 'primary', text: '🚩 Forma il reparto ed esci dal castello' });
     form.onclick = () => {
-      const c = this.game.formCompany(force());
+      const c = this.game.formCompany(force(), Math.max(0, Math.floor(Number(wagonsIn.value) || 0)));
+      wagonsIn.value = '0';
       if (!c) {
         this.toast(this.game.canForm(force()).reason ?? 'Impossibile', 'bad');
         return;
@@ -1066,6 +1082,7 @@ export class Hud {
         text: 'Forma un reparto con le truppe del castello. Clic su un reparto per selezionarlo (Maiusc+clic per aggiungerne altri), tasto destro per muoverlo o, su un edificio nemico, per attaccare. I reparti vicini al mastio aiutano a difenderlo.',
       }),
       grid,
+      el('div', { class: 'row' }, buildWagon, wagonInfo),
       estimate,
       form,
       ...(war ? [el('h4', { text: `🔭 Castello di ${war.opponent}` }), intelEl] : []),
@@ -1079,7 +1096,17 @@ export class Hud {
       const c = g.canForm(f);
       form.disabled = !c.ok;
       const n = f.infantry + f.archers + f.cavalry;
-      estimate.textContent = n ? (c.ok ? `${n} soldati${f.rams + f.trebuchets ? ` e ${f.rams + f.trebuchets} macchine` : ''}` : c.reason ?? '') : 'Scegli le truppe del reparto.';
+      const w = Math.min(g.state.wagons ?? 0, Math.max(0, Math.floor(Number(wagonsIn.value) || 0)));
+      wagonInfo.textContent = `Al castello: ${g.state.wagons ?? 0} carri`;
+      buildWagon.disabled = !g.canBuildWagon().ok;
+      // Viveri: zaini (40 giorni) più i carri, in razioni da marcia
+      const ration = n * SOLDIER_FOOD * Game.FIELD_RATION;
+      const days = ration > 0 ? (ration * Game.SUPPLY_DAYS + w * WAGON.capacity) / ration : 0;
+      estimate.textContent = n
+        ? c.ok
+          ? `${n} soldati${f.rams + f.trebuchets ? ` e ${f.rams + f.trebuchets} macchine` : ''}${w ? ` e ${w} carri` : ''} · 🍞 viveri per circa ${formatDuration(days)}${w ? ' (i carri rallentano la marcia)' : ''}`
+          : c.reason ?? ''
+        : 'Scegli le truppe del reparto.';
       if (war) {
         const intel = g.opponentIntel();
         intelEl.innerHTML = intel
@@ -1102,7 +1129,7 @@ export class Hud {
               return el(
                 'div',
                 { class: 'row small' },
-                el('span', { text: `🚩 ${t.infantry}🛡️ ${t.archers}🏹 ${t.cavalry}🐎${t.rams ? ` ${t.rams}🪵` : ''}${t.trebuchets ? ` ${t.trebuchets}🎯` : ''} · ${x.engaged ? 'in battaglia' : orders[x.order]}${x.cargo ? ' · 💰' : ''}` }),
+                el('span', { text: `🚩 ${t.infantry}🛡️ ${t.archers}🏹 ${t.cavalry}🐎${t.rams ? ` ${t.rams}🪵` : ''}${t.trebuchets ? ` ${t.trebuchets}🎯` : ''}${x.wagons ? ` ${x.wagons}🛒` : ''} · ${x.engaged ? 'in battaglia' : orders[x.order]}${x.cargo ? ' · 💰' : ''}` }),
                 el('span', { class: 'spacer' }),
                 b,
               );
