@@ -1,5 +1,5 @@
 import type { UnitType } from '../data/buildings';
-import { emptyResources, type Resources } from '../data/resources';
+import { emptyResources, type ResourceId, type Resources } from '../data/resources';
 import { DAYS_PER_YEAR } from '../data/calendar';
 import type { PresetId } from '../world/presets';
 import type { Cost } from '../data/resources';
@@ -277,6 +277,8 @@ export interface GameState {
   wagons?: number;
   /** Obiettivi di epoca già raggiunti. */
   goalsDone?: string[];
+  /** Pressione dei prezzi al mercato per risorsa (si assesta col tempo). */
+  market?: Partial<Record<ResourceId, number>>;
   /** Eventi stagionali in corso (carestie, epidemie, raccolti…). */
   events?: ActiveEvent[];
   dynasty?: Dynasty;
@@ -333,9 +335,9 @@ export const BASE_HOUSING = 24;
 /** Famiglie che restano sempre (il seguito del signore): sotto questa soglia nessuno se ne va. */
 export const MIN_POPULATION = 5;
 export const BASE_STORAGE = 500;
-export const FOOD_PER_PERSON = 0.1;
+export const FOOD_PER_PERSON = 0.15;
 /** Tassa giornaliera per abitante a livello normale (1,5 monete al mese). */
-export const TAX_PER_PERSON = 0.05;
+export const TAX_PER_PERSON = 0.06;
 
 /** Epoche da cui si può cominciare, con le risorse di partenza. */
 export const START_ERAS = [
@@ -352,7 +354,7 @@ export function createInitialState(seed: number, castleName = 'Castello senza no
   const resources = emptyResources();
   Object.assign(resources, {
     // Scorte per arrivare al primo raccolto anche partendo da zero (circa un anno)
-    grain: 320 + (era.pop - 20) * 8,
+    grain: 420 + (era.pop - 20) * 10,
     vegetables: 90,
     meat: 50,
     hay: 80,

@@ -1047,18 +1047,58 @@ export class Game {
   price(id: ResourceId): number {
     const base = RESOURCES[id].basePrice;
     if (!RESOURCES[id].food && id !== 'hay') return base;
-    const curve = [1.15, 0.9, 0.8, 1.4];
+    const curve = [1.1, 0.9, 0.8, 1.3];
     return base * curve[seasonIndex(this.date.season)];
   }
 
+  /** Pressione del mercato su una risorsa: positiva = scarseggia (rincara), negativa = abbonda (cala). */
+  marketPressure(id: ResourceId): number {
+    return this.state.market?.[id] ?? 0;
+  }
+
+  private static readonly MARKET_STEP = 0.0035;
+  private static readonly PRESSURE_MIN = -0.55;
+  private static readonly PRESSURE_MAX = 1;
+
+  /** Prezzo di una singola unità dato il livello di pressione. */
+  private quote(id: ResourceId, buy: boolean, pressure: number): number {
+    const mul = Math.max(0.35, 1 + pressure);
+    if (buy) {
+      // I materiali da costruzione al mercato costano cari: non devono sostituire cave e boschi
+      const scarce = id === 'wood' || id === 'stone' || id === 'lime' || id === 'gold' || id === 'iron' || id === 'weapons' ? 1.7 : 1.4;
+      return this.price(id) * scarce * mul * (this.fx().buy ?? 1);
+    }
+    return this.price(id) * 0.6 * mul * (this.fx().sell ?? 1);
+  }
+
   buyPrice(id: ResourceId): number {
-    // I materiali da costruzione al mercato costano cari: non devono sostituire cave e boschi
-    const scarce = id === 'wood' || id === 'stone' || id === 'lime' || id === 'gold' ? 1.6 : 1.25;
-    return Math.ceil(this.price(id) * scarce * (this.fx().buy ?? 1) * 10) / 10;
+    return Math.ceil(this.quote(id, true, this.marketPressure(id)) * 10) / 10;
   }
 
   sellPrice(id: ResourceId): number {
-    return Math.floor(this.price(id) * 0.8 * (this.fx().sell ?? 1) * 10) / 10;
+    return Math.floor(this.quote(id, false, this.marketPressure(id)) * 10) / 10;
+  }
+
+  /** Costo (o incasso) di `n` unità: il prezzo si sposta a ogni unità scambiata. */
+  private tradeQuote(id: ResourceId, n: number, buy: boolean): { total: number; pressure: number } {
+    let p = this.marketPressure(id);
+    let total = 0;
+    for (let i = 0; i < n; i++) {
+      total += this.quote(id, buy, p);
+      p = Math.max(Game.PRESSURE_MIN, Math.min(Game.PRESSURE_MAX, p + (buy ? 1 : -1) * Game.MARKET_STEP));
+    }
+    return { total: Math.round(total * 10) / 10, pressure: p };
+  }
+
+  /** Il mercato si riassesta col tempo: la pressione torna verso zero (dimezza in circa 45 giorni). */
+  private relaxMarket(dt: number) {
+    const m = this.state.market;
+    if (!m) return;
+    const k = Math.exp(-dt / 65);
+    for (const id of Object.keys(m) as ResourceId[]) {
+      m[id] = (m[id] ?? 0) * k;
+      if (Math.abs(m[id]!) < 0.002) delete m[id];
+    }
   }
 
   trade(id: ResourceId, amount: number): PlaceCheck {
@@ -1070,17 +1110,21 @@ export class Game {
     if (this.locked) return { ok: false, reason: 'In attesa dell\'altro giocatore' };
     if (!this.summary().hasMarket) return { ok: false, reason: 'Serve un mercato' };
     const r = this.state.resources;
+    const mk = (this.state.market ??= {});
     if (amount > 0) {
-      const cost = this.buyPrice(id) * amount;
-      if (r.coins < cost) return { ok: false, reason: 'Monete insufficienti' };
+      const q = this.tradeQuote(id, amount, true);
+      if (r.coins < q.total) return { ok: false, reason: 'Monete insufficienti' };
       if (r[id] + amount > this.storageCap()) return { ok: false, reason: 'Magazzini pieni' };
-      r.coins -= cost;
+      r.coins -= q.total;
       r[id] += amount;
+      mk[id] = q.pressure;
     } else {
       const n = -amount;
       if (r[id] < n) return { ok: false, reason: 'Merce insufficiente' };
+      const q = this.tradeQuote(id, n, false);
       r[id] -= n;
-      r.coins += this.sellPrice(id) * n;
+      r.coins += q.total;
+      mk[id] = q.pressure;
     }
     return { ok: true };
   }
@@ -1113,6 +1157,9 @@ export class Game {
   }
 
   private lastGoalDay = -1;
+  private lastCold = false;
+  /** Legna bruciata ogni giorno d'inverno da ogni abitante. */
+  static readonly FUEL_PER_PERSON = 0.012;
 
   // ───────────── Dinastia ─────────────
 
@@ -1326,6 +1373,19 @@ export class Game {
     );
     const fed = needed > 0 ? 1 - need / needed : 1;
 
+    // D'inverno la gente brucia legna per scaldarsi: senza, si patisce il freddo
+    this.lastCold = false;
+    if (si === 3) {
+      const fuel = pop * Game.FUEL_PER_PERSON * dt * (this.hasEvent('harsh_winter') ? 1.5 : 1);
+      this.track('Legna da ardere', () => {
+        if (r.wood >= fuel) r.wood -= fuel;
+        else {
+          r.wood = 0;
+          this.lastCold = true;
+        }
+      });
+    }
+
     // Contento della popolazione: si avvicina gradualmente al valore che merita il governo
     this.lastFed = fed;
     this.lastVariety = variety;
@@ -1403,6 +1463,7 @@ export class Game {
       }
     });
 
+    this.relaxMarket(dt);
     if (s.day >= s.nextRaidDay) this.track('Assedi dei predoni', () => this.resolveRaid(), 'event');
     if (s.siege) this.track('Assedi dei predoni', () => this.stepSiege(dt), 'event');
     if (s.offense) this.stepOffense(dt);
@@ -4715,6 +4776,7 @@ export class Game {
     const parts: Array<[string, number]> = [['Base', 55]];
     parts.push([`Tasse: ${TAX_LEVELS[this.taxLevel()].name.toLowerCase()}`, TAX_LEVELS[this.taxLevel()].mood]);
     parts.push(this.lastFed < 0.99 ? ['Fame', -30] : ['Cibo a sufficienza', 6]);
+    if (this.lastCold) parts.push(['Senza legna da ardere', -14]);
     if (this.lastVariety > 1) parts.push(['Dieta varia', Math.min(12, (this.lastVariety - 1) * 3)]);
     const crowd = this.state.population / Math.max(1, a.housing);
     if (crowd > 1) parts.push(['Sovraffollamento', -12]);

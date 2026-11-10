@@ -139,8 +139,45 @@ describe('simulazione', () => {
     game.place('market', x, z);
     const coins = game.state.resources.coins;
     expect(game.trade('wood', -10).ok).toBe(true);
-    expect(game.state.resources.coins).toBeCloseTo(coins + game.sellPrice('wood') * 10);
+    const gain = game.state.resources.coins - coins;
+    // Ogni unità venduta fa calare un po' il prezzo: l'incasso è appena sotto il prezzo iniziale
+    expect(gain).toBeGreaterThan(0);
+    expect(gain).toBeLessThanOrEqual(game.sellPrice('wood') * 10 / 0.95 + 1);
     expect(game.buyPrice('grain')).toBeGreaterThan(game.sellPrice('grain'));
+  });
+
+  it('il mercato non si può spremere: vendere abbassa il prezzo, comprare lo alza, e rivendere subito fa perdere', () => {
+    const game = new Game(createInitialState(2));
+    game.levelOverride = 2;
+    const [x, z] = findSpot(game, 'market');
+    game.place('market', x, z);
+    Object.assign(game.state.resources, { coins: 5000, stone: 500, grain: 500 });
+    game.storageCap = () => 1e9;
+    const p0 = game.sellPrice('stone');
+    game.trade('stone', -200);
+    expect(game.sellPrice('stone')).toBeLessThan(p0 * 0.7);
+    // Comprare e rivendere la stessa merce non è mai un guadagno
+    const c = game.state.resources.coins;
+    game.trade('grain', 100);
+    game.trade('grain', -100);
+    expect(game.state.resources.coins).toBeLessThan(c);
+    // Col tempo il mercato si riassesta
+    game.advance(120);
+    expect(game.sellPrice('stone')).toBeGreaterThan(p0 * 0.85);
+  });
+
+  it('d\'inverno la gente brucia legna: senza, si patisce il freddo', () => {
+    const st = createInitialState(2);
+    st.day = 360 * 5 + 280; // inverno
+    st.population = 40;
+    st.nextRaidDay = 1e9;
+    const game = new Game(st, () => 0.5);
+    game.state.resources.wood = 100;
+    game.advance(10);
+    expect(game.state.resources.wood).toBeLessThan(100 - 40 * 0.012 * 9);
+    game.state.resources.wood = 0;
+    game.advance(2);
+    expect(game.moodTarget().parts.some(([n]) => /legna da ardere/.test(n))).toBe(true);
   });
 
   it('gli assalti vengono risolti e programmati di nuovo', () => {
@@ -217,8 +254,8 @@ describe('tempo, epoche e bilancio', () => {
     const g = new Game(createInitialState(1));
     g.state.population = 40;
     const b0 = g.budget();
-    expect(b0.taxes).toBeCloseTo(40 * 0.05 * 30);
-    expect(b0.perPerson).toBeCloseTo(1.5);
+    expect(b0.taxes).toBeCloseTo(40 * 0.06 * 30);
+    expect(b0.perPerson).toBeCloseTo(1.8);
     g.state.army.infantry = 20;
     const b1 = g.budget();
     expect(b1.army).toBeCloseTo(20 * 0.15 * 30);

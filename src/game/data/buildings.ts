@@ -447,7 +447,7 @@ export const BUILDINGS: BuildingDef[] = [
     minYear: 900,
     placement: 'land',
     workers: 4,
-    produces: { grain: 2.4 },
+    produces: { grain: 1.9 },
     seasonal: [0.1, 1.8, 0.6, 0],
   },
   {
@@ -461,7 +461,7 @@ export const BUILDINGS: BuildingDef[] = [
     minYear: 900,
     placement: 'land',
     workers: 2,
-    produces: { vegetables: 1.2 },
+    produces: { vegetables: 1.0 },
     seasonal: [0.8, 1.2, 1, 0.15],
   },
   {
@@ -560,7 +560,7 @@ export const BUILDINGS: BuildingDef[] = [
     minYear: 900,
     placement: 'nearForest',
     workers: 1,
-    produces: { meat: 0.6, hides: 0.15 },
+    produces: { meat: 0.5, hides: 0.15 },
     seasonal: [0.7, 0.8, 1.4, 1],
   },
   {
@@ -574,7 +574,7 @@ export const BUILDINGS: BuildingDef[] = [
     minYear: 900,
     placement: 'nearWater',
     workers: 2,
-    produces: { fish: 1.6 },
+    produces: { fish: 1.3 },
     seasonal: [1, 1.2, 1, 0.4],
   },
   {

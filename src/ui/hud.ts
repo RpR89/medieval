@@ -1201,11 +1201,14 @@ export class Hud {
     }
     this.refreshTab = () => {
       warn.textContent = this.game.summary().hasMarket
-        ? 'Prezzo d\'acquisto e di vendita per unità. Il cibo costa di più in inverno.'
+        ? 'Prezzo d\'acquisto e di vendita per unità. Ogni unità scambiata sposta il prezzo (▲ sale, ▼ scende), poi il mercato si riassesta in qualche mese. Il cibo costa di più in inverno.'
         : 'Costruisci un mercato per commerciare.';
       for (const [id, c] of cells) {
-        c.buy.textContent = `🪙${this.game.buyPrice(id)}`;
-        c.sell.textContent = `🪙${this.game.sellPrice(id)}`;
+        const pr = this.game.marketPressure(id);
+        const trend = pr > 0.04 ? ' ▲' : pr < -0.04 ? ' ▼' : '';
+        c.buy.textContent = `🪙${this.game.buyPrice(id)}${trend}`;
+        c.sell.textContent = `🪙${this.game.sellPrice(id)}${trend}`;
+        c.buy.title = c.sell.title = pr > 0.04 ? 'Hai comprato molto: il prezzo è salito' : pr < -0.04 ? 'Hai venduto molto: il prezzo è sceso' : '';
       }
     };
   }
