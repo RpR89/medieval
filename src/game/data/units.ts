@@ -149,3 +149,19 @@ export const BEHAVIORS: Record<Behavior, { name: string; icon: string; descripti
   defensive: { name: 'Difensivo', icon: '🛡️', description: 'Resta dove si trova e combatte meglio (+20%) se attaccato.' },
   hold: { name: 'Tieni la posizione', icon: '⚓', description: 'Non si muove mai da solo; +35% in difesa, nessun inseguimento.' },
 };
+
+/** Effetto del terreno sulla forza in campo aperto: fanti, arcieri, cavalieri. */
+export const TERRAIN_BATTLE: Record<number, { name: string; inf: number; arch: number; cav: number }> = {
+  0: { name: 'prato', inf: 1, arch: 1, cav: 1.15 },
+  1: { name: 'bosco', inf: 1.15, arch: 1.1, cav: 0.6 },
+  2: { name: 'altura rocciosa', inf: 1.1, arch: 1.3, cav: 0.7 },
+  3: { name: 'altura rocciosa', inf: 1.1, arch: 1.3, cav: 0.7 },
+  4: { name: 'guado', inf: 0.85, arch: 0.9, cav: 0.7 },
+  5: { name: 'riva', inf: 0.85, arch: 0.9, cav: 0.7 },
+  6: { name: 'sabbia', inf: 0.92, arch: 0.92, cav: 0.92 },
+};
+
+export const COMMANDER_NAMES = [
+  'Ottone', 'Corrado', 'Aldrico', 'Berengario', 'Guarnerio', 'Ezzelino', 'Ugo', 'Rolando', 'Tancredi', 'Manfredo',
+  'Gualtiero', 'Federico', 'Alberico', 'Landolfo', 'Odoardo', 'Bonifacio', 'Arrigo', 'Sigfrido', 'Teobaldo', 'Rainero',
+];

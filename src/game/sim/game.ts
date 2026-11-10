@@ -6,7 +6,7 @@ import {
   type BuildingDef,
   type UnitType,
 } from '../data/buildings';
-import { dateFromDays, DAYS_PER_SEASON, formatDuration, SEASON_NAMES, TIME_SCALE, type GameDate } from '../data/calendar';
+import { dateFromDays, DAYS_PER_SEASON, formatDuration, SEASON_NAMES, TIME_SCALE, weatherOf, type GameDate } from '../data/calendar';
 import { eraForYear, ERAS } from '../data/eras';
 import {
   canAfford,
@@ -19,7 +19,7 @@ import {
   type Cost,
   type ResourceId,
 } from '../data/resources';
-import { CARRY, ENGINES, FORMATIONS, MARCH_SPEED, SOLDIER_FOOD, STANCES, UNITS, WAGON, type Behavior, type EngineType, type Formation, type Stance } from '../data/units';
+import { CARRY, COMMANDER_NAMES, ENGINES, FORMATIONS, MARCH_SPEED, SOLDIER_FOOD, STANCES, TERRAIN_BATTLE, UNITS, WAGON, type Behavior, type EngineType, type Formation, type Stance } from '../data/units';
 import { CASTLE_LEVELS, KEEP_EVOLVE, UPGRADE_BY_ID, upgradesFor, type UpgradeDef } from '../data/upgrades';
 import { factionEffects, FACTIONS, type FactionDef, type FactionEffects } from '../data/factions';
 import { GOALS, type Goal } from '../data/goals';
@@ -55,6 +55,7 @@ import {
   type OffensiveSiege,
   type PlacedBuilding,
   type ActiveEvent,
+  type Commander,
   type WallPlan,
   type SeasonEventId,
 } from './state';
@@ -1667,6 +1668,7 @@ export class Game {
       morale: STANCES[a.stance]?.morale ?? 0.5,
       arrows: a.tactics?.arrows,
       melee: a.tactics?.melee,
+      year: this.date.year,
     };
     const res = this.besiege(army);
     const lost = res.attackerLosses;
@@ -1816,6 +1818,7 @@ export class Game {
       rams: year >= 1000 ? Math.floor(size / 14) : 0,
       trebuchets: year >= 1200 ? Math.floor(size / 20) : 0,
       morale: year < 1070 ? 0.45 : 0.6,
+      year,
     };
   }
 
@@ -1959,7 +1962,7 @@ export class Game {
         if (want > 0) c.food = (c.food ?? 0) + this.track('Viveri dei reparti', () => this.takeFood(want));
         continue;
       }
-      const eat = ration * dt;
+      const eat = ration * dt * (weatherOf(this.state.day) === 'snow' ? 1.25 : 1);
       if ((c.food ?? 0) >= eat) {
         c.food = (c.food ?? 0) - eat;
         continue;
@@ -2681,6 +2684,7 @@ export class Game {
       rams: sg.troops.rams,
       trebuchets: sg.troops.trebuchets,
       morale: Math.max(0.3, sg.morale),
+      year: this.date.year,
     };
     const result = resolveSiege(this.siegeSnapshot(rings > sg.breached ? ring : undefined), army, this.random);
     let visual = false;
@@ -2883,7 +2887,9 @@ export class Game {
     if (c.envoy) return 3 / TIME_SCALE;
     if (c.scout) return 4 / TIME_SCALE;
     if (c.wagons) v = Math.min(v, WAGON.speed);
-    v = ((isFinite(v) ? v : 4) * FORMATIONS[c.formation ?? 'line'].speed) / TIME_SCALE;
+    // Fango e neve rallentano la marcia
+    const wx = weatherOf(this.state.day);
+    v = ((isFinite(v) ? v : 4) * FORMATIONS[c.formation ?? 'line'].speed * (wx === 'rain' ? 0.85 : wx === 'snow' ? 0.75 : 1)) / TIME_SCALE;
     return c.groupSpeed ? Math.min(v, c.groupSpeed) : v;
   }
 
@@ -2929,8 +2935,47 @@ export class Game {
       this.state.wagons = (this.state.wagons ?? 0) - wagons;
     }
     c.food = this.track('Viveri dei reparti', () => this.takeFood(this.supplyCap(c)));
+    if (f.infantry + f.archers + f.cavalry >= 8) c.cmd = this.takeCommander();
     this.companies().push(c);
     return c;
+  }
+
+  /** Un comandante esperto, se ce n'è uno in attesa; altrimenti uno nuovo. */
+  private takeCommander(): Commander {
+    const vets = (this.state.veterans ??= []);
+    if (vets.length) {
+      vets.sort((a, b) => b.skill - a.skill);
+      return vets.shift()!;
+    }
+    const used = new Set(this.companies().map((c) => c.cmd?.name));
+    const free = COMMANDER_NAMES.filter((n) => !used.has(n));
+    const pool = free.length ? free : COMMANDER_NAMES;
+    return { name: pool[Math.floor(this.random() * pool.length)], skill: 0.03 + this.random() * 0.05, wins: 0 };
+  }
+
+  /** Esito dei comandanti dopo uno scontro: chi vince si afferma, chi perde può cadere. */
+  private commanderOutcome(group: Company[], won: boolean, losses: Record<string, Force>) {
+    for (const c of group) {
+      const cmd = c.cmd;
+      if (!cmd) continue;
+      if (won) {
+        cmd.wins++;
+        cmd.skill = Math.min(0.35, cmd.skill + 0.03);
+        this.log(`🎖️ ${cmd.name} esce vittorioso (+${Math.round(cmd.skill * 100)}% alla forza del reparto).`, 'good');
+        continue;
+      }
+      const l = losses[c.id];
+      const before = c.troops.infantry + c.troops.archers + c.troops.cavalry;
+      const lost = l ? l.infantry + l.archers + l.cavalry : 0;
+      if (before > 0 && lost / before > 0.5 && this.random() < 0.35) {
+        this.log(`💀 ${cmd.name} è caduto in battaglia: il reparto è sbandato.`, 'bad');
+        if (l) {
+          // Lo sbandamento costa un'altra fetta di soldati
+          for (const k of ['infantry', 'archers', 'cavalry'] as const) l[k] += Math.round((c.troops[k] - l[k]) * 0.15);
+        }
+        delete c.cmd;
+      }
+    }
   }
 
   private own(ids: string[]): Company[] {
@@ -3216,6 +3261,12 @@ export class Game {
     for (const k of ['infantry', 'archers', 'cavalry'] as const) this.state.army[k] += c.troops[k];
     // I carri tornano al castello e i viveri avanzati nei granai
     if (c.wagons) this.state.wagons = (this.state.wagons ?? 0) + c.wagons;
+    if (c.cmd) {
+      const vets = (this.state.veterans ??= []);
+      vets.push(c.cmd);
+      vets.sort((a, b) => b.skill - a.skill);
+      vets.length = Math.min(vets.length, 6);
+    }
     if (c.food) this.track('Viveri dei reparti', () => (this.state.resources.grain += c.food ?? 0));
     c.food = 0;
     for (const k of ['rams', 'trebuchets'] as const) this.engines()[k] += c.troops[k];
@@ -3351,6 +3402,7 @@ export class Game {
       };
       const mineLoss = lossFor(a, winA);
       const theirLoss = lossFor(b, !winA);
+      this.commanderOutcome(a, winA, mineLoss);
       this.applyFieldLosses(mineLoss, winA ? 'Vittoria in campo aperto!' : 'Sconfitta in campo aperto: i nostri ripiegano.');
       out.push({ enemyLosses: theirLoss, text: winA ? 'Sconfitta in campo aperto: i nostri ripiegano.' : 'Vittoria in campo aperto!' });
     }
@@ -3365,12 +3417,22 @@ export class Game {
     const foeSoldiers = Math.max(1, foes.reduce((s, x) => s + x.troops.infantry + x.troops.archers + x.troops.cavalry, 0));
     const avg = (fn: (f: (typeof FORMATIONS)[Formation]) => number) =>
       foes.reduce((s, x) => s + fn(FORMATIONS[x.formation ?? 'line']) * (x.troops.infantry + x.troops.archers + x.troops.cavalry), 0) / foeSoldiers;
-    const foeArrows = avg((f) => f.arrows);
-    const foeVsCav = avg((f) => f.vsCavalry);
+    const foeArrows = foes.length ? avg((f) => f.arrows) : 1;
+    const foeVsCav = foes.length ? avg((f) => f.vsCavalry) : 1;
     let total = 0;
+    const wx = weatherOf(this.state.day);
     for (const x of g) {
       const f = FORMATIONS[x.formation ?? 'line'];
-      const atk = (x.troops.infantry * 3 + x.troops.archers * 2.5 * foeArrows + (x.troops.cavalry * 7) / foeVsCav) * f.attack;
+      const tb = TERRAIN_BATTLE[tileAt(this.terrain, Math.floor(x.x), Math.floor(x.z)) ?? 0] ?? TERRAIN_BATTLE[0];
+      // Pioggia: archi inzuppati e terreno fangoso per la cavalleria; neve: tutti più lenti e intirizziti
+      const arch = wx === 'rain' ? 0.75 : 1;
+      const cav = wx === 'rain' ? 0.8 : 1;
+      const cold = wx === 'snow' ? 0.93 : 1;
+      const atk =
+        (x.troops.infantry * 3 * tb.inf + x.troops.archers * 2.5 * foeArrows * tb.arch * arch + ((x.troops.cavalry * 7) / foeVsCav) * tb.cav * cav) *
+        f.attack *
+        cold *
+        (1 + (x.cmd?.skill ?? 0));
       const still = !x.path?.length;
       const stance = still && x.behavior === 'hold' ? 1.35 : still && x.behavior === 'defensive' ? 1.2 : 1;
       total += atk * f.defense * stance;

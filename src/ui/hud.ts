@@ -7,7 +7,7 @@ import {
   type BuildingCategory,
   type UnitType,
 } from '../game/data/buildings';
-import { formatDate, formatDuration } from '../game/data/calendar';
+import { formatDate, formatDuration, WEATHER, weatherOf } from '../game/data/calendar';
 import { eraForYear } from '../game/data/eras';
 import { canAfford, CHAIN_IDS, formatCost, RESOURCE_IDS, RESOURCES, TAX_LEVELS, type ResourceId } from '../game/data/resources';
 import { BEHAVIORS, ENGINES, FORMATIONS, SOLDIER_FOOD, UNITS, WAGON, type Behavior, type EngineType, type Formation, type Stance } from '../game/data/units';
@@ -676,6 +676,7 @@ export class Hud {
     );
     this.compPanel.replaceChildren(
       el('div', { class: 'row' }, el('strong', { text: comps.length === 1 ? '🚩 Reparto' : `🚩 ${comps.length} reparti` }), el('span', { class: 'spacer' })),
+      ...comps.filter((c) => c.cmd).map((c) => el('p', { class: 'small', text: `🎖️ ${c.cmd!.name} · +${Math.round(c.cmd!.skill * 100)}% · ${c.cmd!.wins} vittorie` })),
       el('p', {
         class: 'small',
         text: `${t.infantry} 🛡️ fanti · ${t.archers} 🏹 arcieri · ${t.cavalry} 🐎 cavalieri${t.rams ? ` · ${t.rams} 🪵 arieti` : ''}${t.trebuchets ? ` · ${t.trebuchets} 🎯 trabucchi` : ''}${comps.reduce((a, c) => a + (c.wagons ?? 0), 0) ? ` · ${comps.reduce((a, c) => a + (c.wagons ?? 0), 0)} 🛒 carri` : ''}${cargo ? ` · 💰 bottino ${Math.round(cargo)}` : ''}`,
@@ -1597,7 +1598,9 @@ export class Hud {
   refresh(speed: number) {
     const g = this.game;
     const d = g.date;
-    this.dateEl.textContent = formatDate(d);
+    const wx = weatherOf(g.state.day);
+    this.dateEl.textContent = formatDate(d) + (WEATHER[wx].icon ? ` ${WEATHER[wx].icon}` : '');
+    this.dateEl.title = `Tempo: ${WEATHER[wx].name}${wx === 'rain' ? ' (fango: marce più lente, archi e cavalleria penalizzati)' : wx === 'snow' ? ' (marce lente, più viveri consumati fuori casa)' : ''}`;
     this.eraEl.textContent = eraForYear(d.year).name;
     const days = g.daysToRaid();
     // Avviso: eserciti di altri giocatori in marcia (prima di tutto) o predoni vicini

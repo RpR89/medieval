@@ -291,6 +291,15 @@ export const UPGRADES: UpgradeDef[] = [
     hpMul: 1.3,
   },
   {
+    id: 'countermine',
+    name: 'Gallerie di contromina',
+    icon: '⛏️',
+    description: 'Cunicoli sotto le torri che intercettano i minatori nemici: le mine non fanno crollare le mura.',
+    appliesTo: ['tower_square', 'tower_round', 'tower_bastion', 'gatehouse'],
+    cost: { stone: 40, wood: 20, coins: 30 },
+    minYear: 1100,
+  },
+  {
     id: 'cistern',
     name: 'Cisterna',
     icon: '🪣',

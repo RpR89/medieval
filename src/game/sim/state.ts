@@ -101,6 +101,14 @@ export interface Expedition {
 }
 
 /** Reparto di truppe sul campo, comandato dal giocatore. */
+/** Comandante di un reparto: migliora vincendo e può cadere in battaglia. */
+export interface Commander {
+  name: string;
+  /** Bonus alla forza del reparto (0,04 = +4%). */
+  skill: number;
+  wins: number;
+}
+
 export interface Company {
   id: string;
   troops: Force;
@@ -134,6 +142,8 @@ export interface Company {
   food?: number;
   /** Carri delle salmerie al seguito. */
   wagons?: number;
+  /** Comandante del reparto. */
+  cmd?: Commander;
 }
 
 export type DiploMission = 'alliance' | 'pact' | 'peace' | 'gift' | 'tribute' | 'war';
@@ -259,6 +269,8 @@ export interface GameState {
   goalsDone?: string[];
   /** Eventi stagionali in corso (carestie, epidemie, raccolti…). */
   events?: ActiveEvent[];
+  /** Comandanti esperti in attesa di un nuovo reparto. */
+  veterans?: Commander[];
   /** Piani di evoluzione automatica delle mura. */
   plans?: WallPlan[];
   nextEventDay?: number;

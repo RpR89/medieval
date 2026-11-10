@@ -241,3 +241,60 @@ describe('il nostro assedio a un signore', () => {
 function getBuildingFort(id: string) {
   return getBuilding(id).fort;
 }
+
+describe('tecniche d\'assedio e comandanti', () => {
+  const snap = (extra: Partial<import('../src/game/sim/siege').DefenderSnapshot> = {}, upgrades: string[] = []) => ({
+    segments: [
+      { uid: 1, defId: 'wall_stone', role: 'wall' as const, hp: 300, maxHp: 300, upgrades: [], defense: 5 },
+      { uid: 2, defId: 'tower_wood', role: 'tower' as const, hp: 150, maxHp: 150, upgrades: [], defense: 3 },
+      { uid: 3, defId: 'tower_round', role: 'tower' as const, hp: 400, maxHp: 400, upgrades, defense: 6 },
+      { uid: 4, defId: 'keep_stone', role: 'keep' as const, hp: 600, maxHp: 600, upgrades: [], defense: 20 },
+    ],
+    closed: true,
+    moat: { tiles: 0, coverage: 0, depth: 1, flooded: 0, stakes: 0 },
+    army: { infantry: 10, archers: 6, cavalry: 0 },
+    armory: false,
+    cistern: false,
+    charcoal: 0,
+    ...extra,
+  });
+  const army = { name: 'Nemici', infantry: 40, archers: 12, cavalry: 0, rams: 0, trebuchets: 0, morale: 0.7, year: 1200 };
+
+  it('i minatori fanno crollare le mura, ma il fossato allagato o la contromina li fermano', async () => {
+    const { resolveSiege } = await import('../src/game/sim/siege');
+    const plain = resolveSiege(snap(), army, () => 0.5);
+    expect(plain.log.some((l) => /minatori scavano una galleria/.test(l))).toBe(true);
+    const flood = resolveSiege(snap({ moat: { tiles: 40, coverage: 0.8, depth: 2, flooded: 1, stakes: 0 } }), army, () => 0.5);
+    expect(flood.log.some((l) => /inonda le gallerie/.test(l))).toBe(true);
+    const counter = resolveSiege(snap({}, ['countermine']), army, () => 0.5);
+    expect(counter.log.some((l) => /contromina/.test(l))).toBe(true);
+  });
+
+  it('frecce incendiarie e torri d\'assedio hanno una contromossa', async () => {
+    const { resolveSiege } = await import('../src/game/sim/siege');
+    expect(resolveSiege(snap(), army, () => 0.5).log.some((l) => /prendono fuoco/.test(l))).toBe(true);
+    expect(resolveSiege(snap({ cistern: true }), army, () => 0.5).log.some((l) => /cisterna spengono/.test(l))).toBe(true);
+    const deep = resolveSiege(snap({ moat: { tiles: 40, coverage: 0.8, depth: 2, flooded: 0, stakes: 0 } }), army, () => 0.5);
+    expect(deep.log.some((l) => /impantanata/.test(l) || /ritira/.test(l) || /respinge/.test(l))).toBe(true);
+    // Prima del 1000 non conoscono queste tecniche
+    const early = resolveSiege(snap(), { ...army, year: 950 }, () => 0.5);
+    expect(early.log.some((l) => /minatori|incendiarie/.test(l))).toBe(false);
+  });
+
+  it('un reparto ha un comandante che migliora vincendo e torna disponibile', () => {
+    const st = createInitialState(21, 'Rocca', { preset: 'pianura', lords: 1 });
+    st.nextRaidDay = 1e9;
+    const g = new Game(st, () => 0.5);
+    const [x, z] = g.homeSite();
+    g.place('keep_wood', x - 1, z - 1);
+    g.state.army.infantry = 30;
+    const c = g.formCompany({ infantry: 20, archers: 0, cavalry: 0, rams: 0, trebuchets: 0 })!;
+    expect(c.cmd?.name).toBeTruthy();
+    const weak = g.fieldStrength([{ ...c, cmd: undefined }], []);
+    expect(g.fieldStrength([c], [])).toBeGreaterThan(weak);
+    c.cmd!.skill = 0.2;
+    (g as unknown as { mergeHome(c: unknown): void }).mergeHome(c);
+    expect(g.state.veterans?.[0].skill).toBe(0.2);
+    expect(g.formCompany({ infantry: 10, archers: 0, cavalry: 0, rams: 0, trebuchets: 0 })!.cmd?.skill).toBe(0.2);
+  });
+});

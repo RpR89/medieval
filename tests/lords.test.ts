@@ -139,7 +139,9 @@ describe('signori rivali', () => {
     l.army = { infantry: 3, archers: 2, cavalry: 0 };
     l.wealth = 2000;
     Object.assign(g.state.army, { infantry: 60, archers: 20, cavalry: 10 });
-    const c = g.formCompany(F({ infantry: 60, archers: 20, cavalry: 10 }))!;
+    // La marcia è lunga e col tempo che fa i viveri delle sacche non bastano: servono i carri
+    g.state.wagons = 2;
+    const c = g.formCompany(F({ infantry: 60, archers: 20, cavalry: 10 }), 2)!;
     const keep = g.others.find((b) => b.owner === l.id && getBuilding(b.defId).fort === 'keep')!;
     expect(g.orderAttack([c.id], keep.x + 1, keep.z + 1).ok).toBe(true);
     expect(l.status).toBe('war');

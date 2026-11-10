@@ -57,7 +57,22 @@ export interface AttackerArmy extends Troops {
   /** Formazione: quota di perdite da frecce subite (Testuggine = 0,5) e forza in mischia. */
   arrows?: number;
   melee?: number;
+  /** Anno: decide quali tecniche d'assedio conosce l'esercito. */
+  year?: number;
 }
+
+/** Tecniche d'assedio dell'attaccante, secondo epoca ed esercito. */
+export function tacticsFor(a: AttackerArmy) {
+  const year = a.year ?? 900;
+  return {
+    sappers: year >= 1000 && a.infantry >= 10,
+    fire: year >= 1050 && a.archers >= 6,
+    tower: year >= 1150 && a.infantry >= 20,
+  };
+}
+
+/** Strutture di legno: le frecce incendiarie le bruciano. */
+const WOODEN = new Set(['palisade', 'palisade_double', 'gate_wood', 'tower_wood', 'keep_wood', 'gate_strong']);
 
 export type SiegeOutcome = 'repelled' | 'held' | 'sacked';
 
@@ -176,6 +191,7 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
   let charcoalUsed = 0;
   let rounds = 0;
 
+  const tac = tacticsFor(atkIn);
   const walls = () => segs.filter((s) => s.role === 'wall' && s.hp > 0);
   const towers = () => segs.filter((s) => s.role === 'tower' && s.hp > 0);
   const gates = () => segs.filter((s) => s.role === 'gate' && s.hp > 0);
@@ -250,9 +266,14 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
         ? `Il nemico attraversa il fossato${def.moat.flooded > 0.5 ? ' allagato' : ''} sotto il tiro (${approach} turni).`
         : `Il nemico avanza verso le mura sotto il tiro (${approach} turni).`,
     );
+    const wooden = segs.filter((x) => WOODEN.has(x.defId) && x.role !== 'keep' && x.hp > 0);
+    if (tac.fire && wooden.length) {
+      log.push(def.cistern ? 'Gli arcieri nemici scagliano frecce incendiarie: le secchiate della cisterna spengono i focolai.' : 'Gli arcieri nemici scagliano frecce incendiarie: le strutture di legno prendono fuoco!');
+    }
     for (let r = 0; r < approach && !broken(); r++) {
       rounds++;
       casualties(atk, firepower(false) * exposure * arrowsF, atkLoss);
+      if (tac.fire) for (const w of wooden) hit(w, (atk.archers * 0.7 * (def.cistern ? 0.35 : 1)) / upResist(w));
       const cover = walls().some((w) => has(w, 'walkway')) ? 0.65 : 0.35;
       casualties(gar, atk.archers * 0.5 * (1 - cover), defLoss);
     }
@@ -260,6 +281,16 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
     // ───── 3. Assalto al punto più debole ─────
     if (!broken() && target) {
       log.push(`L'assalto si concentra su: ${segmentName(target)}.`);
+      if (tac.sappers && target.role !== 'gate') {
+        if (def.moat.flooded > 0.5) log.push('I minatori vorrebbero scavare sotto le mura, ma il fossato allagato inonda le gallerie.');
+        else if (segs.some((x) => x.hp > 0 && has(x, 'countermine'))) {
+          log.push('I minatori scavano sotto le mura, ma le gallerie di contromina li intercettano: la mina crolla addosso a loro.');
+          casualties(atk, total(atk) * UNIT_HP.infantry * 0.06, atkLoss);
+        } else {
+          log.push(`I minatori scavano una galleria sotto ${segmentName(target)} e ne danno fuoco ai puntelli: il tratto cede!`);
+          hit(target, target.hp * 0.55);
+        }
+      }
       let pitchRounds = 0;
       if (target.role === 'gate' && has(target, 'pitch') && charcoal >= 10) {
         charcoal -= 10;
@@ -294,7 +325,14 @@ export function resolveSiege(def: DefenderSnapshot, atkIn: AttackerArmy, rand: (
       casualties(atk, total(atk) * UNIT_HP.infantry * (0.15 + 0.1 * walk), atkLoss);
       const d = guard(gar) * armoryMul * height + firepower(true);
       // Tante scale preparate durante l'assedio: si sale in più punti insieme
-      const a = melee(atk, 0.2) * 0.6 * meleeF * (1 + Math.min(0.5, (def.ladders ?? 0) * 0.025));
+      let a = melee(atk, 0.2) * 0.6 * meleeF * (1 + Math.min(0.5, (def.ladders ?? 0) * 0.025));
+      if (tac.tower) {
+        if (def.moat.coverage >= 0.6 && def.moat.depth >= 2) log.push('La torre d\'assedio resta impantanata nel fossato profondo: non arriva alle mura.');
+        else {
+          log.push('Una torre d\'assedio mobile viene spinta fino alle mura: i fanti salgono al coperto.');
+          a *= 1.5;
+        }
+      }
       const b = battle(d, a);
       if (b.aWins) {
         casualties(atk, total(atk) * UNIT_HP.infantry * 0.7, atkLoss);

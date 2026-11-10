@@ -94,3 +94,22 @@ export function seasonMix(totalDays: number): SeasonMix {
 export function mixNumber(m: SeasonMix, table: Record<Season, number>): number {
   return table[m.from] + (table[m.to] - table[m.from]) * m.t;
 }
+
+export type WeatherId = 'clear' | 'rain' | 'snow';
+
+export const WEATHER: Record<WeatherId, { name: string; icon: string }> = {
+  clear: { name: 'Sereno', icon: '' },
+  rain: { name: 'Pioggia', icon: '🌧️' },
+  snow: { name: 'Neve', icon: '🌨️' },
+};
+
+/** Tempo di un giorno: deterministico (uguale per tutti i giocatori), cambia ogni due giorni. */
+export function weatherOf(totalDays: number): WeatherId {
+  const n = Math.floor(totalDays / 2);
+  const h = Math.sin(n * 12.9898 + 4.1) * 43758.5453;
+  const r = h - Math.floor(h);
+  const season = SEASONS[Math.floor((totalDays % DAYS_PER_YEAR) / DAYS_PER_SEASON)];
+  if (season === 'winter') return r < 0.5 ? 'snow' : 'clear';
+  if (season === 'summer') return r < 0.1 ? 'rain' : 'clear';
+  return r < 0.38 ? 'rain' : 'clear';
+}
