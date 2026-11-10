@@ -376,6 +376,9 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
     }
   });
 
+  // I segnali del gioco (allarme, vittoria, sconfitta, buone notizie) diventano suoni
+  game.onCue((c) => music.cue(c));
+
   // ───── Ciclo principale ─────
   let last = performance.now();
   let lastHud = 0;
@@ -397,7 +400,9 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
         game.enemiesInTerritory() > 0 ||
         (game.state.incoming ?? []).some((a) => !a.resolved && a.arriveDay - game.state.day < 6) ||
         game.daysToRaid() < 8;
-      music.setMood(moodFor(game.date.season, danger));
+      // In battaglia: assedio in corso, nemici nel territorio o reparti impegnati
+      const battle = game.siegeActive() || game.enemiesInTerritory() > 0 || (game.state.companies ?? []).some((c) => c.engaged);
+      music.setMood(moodFor(game.date.season, danger, { battle, night: view.night() }));
       hud.refresh(ms ? ms.displaySpeed : speed);
       if (tool) updateGhost();
     }

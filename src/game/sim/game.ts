@@ -200,6 +200,8 @@ export function lineTiles(x0: number, z0: number, x1: number, z1: number): Array
  * Il castello di un giocatore: stato serializzabile + territorio rigenerato dal seed.
  * Tutta la logica di gioco vive qui, senza dipendenze dalla grafica.
  */
+export type SoundCue = 'horn' | 'victory' | 'defeat' | 'bell';
+
 export class Game {
   readonly terrain: Terrain;
   /** uid dell'edificio che occupa ogni casella (0 = libera). */
@@ -289,6 +291,18 @@ export class Game {
 
   // ───────────── Eventi ─────────────
 
+
+  private cueListeners = new Set<(c: SoundCue) => void>();
+
+  /** Segnali sonori (corno d'allarme, fanfara, campana) per chi vuole farli sentire. */
+  onCue(fn: (c: SoundCue) => void): () => void {
+    this.cueListeners.add(fn);
+    return () => this.cueListeners.delete(fn);
+  }
+
+  private cue(c: SoundCue) {
+    for (const fn of this.cueListeners) fn(c);
+  }
 
   onEvent(fn: (e: { text: string; kind: EventKind }) => void): () => void {
     this.eventListeners.add(fn);
@@ -1249,6 +1263,7 @@ export class Game {
       this.track('Obiettivi raggiunti', () => {
         for (const [id, n] of Object.entries(goal.reward)) this.state.resources[id as ResourceId] += n ?? 0;
       }, 'event');
+      this.cue('bell');
       this.log(`🎯 Obiettivo raggiunto: ${goal.text}. Premio: ${formatCost(goal.reward)}`, 'good');
     }
   }
@@ -1570,7 +1585,8 @@ export class Game {
     const after = eraForYear(year);
     this.lastYear = year;
     if (before.id !== after.id) {
-      this.log(`Nuova epoca: ${after.name}. ${after.description}`, 'good');
+      this.cue('bell');
+    this.log(`Nuova epoca: ${after.name}. ${after.description}`, 'good');
     }
   }
 
@@ -2576,6 +2592,7 @@ export class Game {
     const o = this.state.offense;
     if (!o) return;
     this.offenseLog(reason);
+    this.cue(this.lord(o.lord)?.status === 'vassal' ? 'victory' : 'defeat');
     for (const c of this.companies()) {
       if (!o.companyIds.includes(c.id)) continue;
       if (c.order === 'siege') c.order = 'idle';
@@ -2644,6 +2661,7 @@ export class Game {
     // Ciò che è fuori dalle mura si ferma: campi, pascoli, botteghe
     const cut = s.buildings.filter((b) => this.isCutOff(b) && (getBuilding(b.defId).produces || getBuilding(b.defId).herd)).length;
     if (cut) this.siegeLog(`${cut} edifici fuori dalle mura sono tagliati fuori: niente raccolti finché dura l'assedio.`);
+    this.cue('horn');
     this.log(`⚔️ Assedio! ${name} circonda il castello. Resisti con le scorte dentro le mura, tenta una sortita o paga un riscatto.`, 'bad');
     this.changedVisual();
   }
@@ -2842,6 +2860,7 @@ export class Game {
     if (!sg) return;
     s.siege = undefined;
     const won = how === 'repelled' || how === 'lifted';
+    this.cue(won ? 'victory' : 'defeat');
     // Le scorte isolate tornano disponibili (se il nemico ha vinto, le ha prese lui)
     if (won) for (const [id, n] of Object.entries(sg.isolated)) s.resources[id as ResourceId] += n ?? 0;
     const army: AttackerArmy = { name: sg.attacker, infantry: 0, archers: 0, cavalry: 0, rams: 0, trebuchets: 0, morale: 0.5 };
@@ -3564,7 +3583,10 @@ export class Game {
       c.order = 'idle';
     }
     this.pruneCompanies();
-    if (text) this.log(`${text} Caduti: ${dead}.`, text.startsWith('Vittoria') ? 'good' : 'bad');
+    if (text) {
+      this.cue(text.startsWith('Vittoria') ? 'victory' : 'defeat');
+      this.log(`${text} Caduti: ${dead}.`, text.startsWith('Vittoria') ? 'good' : 'bad');
+    }
   }
 
 
@@ -4273,6 +4295,7 @@ export class Game {
     const [kx, kz] = this.keepCenter();
     c.path = findPath(this.terrain.size, [Math.floor(c.x), Math.floor(c.z)], [Math.floor(kx), Math.floor(kz)], (x, z) => this.lordMoveCost(x, z));
     l.companies.push(c);
+    this.cue('horn');
     this.log(`⚔️ ${l.name} marcia contro di noi con ${n} soldati${troops.rams + troops.trebuchets ? ' e macchine d\'assedio' : ''}!`, 'bad');
   }
 

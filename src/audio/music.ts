@@ -6,7 +6,10 @@
  * Strumenti sintetizzati: bordone di cornamusa, flauto dolce, liuto e tamburello.
  */
 
-export type Mood = 'spring' | 'summer' | 'autumn' | 'winter' | 'danger';
+export type Mood = 'spring' | 'summer' | 'autumn' | 'winter' | 'night' | 'danger' | 'battle';
+
+/** Segnali brevi sopra la musica: corno d'allarme, fanfara, lamento, campana. */
+export type Cue = 'horn' | 'victory' | 'defeat' | 'bell';
 
 interface MoodDef {
   root: number; // nota MIDI della finale
@@ -18,6 +21,10 @@ interface MoodDef {
   flute: number; // volume del flauto
   lute: boolean;
   dronePitch: number; // semitoni del bordone sopra/sotto la finale
+  /** Volume del tamburo da guerra e degli ottoni gravi a ogni battuta (battaglia). */
+  war?: number;
+  /** Il flauto suona un'ottava sotto (notte). */
+  low?: boolean;
 }
 
 const MODES = {
@@ -32,6 +39,8 @@ const MOODS: Record<Mood, MoodDef> = {
   summer: { root: 62, mode: MODES.dorian, bpm: 330, bar: 6, rhythms: [[2, 1, 2, 1], [1, 1, 1, 1, 2], [3, 2, 1], [2, 1, 3]], drum: [0, 2, 3, 5], flute: 0.17, lute: true, dronePitch: -12 },
   autumn: { root: 57, mode: MODES.dorian, bpm: 220, bar: 6, rhythms: [[3, 3], [2, 1, 3], [4, 2], [3, 1, 2]], drum: [0], flute: 0.15, lute: true, dronePitch: -12 },
   winter: { root: 64, mode: MODES.aeolian, bpm: 150, bar: 6, rhythms: [[6], [3, 3], [4, 2], [2, 4]], drum: [], flute: 0.13, lute: false, dronePitch: -24 },
+  night: { root: 57, mode: MODES.aeolian, bpm: 110, bar: 6, rhythms: [[6], [3, 3], [4, 2], [2, 4]], drum: [], flute: 0.1, lute: true, dronePitch: -24, low: true },
+  battle: { root: 50, mode: MODES.phrygian, bpm: 330, bar: 4, rhythms: [[1, 1, 1, 1], [2, 1, 1], [1, 1, 2], [1, 3]], drum: [0, 1, 2, 3], flute: 0.1, lute: false, dronePitch: -12, war: 0.35 },
   danger: { root: 52, mode: MODES.phrygian, bpm: 260, bar: 4, rhythms: [[1, 1, 2], [2, 2], [1, 1, 1, 1], [3, 1]], drum: [0, 1, 2, 3], flute: 0.12, lute: false, dronePitch: -12 },
 };
 
@@ -100,6 +109,7 @@ export class Music {
   private timer: ReturnType<typeof setInterval> | null = null;
   private mood: Mood = 'spring';
   private pending: Mood | null = null;
+  private urgent = false;
   private piece: Note[] = [];
   private pos = 0;
   private nextTime = 0;
@@ -181,6 +191,11 @@ export class Music {
   setMood(m: Mood) {
     if (m === this.mood && !this.pending) return;
     this.pending = m === this.mood ? null : m;
+    // Battaglia e pericolo non aspettano la fine della frase
+    if (this.pending && (m === 'battle' || m === 'danger') && this.mood !== 'battle') {
+      this.urgent = true;
+      this.pos = this.piece.length;
+    }
   }
 
   private newPiece() {
@@ -255,16 +270,18 @@ export class Music {
       const eighth = 60 / m.bpm;
       if (this.pos >= this.piece.length) {
         // Pausa tra un brano e l'altro, poi un brano nuovo (eventualmente con un'altra atmosfera)
-        this.nextTime += eighth * m.bar * 2;
+        this.nextTime += this.urgent ? 0.2 : eighth * m.bar * 2;
+        this.urgent = false;
         this.newPiece();
         continue;
       }
       // Cambio d'atmosfera a fine frase (ogni 4 battute)
       const n = this.piece[this.pos];
       const t = this.nextTime;
-      this.flute(freq(midiOf(m, n.deg) + 12), t, n.len * eighth, m.flute);
+      this.flute(freq(midiOf(m, n.deg) + (m.low ? 0 : 12)), t, n.len * eighth, m.flute);
       // Accompagnamento all'inizio di ogni battuta
       if (this.barPos % m.bar === 0) {
+        if (m.war) this.brass(freq(m.root - 12), t, eighth * m.bar, m.war * 0.18);
         if (m.lute) {
           const chord = [0, 4, 7].map((d) => midiOf(m, d));
           chord.forEach((c, i) => this.pluck(freq(c), t + i * eighth * 0.5, 0.09));
@@ -272,7 +289,7 @@ export class Music {
       }
       for (const d of m.drum) {
         if (this.barPos % m.bar <= d && d < (this.barPos % m.bar) + n.len) {
-          this.drum(t + (d - (this.barPos % m.bar)) * eighth, d === 0 ? 0.22 : 0.12);
+          this.drum(t + (d - (this.barPos % m.bar)) * eighth, (d === 0 ? 0.22 : 0.12) + (m.war ?? 0), !!m.war);
         }
       }
       this.nextTime += n.len * eighth;
@@ -330,13 +347,83 @@ export class Music {
     o.stop(t + 1.25);
   }
 
+  /** Ottoni gravi: nota lunga di sega filtrata, attacco lento. */
+  private brass(f: number, t: number, dur: number, vol: number, glide = 0) {
+    const ctx = this.ctx!;
+    const g = ctx.createGain();
+    const end = t + dur;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + Math.min(0.25, dur * 0.4));
+    g.gain.setValueAtTime(vol, Math.max(t + 0.3, end - 0.25));
+    g.gain.linearRampToValueAtTime(0, end);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(380, t);
+    lp.frequency.linearRampToValueAtTime(1500, t + Math.min(0.4, dur * 0.5));
+    lp.Q.value = 1.5;
+    for (const det of [-6, 5]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(f * (glide ? 0.94 : 1), t);
+      if (glide) o.frequency.linearRampToValueAtTime(f * glide, end);
+      o.detune.value = det;
+      o.connect(lp);
+      o.start(t);
+      o.stop(end + 0.05);
+    }
+    lp.connect(g).connect(this.master!);
+  }
+
+  /** Campana: parziali inarmonici che decadono lentamente. */
+  private bell(f: number, t: number, vol: number) {
+    const ctx = this.ctx!;
+    [[1, 1], [2.01, 0.55], [2.76, 0.4], [5.4, 0.2]].forEach(([k, a]) => {
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.value = f * k;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(vol * a, t + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.0005, t + 3.2 / Math.sqrt(k));
+      o.connect(g).connect(this.master!);
+      o.start(t);
+      o.stop(t + 3.4);
+    });
+  }
+
+  /**
+   * Un segnale breve sopra la musica: il corno d'allarme quando arriva il nemico, la fanfara
+   * della vittoria, il lamento della sconfitta, la campana per le buone notizie.
+   */
+  cue(kind: Cue) {
+    if (!this.enabled || !this.ctx || !this.master) return;
+    const t = this.ctx.currentTime + 0.05;
+    if (kind === 'horn') {
+      // Due note di corno che salgono di quinta, poi un colpo di tamburo
+      this.brass(freq(48), t, 1.3, 0.2, 1.03);
+      this.brass(freq(55), t + 1.4, 2.0, 0.22);
+      this.drum(t + 1.4, 0.3, true);
+      this.drum(t + 2.2, 0.25, true);
+    } else if (kind === 'victory') {
+      [[62, 0], [66, 0.22], [69, 0.44], [74, 0.7]].forEach(([n, d], i) => this.brass(freq(n), t + d, i === 3 ? 1.6 : 0.4, 0.16));
+      this.drum(t, 0.3, true);
+    } else if (kind === 'defeat') {
+      [[55, 0], [52, 1.1], [45, 2.2]].forEach(([n, d]) => this.brass(freq(n), t + d, 1.6, 0.17, 0.96));
+      this.drum(t, 0.3, true);
+    } else {
+      this.bell(freq(79), t, 0.13);
+      this.bell(freq(84), t + 0.4, 0.1);
+    }
+  }
+
   /** Tamburello: colpo grave + sonagli (rumore filtrato). */
-  private drum(t: number, vol: number) {
+  private drum(t: number, vol: number, war = false) {
     const ctx = this.ctx!;
     const o = ctx.createOscillator();
     o.type = 'sine';
-    o.frequency.setValueAtTime(140, t);
-    o.frequency.exponentialRampToValueAtTime(60, t + 0.12);
+    // Tamburo da guerra: più grave e lungo
+    o.frequency.setValueAtTime(war ? 90 : 140, t);
+    o.frequency.exponentialRampToValueAtTime(war ? 38 : 60, t + (war ? 0.2 : 0.12));
     const g = ctx.createGain();
     g.gain.setValueAtTime(vol, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
@@ -360,6 +447,9 @@ export class Music {
 }
 
 /** Atmosfera adatta alla situazione di gioco. */
-export function moodFor(season: 'spring' | 'summer' | 'autumn' | 'winter', danger: boolean): Mood {
-  return danger ? 'danger' : season;
+export function moodFor(season: 'spring' | 'summer' | 'autumn' | 'winter', danger: boolean, opts: { battle?: boolean; night?: number } = {}): Mood {
+  if (opts.battle) return 'battle';
+  if (danger) return 'danger';
+  if ((opts.night ?? 0) > 0.6) return 'night';
+  return season;
 }

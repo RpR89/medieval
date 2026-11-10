@@ -715,6 +715,11 @@ export class WorldRenderer {
   private static readonly MOON = new THREE.Color(0x7d96d8);
   private static readonly NIGHT_FOG = new THREE.Color(0x0c1428);
 
+  /** Quanta notte c'è ora (0-1), per la musica. */
+  night(): number {
+    return Math.max(0, this.nightKey) / 40;
+  }
+
   setNightCycle(on: boolean) {
     this.nightOn = on;
     this.nightKey = -2;
