@@ -418,6 +418,93 @@ function limeKiln(g: G) {
   logPile(g, -0.65, 0.55, Math.PI / 2, 3);
 }
 
+
+/** Mulino ad acqua: edificio in pietra con la ruota a pale e le macine. */
+function mill(g: G) {
+  const k = mats();
+  g.add(box(1.0, 0.8, 0.9, k.stone, 0.2, 0, 0));
+  g.add(gableRoof(1.05, 0.95, 0.45, k.shingle, k.stone, 0.2, 0.8, 0, 0.08));
+  g.add(box(0.2, 0.3, 0.05, k.dark, 0.2, 0, 0.46));
+  // Ruota a pale sul lato del fiume: asse lungo x, due cerchioni e le pale
+  for (const x of [-0.62, -0.3]) {
+    const rim = cyl(0.42, 0.42, 0.04, k.planks, x, 0.5, 0, 14);
+    rim.rotation.z = Math.PI / 2;
+    g.add(rim);
+  }
+  const axle = cyl(0.05, 0.05, 0.5, k.beam, -0.21, 0.5, 0, 6);
+  axle.rotation.z = Math.PI / 2;
+  g.add(axle);
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    g.add(box(0.36, 0.1, 0.1, k.darkPlanks, -0.46, 0.5 + Math.sin(a) * 0.4 - 0.05, Math.cos(a) * 0.4));
+  }
+  // Sacchi di farina
+  for (const [x, z] of [[0.75, 0.45], [0.9, 0.35]]) g.add(box(0.14, 0.18, 0.12, k.plaster, x, 0, z));
+}
+
+/** Forno del pane: casa bassa con forno a cupola e fumo. */
+function bakery(g: G) {
+  const k = mats();
+  g.add(box(0.95, 0.5, 0.8, k.plaster, -0.1, 0, -0.1));
+  g.add(gableRoof(1.0, 0.85, 0.35, k.thatch, k.planks, -0.1, 0.5, -0.1, 0.1));
+  g.add(box(0.2, 0.3, 0.05, k.darkPlanks, -0.25, 0, 0.31));
+  // Forno a cupola
+  g.add(cyl(0.3, 0.34, 0.3, k.stone, 0.62, 0, 0.1, 12));
+  g.add(cone(0.3, 0.3, k.stoneDark, 0.62, 0.3, 0.1, 12));
+  g.add(box(0.14, 0.12, 0.06, k.fire, 0.62, 0.05, 0.42));
+  g.add(smoke(0.62, 0.62, 0.1, 4, 0.9));
+  // Pagnotte su un banco
+  g.add(box(0.5, 0.04, 0.18, k.planks, -0.1, 0.22, 0.5));
+  for (let i = 0; i < 4; i++) g.add(box(0.07, 0.04, 0.05, k.straw, -0.28 + i * 0.11, 0.26, 0.5));
+}
+
+/** Tessitoria: capanno con telaio e matasse di lana. */
+function weaver(g: G) {
+  const k = mats();
+  for (const [x, z] of [[-0.45, -0.35], [0.45, -0.35], [-0.45, 0.35], [0.45, 0.35]]) g.add(box(0.06, 0.55, 0.06, k.log, x, 0, z));
+  g.add(box(0.9, 0.5, 0.04, k.wattle, 0, 0, -0.37));
+  g.add(gableRoof(1.05, 0.9, 0.3, k.thatch, k.planks, 0, 0.55, 0, 0.08));
+  // Telaio verticale con la tela
+  g.add(box(0.5, 0.04, 0.04, k.beam, 0, 0.45, 0.05));
+  g.add(box(0.5, 0.04, 0.04, k.beam, 0, 0.1, 0.05));
+  for (const x of [-0.25, 0.25]) g.add(box(0.04, 0.4, 0.04, k.beam, x, 0.1, 0.05));
+  g.add(box(0.42, 0.28, 0.01, k.cloth[2], 0, 0.14, 0.05));
+  for (let i = 0; i < 3; i++) g.add(cyl(0.08, 0.08, 0.1, k.plaster, 0.62, i * 0.1, 0.55, 8));
+}
+
+/** Miniera di ferro: imbocco sorretto da travi, carrello e forno di fusione. */
+function ironMine(g: G) {
+  const k = mats();
+  g.add(box(1.5, 0.7, 0.7, k.stoneDark, 0, 0, -0.55));
+  g.add(box(0.5, 0.5, 0.2, k.dark, 0, 0, -0.18));
+  for (const x of [-0.3, 0.3]) g.add(box(0.07, 0.55, 0.07, k.log, x, 0, -0.14));
+  g.add(box(0.7, 0.07, 0.07, k.log, 0, 0.5, -0.14));
+  // Binari e carrello di minerale
+  g.add(box(0.05, 0.02, 0.9, k.darkPlanks, -0.1, 0, 0.3));
+  g.add(box(0.05, 0.02, 0.9, k.darkPlanks, 0.1, 0, 0.3));
+  g.add(box(0.28, 0.16, 0.22, k.planks, 0, 0.04, 0.35));
+  for (let i = 0; i < 4; i++) g.add(box(0.1, 0.08, 0.1, k.stoneDark, -0.08 + (i % 2) * 0.1, 0.2, 0.32 + (i > 1 ? 0.08 : 0)));
+  // Forno di fusione
+  g.add(cyl(0.22, 0.3, 0.6, k.stone, 0.75, 0, 0.35, 10));
+  g.add(box(0.14, 0.12, 0.06, k.fire, 0.75, 0.05, 0.64));
+  g.add(smoke(0.75, 0.62, 0.35, 5, 1));
+}
+
+/** Fucina: tettoia aperta con forgia, incudine e rastrelliera di spade. */
+function smithy(g: G) {
+  const k = mats();
+  g.add(box(0.8, 0.55, 0.7, k.stone, -0.25, 0, -0.2));
+  g.add(gableRoof(1.7, 1.0, 0.45, k.shingle, k.darkPlanks, 0.1, 0.55, -0.05, 0.08));
+  for (const [x, z] of [[0.75, -0.45], [0.75, 0.35]]) g.add(box(0.06, 0.55, 0.06, k.log, x, 0, z));
+  g.add(box(0.3, 0.12, 0.2, k.dark, -0.25, 0.4, 0.2));
+  g.add(box(0.14, 0.12, 0.08, k.fire, -0.25, 0.36, 0.28));
+  g.add(cyl(0.09, 0.12, 0.14, k.dark, 0.45, 0, 0.2, 6));
+  g.add(box(0.2, 0.05, 0.1, k.dark, 0.45, 0.14, 0.2));
+  g.add(cyl(0.12, 0.12, 0.1, k.water, 0.1, 0, 0.35, 8));
+  for (let i = 0; i < 4; i++) g.add(box(0.015, 0.3, 0.015, k.stoneLight, 0.55 + i * 0.06, 0.1, -0.42));
+  g.add(smoke(-0.25, 0.9, -0.2, 4, 1));
+}
+
 /** Loggia dei muratori: tettoia di lavoro, blocchi squadrati e gru a ruota. */
 function masonLodge(g: G) {
   const k = mats();
@@ -711,6 +798,11 @@ export function buildModel(def: BuildingDef, ctx: ModelCtx = {}): THREE.Group {
     case 'gate_strong': gateStrong(g, ctx); break;
     case 'tower_bastion': towerBastion(g, ctx); break;
     case 'lime_kiln': limeKiln(g); break;
+    case 'mill': mill(g); break;
+    case 'bakery': bakery(g); break;
+    case 'weaver': weaver(g); break;
+    case 'iron_mine': ironMine(g); break;
+    case 'smithy': smithy(g); break;
     case 'watchtower': watchtower(g, ctx, false); break;
     case 'watchtower_stone': watchtower(g, ctx, true); break;
     case 'mason_lodge': masonLodge(g); break;

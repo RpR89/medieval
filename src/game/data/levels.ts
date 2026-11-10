@@ -81,6 +81,8 @@ export function levelUpCost(def: BuildingDef, level: number): Cost {
   add('wood', 14 + level * 5);
   add('coins', 10 + level * 6);
   if (t >= 1) add('stone', 10 + level * 4);
+  // Le case migliori vogliono stoffa (tende, vesti, arredi)
+  if (t >= 1 && def.category === 'housing') add('cloth', 2 + level * 0.8);
   if (t >= 2) add('lime', 3 + level * 1.5);
   if (t >= 3) add('coins', level * 3);
   if (t >= 4) add('stone', level);

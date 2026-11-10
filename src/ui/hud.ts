@@ -9,7 +9,7 @@ import {
 } from '../game/data/buildings';
 import { formatDate, formatDuration } from '../game/data/calendar';
 import { eraForYear } from '../game/data/eras';
-import { canAfford, formatCost, RESOURCE_IDS, RESOURCES, TAX_LEVELS, type ResourceId } from '../game/data/resources';
+import { canAfford, CHAIN_IDS, formatCost, RESOURCE_IDS, RESOURCES, TAX_LEVELS, type ResourceId } from '../game/data/resources';
 import { BEHAVIORS, ENGINES, FORMATIONS, SOLDIER_FOOD, UNITS, WAGON, type Behavior, type EngineType, type Formation, type Stance } from '../game/data/units';
 import type { Force } from '../game/sim/state';
 import { CASTLE_LEVELS, UPGRADE_BY_ID } from '../game/data/upgrades';
@@ -70,6 +70,7 @@ export class Hud {
   private saveEl: HTMLElement;
   private speedBtns: HTMLButtonElement[] = [];
   private resEls = new Map<ResourceId, HTMLElement>();
+  private chainSeen = new Set<ResourceId>();
   /** Riquadro con entrate e uscite della risorsa sotto il mouse. */
   private resTip = el('div', { class: 'res-tip panel hidden' });
   private resHover: ResourceId | null = null;
@@ -771,7 +772,8 @@ export class Hud {
       factionBox.innerHTML = `<h4>${emblemHtml(fac.id, 20)} Schieramento: ${escapeHtml(fac.name)}</h4>
         <p class="small muted">${escapeHtml(fac.region)}</p>${factionTraitsHtml(fac)}`;
     }
-    this.panelBody.append(levelBox, factionBox, tax, defense, repairAll, siege, body);
+    const goalsBox = el('div', { class: 'goals' });
+    this.panelBody.append(levelBox, goalsBox, factionBox, tax, defense, repairAll, siege, body);
     let lastSiege = -1;
     this.refreshTab = () => {
       const g = this.game;
@@ -796,6 +798,19 @@ export class Hud {
         levelBtn.disabled = !step.check.ok;
         levelWhy.textContent = step.check.ok ? '' : step.check.reason ?? '';
       } else levelWhy.textContent = '';
+      const gl = g.goals();
+      const open = gl.filter((x) => !x.done);
+      setHtml(
+        goalsBox,
+        (g.activeEvents().length ? `<p class="small bad">${g.activeEvents().map((e) => `⚠️ ${escapeHtml(e.text)} (${formatDuration(e.until - g.state.day)})`).join(' · ')}</p>` : '') +
+        `<h4>🎯 Obiettivi dell'epoca <span class="muted small">${gl.length - open.length}/${gl.length}</span></h4>` +
+          open
+            .map(
+              ({ goal, have }) =>
+                `<div class="goal"><span>${goal.icon} ${escapeHtml(goal.text)}</span><span class="muted small">${fmt(have)}/${fmt(goal.need)} · ${formatCost(goal.reward)}</span><div class="hp"><div class="hp-bar" style="width:${Math.round((have / goal.need) * 100)}%"></div></div></div>`,
+            )
+            .join('') || '<p class="small good">Tutti gli obiettivi raggiunti: aspetta la prossima epoca.</p>',
+      );
       const h = g.happiness();
       const mood = g.moodTarget();
       moodBar.style.width = `${Math.round(h)}%`;
@@ -1575,6 +1590,8 @@ export class Hud {
       const v = g.state.resources[id];
       e.textContent = fmt(v);
       e.parentElement!.classList.toggle('empty', v < 1);
+      if (CHAIN_IDS.includes(id)) e.parentElement!.style.display = v >= 1 || this.chainSeen.has(id) ? '' : 'none';
+      if (v >= 1) this.chainSeen.add(id);
       e.parentElement!.classList.toggle('full', id !== 'coins' && v >= cap - 0.5);
     }
     if (this.resHover) this.refreshResTip();

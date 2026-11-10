@@ -15,6 +15,11 @@ export const RESOURCE_IDS = [
   'fish',
   'hides',
   'wool',
+  'flour',
+  'bread',
+  'cloth',
+  'iron',
+  'weapons',
 ] as const;
 
 export type ResourceId = (typeof RESOURCE_IDS)[number];
@@ -48,7 +53,15 @@ export const RESOURCES: Record<ResourceId, ResourceDef> = {
   fish: { id: 'fish', name: 'Pesce', icon: '🐟', basePrice: 3, food: true, spoilage: 0.01 },
   hides: { id: 'hides', name: 'Pelli', icon: '🟫', basePrice: 5 },
   wool: { id: 'wool', name: 'Lana', icon: '🧶', basePrice: 4 },
+  flour: { id: 'flour', name: 'Farina', icon: '🥣', basePrice: 3, spoilage: 0.002 },
+  bread: { id: 'bread', name: 'Pane', icon: '🍞', basePrice: 5, food: true, spoilage: 0.012 },
+  cloth: { id: 'cloth', name: 'Tessuto', icon: '🧵', basePrice: 9 },
+  iron: { id: 'iron', name: 'Ferro', icon: '⛓️', basePrice: 12 },
+  weapons: { id: 'weapons', name: 'Armi', icon: '🗡️', basePrice: 18 },
 };
+
+/** Risorse della filiera: nella barra compaiono solo quando servono (o se ne hai). */
+export const CHAIN_IDS: ResourceId[] = ['flour', 'bread', 'cloth', 'iron', 'weapons'];
 
 export const FOOD_IDS = RESOURCE_IDS.filter((id) => RESOURCES[id].food);
 

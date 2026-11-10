@@ -11,6 +11,7 @@ import { eraForYear, ERAS } from '../data/eras';
 import {
   canAfford,
   FOOD_IDS,
+  formatCost,
   pay,
   RESOURCE_IDS,
   RESOURCES,
@@ -21,6 +22,7 @@ import {
 import { CARRY, ENGINES, FORMATIONS, MARCH_SPEED, SOLDIER_FOOD, STANCES, UNITS, WAGON, type Behavior, type EngineType, type Formation, type Stance } from '../data/units';
 import { CASTLE_LEVELS, KEEP_EVOLVE, UPGRADE_BY_ID, upgradesFor, type UpgradeDef } from '../data/upgrades';
 import { factionEffects, FACTIONS, type FactionDef, type FactionEffects } from '../data/factions';
+import { GOALS, type Goal } from '../data/goals';
 import { eraIndex as eraIndexOf, escalatedCost, isLevelable, levelEffects, levelUpCost, maxLevelFor } from '../data/levels';
 import {
   generateTerrain,
@@ -52,6 +54,8 @@ import {
   type Outcome,
   type OffensiveSiege,
   type PlacedBuilding,
+  type ActiveEvent,
+  type SeasonEventId,
 } from './state';
 
 /** Ordine in cui si mangia il cibo: prima quello che deperisce. */
@@ -1082,6 +1086,95 @@ export class Game {
     }
   }
 
+  private lastGoalDay = -1;
+
+  /** Eventi stagionali in corso. */
+  activeEvents(): ActiveEvent[] {
+    return (this.state.events ?? []).filter((e) => e.until > this.state.day);
+  }
+
+  private hasEvent(id: SeasonEventId): boolean {
+    return this.activeEvents().some((e) => e.id === id);
+  }
+
+  /** Moltiplicatore della resa di campi e pascoli dovuto agli eventi. */
+  private farmEventFactor(): number {
+    return (this.hasEvent('poor_harvest') ? 0.55 : 1) * (this.hasEvent('bumper') ? 1.4 : 1) * (this.hasEvent('flood') ? 0.7 : 1);
+  }
+
+  /** Ogni tanto una stagione porta un fatto fuori dall'ordinario: la prudenza (scorte, varietà) lo attutisce. */
+  private stepEvents(si: number) {
+    const s = this.state;
+    if (s.events) s.events = s.events.filter((e) => e.until > s.day);
+    if (s.nextEventDay === undefined) s.nextEventDay = s.day + 120 + this.random() * 120;
+    if (s.day < s.nextEventDay || this.state.siege) return;
+    s.nextEventDay = s.day + 140 + this.random() * 200;
+    const pool: SeasonEventId[][] = [
+      ['flood', 'merchants', 'merchants'],
+      ['plague', 'poor_harvest', 'merchants'],
+      ['bumper', 'poor_harvest', 'bumper', 'merchants'],
+      ['harsh_winter', 'harsh_winter', 'merchants'],
+    ];
+    const id = pool[si][Math.floor(this.random() * pool[si].length)];
+    const r = this.state.resources;
+    const push = (text: string, days: number) => (s.events ??= []).push({ id, until: s.day + days, text });
+    if (id === 'poor_harvest') {
+      push('Raccolto scarso', 120);
+      this.log('🥀 Un raccolto scarso: campi e pascoli rendono molto meno per qualche mese. Le scorte nei granai ti salvano.', 'bad');
+    } else if (id === 'bumper') {
+      push('Raccolto eccezionale', 100);
+      this.log('🌾 Un raccolto eccezionale: i campi rendono di più per qualche mese. Riempi i granai!', 'good');
+    } else if (id === 'flood') {
+      push('Alluvione', 40);
+      this.track('Alluvione', () => {
+        r.hay *= 0.75;
+        r.vegetables *= 0.8;
+      }, 'event');
+      this.log('🌊 Una piena ha allagato i campi: scorte di fieno e ortaggi perse e raccolti ridotti per un mese.', 'bad');
+    } else if (id === 'plague') {
+      push('Epidemia', 60);
+      const loss = this.state.population * (this.happiness() > 60 ? 0.04 : 0.09);
+      this.state.population = Math.max(6, this.state.population - loss);
+      this.state.happiness = Math.max(0, this.happiness() - 8);
+      this.log(`☠️ Un'epidemia: ${Math.round(loss)} abitanti morti e popolo scosso. Una popolazione contenta regge meglio.`, 'bad');
+    } else if (id === 'harsh_winter') {
+      push('Inverno rigido', 90);
+      this.log('❄️ Un inverno rigido: la gente mangia di più. Tieni le scorte.', 'bad');
+    } else {
+      const gain = this.track('Mercanti di passaggio', () => {
+        let c = 0;
+        for (const rid of ['cloth', 'bread', 'weapons', 'cheese', 'iron'] as const) {
+          const n = Math.floor(r[rid] * 0.3);
+          if (n < 1) continue;
+          r[rid] -= n;
+          c += n * RESOURCES[rid].basePrice * 1.5;
+        }
+        r.coins += c;
+        return c;
+      }, 'event');
+      this.log(gain > 0 ? `🐪 Una carovana di mercanti compra le tue merci pregiate a prezzo alto: +${Math.round(gain)} monete.` : '🐪 Una carovana di mercanti passa dal castello, ma non hai merci pregiate da vendere (tessuto, pane, armi, formaggio, ferro).', gain > 0 ? 'good' : 'info');
+    }
+  }
+
+  /** Obiettivi visibili ora: quelli dell'epoca in corso e gli arretrati. */
+  goals(): Array<{ goal: Goal; have: number; done: boolean }> {
+    const era = eraIndexOf(dateFromDays(this.state.day).year);
+    const done = new Set(this.state.goalsDone ?? []);
+    return GOALS.filter((g) => g.era <= era).map((goal) => ({ goal, have: Math.min(goal.need, goal.have(this)), done: done.has(goal.id) }));
+  }
+
+  private checkGoals(era: number) {
+    const done = (this.state.goalsDone ??= []);
+    for (const goal of GOALS) {
+      if (goal.era > era || done.includes(goal.id) || goal.have(this) < goal.need) continue;
+      done.push(goal.id);
+      this.track('Obiettivi raggiunti', () => {
+        for (const [id, n] of Object.entries(goal.reward)) this.state.resources[id as ResourceId] += n ?? 0;
+      }, 'event');
+      this.log(`🎯 Obiettivo raggiunto: ${goal.text}. Premio: ${formatCost(goal.reward)}`, 'good');
+    }
+  }
+
   private step(dt: number) {
     const s = this.state;
     const r = s.resources;
@@ -1090,6 +1183,11 @@ export class Game {
     const si = seasonIndex(date.season);
 
     if (date.year !== this.lastYear) this.onNewYear(date.year);
+    if (Math.floor(s.day) !== this.lastGoalDay) {
+      this.lastGoalDay = Math.floor(s.day);
+      this.checkGoals(eraIndexOf(date.year));
+      this.stepEvents(si);
+    }
     if (si !== this.lastSeasonIndex) this.track('Macellazione d\'inverno', () => this.onNewSeason(si), 'event');
 
     const a = this.analysis();
@@ -1110,7 +1208,7 @@ export class Game {
     // I reparti fuori dal territorio mangiano i viveri che si portano dietro
     const abroad = this.abroadSoldiers();
     const soldiersHome = this.soldiers() + away.infantry + away.archers + away.cavalry - abroad;
-    let need = (pop * FOOD_PER_PERSON + builders * BUILDER_FOOD + soldiersHome * SOLDIER_FOOD) * dt;
+    let need = (pop * FOOD_PER_PERSON + builders * BUILDER_FOOD + soldiersHome * SOLDIER_FOOD) * dt * (this.hasEvent('harsh_winter') ? 1.2 : 1);
     const needed = need;
     let variety = 0;
     const soldiersEating = soldiersHome * SOLDIER_FOOD;
@@ -1238,6 +1336,7 @@ export class Game {
         }
         for (const [id, n] of Object.entries(def.consumes)) r[id as ResourceId] -= (n ?? 0) * factor;
       }
+      if (def.category === 'farming' || def.category === 'animals') factor *= this.farmEventFactor();
       const fp = this.fx().produce ?? {};
       for (const [id, n] of Object.entries(def.produces)) r[id as ResourceId] += (n ?? 0) * factor * (fp[id as ResourceId] ?? 1);
     }

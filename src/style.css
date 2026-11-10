@@ -252,3 +252,6 @@ button.multi { background: #6b2a1e; border-color: #a3402f; color: var(--ink); }
 .proposal .row button { padding: 2px 8px; font-size: 12px; }
 .tabs button.badge { position: relative; }
 .tabs button.badge::after { content: attr(data-badge); position: absolute; top: -5px; right: -5px; background: var(--bad); color: #fff; border-radius: 9px; font-size: 10px; min-width: 16px; height: 16px; line-height: 16px; text-align: center; padding: 0 3px; }
+
+.goals .goal { margin: 0.35rem 0; display: flex; flex-direction: column; gap: 2px; font-size: 0.85rem; }
+.goals .goal .hp { height: 4px; }

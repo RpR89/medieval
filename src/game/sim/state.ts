@@ -214,6 +214,14 @@ export interface GameEvent {
   kind: EventKind;
 }
 
+export type SeasonEventId = 'poor_harvest' | 'bumper' | 'flood' | 'plague' | 'harsh_winter' | 'merchants';
+
+export interface ActiveEvent {
+  id: SeasonEventId;
+  until: number;
+  text: string;
+}
+
 export interface GameState {
   version: 1;
   seed: number;
@@ -238,6 +246,11 @@ export interface GameState {
   siege?: ActiveSiege;
   /** Carri delle salmerie al castello. */
   wagons?: number;
+  /** Obiettivi di epoca già raggiunti. */
+  goalsDone?: string[];
+  /** Eventi stagionali in corso (carestie, epidemie, raccolti…). */
+  events?: ActiveEvent[];
+  nextEventDay?: number;
   /** Nostro assedio in corso a un signore. */
   offense?: OffensiveSiege;
   /** Proposte dei signori in attesa di risposta. */
@@ -309,6 +322,8 @@ export function createInitialState(seed: number, castleName = 'Castello senza no
     vegetables: 90,
     meat: 50,
     hay: 80,
+    // Qualche arma di scorta per i primi soldati, poi serve il fabbro
+    weapons: 14,
     ...era.res,
   });
   const lords = !opts.match && opts.lords ? createLords(Math.min(4, opts.lords), seed) : undefined;
