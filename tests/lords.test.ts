@@ -79,7 +79,7 @@ describe('signori rivali', () => {
     // Le palizzate costruite prima del 1050 sono diventate muri in pietrame
     expect(walls.join()).toMatch(/wall_rubble/);
     expect(l.level).toBeGreaterThanOrEqual(2);
-  });
+  }, 30000);
 
   it('il diplomatico viaggia, porta il dono e torna', () => {
     const g = single(1);

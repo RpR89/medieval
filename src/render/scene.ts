@@ -14,6 +14,7 @@ import type { Game } from '../game/sim/game';
 import type { PlacedBuilding } from '../game/sim/state';
 import { animate, applySeason, buildModel, LINKED_TYPES, MASONRY_WALLS, ROAD_FAMILY, updateHerd, WALL_FAMILY, type Link, type ModelCtx } from './models';
 import { StaticBatches } from './batches';
+import { LifeView } from './life';
 import { ArmyView, SIDE_COLORS } from './armies';
 import { mats } from './kit';
 import type { Footprint } from './terrain';
@@ -48,6 +49,7 @@ export class WorldRenderer {
   /** Edifici con parti animate (bandiere, fumo, animali, colture). */
   private animated: Array<{ b: PlacedBuilding; obj: THREE.Object3D; herd: boolean }> = [];
   private batches = new StaticBatches();
+  private life: LifeView;
   private frustum = new THREE.Frustum();
   private tmpMat = new THREE.Matrix4();
   private tmpSphere = new THREE.Sphere();
@@ -139,6 +141,8 @@ export class WorldRenderer {
     });
     this.updateFog();
     this.armyView = new ArmyView(game, this.terrainView);
+    this.life = new LifeView(game, this.terrainView);
+    this.scene.add(this.life.group);
     this.scene.add(this.armyView.group);
     this.siegeView = new SiegeView(game, this.terrainView);
     this.scene.add(this.siegeView.group);
@@ -221,6 +225,7 @@ export class WorldRenderer {
 
   setQuality(q: Quality) {
     this.quality = q;
+    this.setNightCycle(q !== 'low');
     const dpr = window.devicePixelRatio || 1;
     this.basePixelRatio = q === 'high' ? Math.min(dpr, 2) : q === 'medium' ? Math.min(dpr, 1.5) : 1;
     this.renderer.setPixelRatio(this.basePixelRatio * this.renderScale);
@@ -261,9 +266,11 @@ export class WorldRenderer {
     this.sky.material.uniforms.sunPosition.value.copy(this.sunDir);
     const col = (t: Record<Season, number>) => new THREE.Color(t[m.from]).lerp(new THREE.Color(t[m.to]), m.t);
     this.sun.color.copy(col(SUN_COLOR));
-    this.sun.intensity = mixNumber(m, SUN_INTENSITY);
+    this.baseSun = mixNumber(m, SUN_INTENSITY);
+    this.baseSunColor.copy(col(SUN_COLOR));
     this.hemi.groundColor.copy(col(HEMI_GROUND));
-    (this.scene.fog as THREE.Fog).color.copy(col(FOG));
+    this.baseFog.copy(col(FOG));
+    this.nightKey = -1;
     this.terrainView.setSeasonMix(m);
     shared.uSnow.value = mixNumber(m, { spring: 0, summer: 0, autumn: 0, winter: 1 });
     if (!refreshEnv) return;
@@ -696,6 +703,45 @@ export class WorldRenderer {
     this.renderer.setPixelRatio(Math.max(0.5, this.basePixelRatio * next));
     this.resize();
   }
+  // ───────────── Giorno e notte ─────────────
+  // Un ciclo di luce lento e indipendente dal calendario di gioco (un giorno di gioco dura meno di un secondo):
+  // è solo atmosfera. Cambia luci, nebbia e finestre; l'ombra del sole non si sposta, così non costa nulla.
+  private baseSun = 2.4;
+  private baseSunColor = new THREE.Color(0xfff0d8);
+  private baseFog = new THREE.Color(0x9ab0c8);
+  private nightKey = -1;
+  private nightOn = true;
+  private static readonly DAY_CYCLE = 420;
+  private static readonly MOON = new THREE.Color(0x7d96d8);
+  private static readonly NIGHT_FOG = new THREE.Color(0x0c1428);
+
+  setNightCycle(on: boolean) {
+    this.nightOn = on;
+    this.nightKey = -2;
+  }
+
+  /** 0 = pieno giorno, 1 = notte fonda; alba e tramonto sfumano. */
+  private nightAmount(t: number): number {
+    if (!this.nightOn) return 0;
+    const v = Math.sin((t / WorldRenderer.DAY_CYCLE) * Math.PI * 2 + 1.2);
+    return THREE.MathUtils.smoothstep(-v, -0.15, 0.55);
+  }
+
+  private applyNight(t: number) {
+    const key = Math.round(this.nightAmount(t) * 40);
+    if (key === this.nightKey) return;
+    this.nightKey = key;
+    const n = key / 40;
+    this.sun.intensity = this.baseSun * (1 - 0.8 * n);
+    this.sun.color.copy(this.baseSunColor).lerp(WorldRenderer.MOON, n * 0.8);
+    this.hemi.intensity = 0.35 * (1 - 0.35 * n);
+    (this.scene.fog as THREE.Fog).color.copy(this.baseFog).lerp(WorldRenderer.NIGHT_FOG, n);
+    this.renderer.toneMappingExposure = 0.82 * (1 - 0.42 * n);
+    const k = mats();
+    k.glow.emissiveIntensity = n * 2.2;
+    k.fire.emissiveIntensity = 2.5 + n * 2;
+  }
+
   private syncTimer = 1;
   private fogTimer = 0;
   private revealVersion = -1;
@@ -764,6 +810,7 @@ export class WorldRenderer {
       this.fogTimer = 0;
       this.updateFog();
     }
+    this.life.update(dt, this.nightKey / 40, this.controls.target.x, this.controls.target.z);
     this.armyView.update(t);
     for (const o of this.armyView.objects()) animate(o, t, dt);
     this.siegeView.update(dt);
@@ -778,6 +825,7 @@ export class WorldRenderer {
     tg.z = THREE.MathUtils.clamp(tg.z, 0, lim);
     this.controls.update();
     this.terrainView.updateLod(tg.x, tg.z, this.camera.position.distanceTo(tg));
+    this.applyNight(t);
     this.updateSunShadow();
     // Mappa delle ombre: solo quando cambia qualcosa (costruzioni, stagione, inquadratura).
     // Ciò che si muove di continuo non proietta ombre: così il ritmo dei fotogrammi resta regolare.

@@ -40,6 +40,8 @@ function build() {
     earth: plain(0x6b5536),
     grassMound: textured(t.ground, 0x557a2e, {}, 0.3),
     dark: plain(0x15100b, { roughness: 1 }),
+    // Finestre e feritoie: scure di giorno, calde di notte (l'intensità la regola la scena)
+    glow: new THREE.MeshStandardMaterial({ color: 0x15100b, roughness: 1, emissive: 0xffa640, emissiveIntensity: 0 }),
     iron: plain(0x3d3d40, { metalness: 0.7, roughness: 0.5 }),
     gold: plain(0xe8c040, { metalness: 0.8, roughness: 0.35 }),
     straw: plain(0xd6b85a),
@@ -223,7 +225,7 @@ export function smoke(x: number, y: number, z: number, puffs = 4, scale = 1): TH
 
 /** Feritoia o finestra scura sul fronte +z di un elemento. */
 export function slit(x: number, y: number, z: number, w = 0.06, h = 0.22, rotY = 0): THREE.Mesh {
-  const m = box(w, h, 0.03, mats().dark, x, y, z);
+  const m = box(w, h, 0.03, mats().glow, x, y, z);
   m.rotation.y = rotY;
   m.castShadow = false;
   return m;
@@ -234,8 +236,8 @@ export function archWindow(x: number, y: number, z: number, w: number, h: number
   const g = new THREE.Group();
   g.position.set(x, y, z);
   g.rotation.y = rotY;
-  g.add(box(w, h - w / 2, 0.03, mats().dark, 0, 0, 0));
-  const top = cyl(w / 2, w / 2, 0.03, mats().dark, 0, h - w / 2, 0.015, 10);
+  g.add(box(w, h - w / 2, 0.03, mats().glow, 0, 0, 0));
+  const top = cyl(w / 2, w / 2, 0.03, mats().glow, 0, h - w / 2, 0.015, 10);
   top.rotation.x = Math.PI / 2;
   top.position.y = h - w / 2;
   g.add(top);
