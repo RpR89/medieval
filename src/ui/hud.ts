@@ -831,6 +831,11 @@ export class Hud {
           ${bud.builders ? `<tr><td>🏗️ Paga dei costruttori</td><td>−${fmt(bud.builders)}/mese</td></tr>` : ''}
           <tr class="${bud.net < 0 ? 'bad' : 'good'}"><td><strong>Saldo</strong></td><td><strong>${money(bud.net)}/mese</strong></td></tr>
         </table>
+        ${(() => {
+          const cr = g.crimeTarget();
+          const c = g.crime();
+          return `<p class="small ${c > 50 ? 'bad' : ''}">🗡️ Criminalità <strong>${Math.round(c)}</strong>/100${c > 35 ? ' · furti in corso' : ''}${c > 80 ? ' · <span class="bad">rischio di tumulti!</span>' : ''}<br><span class="muted">${cr.parts.filter(([, v]) => Math.abs(v) >= 0.5).map(([n, v]) => `${escapeHtml(n)} ${v >= 0 ? '+' : ''}${Math.round(v)}`).join(' · ')}</span></p>`;
+        })()}
         ${bud.net < 0 ? `<p class="small bad">Le spese superano le entrate: con ${fmt(g.state.resources.coins)} monete resisti circa ${Math.max(0, Math.floor(g.state.resources.coins / -bud.net))} mesi, poi i soldati diserteranno.</p>` : ''}`,
       );
       moodParts.textContent = mood.parts.map(([n, v]) => `${n} ${v >= 0 ? '+' : ''}${v}`).join(' · ');

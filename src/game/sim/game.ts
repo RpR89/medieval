@@ -1,5 +1,6 @@
 import { ANIMALS } from '../data/animals';
 import {
+  BUILDINGS,
   getBuilding,
   isAvailable,
   seasonIndex,
@@ -67,6 +68,8 @@ const EATING_ORDER: ResourceId[] = [...FOOD_IDS].sort(
 );
 
 const MAX_LOG = 60;
+/** Edifici di servizio ai cittadini. */
+const CIVIC_DEFS = BUILDINGS.filter((d) => d.civic);
 
 /** Giornate di lavoro per unità di materiale (la pietra e la calce richiedono più fatica). */
 const WORK_PER_UNIT: Partial<Record<ResourceId, number>> = { wood: 12, stone: 22, lime: 18, coins: 1.2, gold: 18, charcoal: 4 };
@@ -1157,6 +1160,110 @@ export class Game {
   }
 
   private lastGoalDay = -1;
+
+  // ───────────── Cittadini: servizi, contento e criminalità ─────────────
+
+  private civicCache: { v: number; counts: Map<string, number> } | null = null;
+  private drinkFactor = 1;
+
+  private civicCount(defId: string): number {
+    if (!this.civicCache || this.civicCache.v !== this.analysisVersion) {
+      const counts = new Map<string, number>();
+      for (const b of this.state.buildings) {
+        if (getBuilding(b.defId).civic) counts.set(b.defId, (counts.get(b.defId) ?? 0) + 1);
+      }
+      this.civicCache = { v: this.analysisVersion, counts };
+    }
+    return this.civicCache.counts.get(defId) ?? 0;
+  }
+
+  /** Quanta parte della popolazione è servita da un tipo di edificio civile (0-1). */
+  civicCoverage(defId: string): number {
+    const def = getBuilding(defId);
+    const n = this.civicCount(defId);
+    if (!def.civic || !n) return 0;
+    return Math.min(1, (n * def.civic.serves) / Math.max(10, this.state.population));
+  }
+
+  /** Contributi al contento dei servizi (locanda, piazza, cerusico, casa di piacere…). */
+  civicMood(): Array<[string, number]> {
+    const out: Array<[string, number]> = [];
+    let total = 0;
+    for (const def of CIVIC_DEFS) {
+      if (!def.civic?.mood) continue;
+      let v = def.civic.mood * this.civicCoverage(def.id);
+      if (def.civic.drink) v *= 0.35 + 0.65 * this.drinkFactor;
+      v = Math.min(v, 25 - total);
+      if (v < 0.5) continue;
+      total += v;
+      out.push([def.name, Math.round(v)]);
+    }
+    return out;
+  }
+
+  /** Salute pubblica: il cerusico la migliora, i bordelli la peggiorano. */
+  healthIndex(): number {
+    let h = 0;
+    for (const def of CIVIC_DEFS) if (def.civic?.health) h += def.civic.health * this.civicCoverage(def.id);
+    return h;
+  }
+
+  crime(): number {
+    return this.state.crime ?? 0;
+  }
+
+  /** Il livello di criminalità verso cui tende la città, voce per voce. */
+  crimeTarget(): { total: number; parts: Array<[string, number]> } {
+    const parts: Array<[string, number]> = [['Base (abitanti)', 6 + this.state.population * 0.1]];
+    for (const def of CIVIC_DEFS) {
+      const c = def.civic?.crime;
+      const n = this.civicCount(def.id);
+      if (!c || !n) continue;
+      // I vizi pesano per ogni locale; tribunale, prigioni e piazza in proporzione a chi servono
+      parts.push([def.name, c > 0 ? c * n * (def.civic?.drink ? 0.5 + 0.5 * this.drinkFactor : 1) : c * this.civicCoverage(def.id)]);
+    }
+    const h = this.happiness();
+    if (h < 60) parts.push(['Malcontento', (60 - h) * 0.35]);
+    const guards = Math.min(14, this.soldiers() * 0.14);
+    if (guards > 0) parts.push(['Guardie', -guards]);
+    const total = Math.max(0, Math.min(100, parts.reduce((s, [, v]) => s + v, 0)));
+    return { total, parts: parts.map(([n, v]) => [n, Math.round(v * 10) / 10] as [string, number]) };
+  }
+
+  private stepCitizens(dt: number) {
+    const s = this.state;
+    const r = s.resources;
+    // Le locande bevono birra (o vino): senza, rendono poco
+    const taverns = this.civicCount('tavern');
+    if (taverns) {
+      const need = taverns * (getBuilding('tavern').civic?.drink ?? 0.25) * dt;
+      let got = 0;
+      this.track('Locande (bevande)', () => {
+        for (const id of ['beer', 'wine'] as const) {
+          const take = Math.min(r[id], need - got);
+          r[id] -= take;
+          got += take;
+        }
+      });
+      this.drinkFactor = need > 0 ? Math.min(1, got / need) : 1;
+    } else this.drinkFactor = 1;
+    // La criminalità segue il suo livello d'equilibrio
+    const t = this.crimeTarget().total;
+    const c = this.crime();
+    s.crime = Math.max(0, Math.min(100, c + Math.sign(t - c) * Math.min(Math.abs(t - c), 1.2 * dt)));
+    const cr = s.crime;
+    if (cr > 35 && r.coins > 0) {
+      this.track('Furti', () => (r.coins -= r.coins * 0.0035 * ((cr - 35) / 65) * dt));
+    }
+    const courts = this.civicCount('court');
+    if (courts && cr > 5) this.track('Multe del tribunale', () => (r.coins += (getBuilding('court').civic?.fines ?? 0) * cr * courts * dt));
+    if (cr > 80 && this.random() < 0.03 * dt) {
+      s.population = Math.max(5, s.population * 0.97);
+      this.track('Tumulto', () => (r.coins *= 0.94), 'event');
+      s.crime = cr - 12;
+      this.log('🔥 Tumulto in città: saccheggi e risse. Servono tribunale, prigioni e guardie per riportare l\'ordine.', 'bad');
+    }
+  }
   private lastCold = false;
   /** Legna bruciata ogni giorno d'inverno da ogni abitante. */
   static readonly FUEL_PER_PERSON = 0.012;
@@ -1272,7 +1379,7 @@ export class Game {
       this.log('🌊 Una piena ha allagato i campi: scorte di fieno e ortaggi perse e raccolti ridotti per un mese.', 'bad');
     } else if (id === 'plague') {
       push('Epidemia', 60);
-      const loss = this.state.population * (this.happiness() > 60 ? 0.04 : 0.09);
+      const loss = this.state.population * (this.happiness() > 60 ? 0.04 : 0.09) * Math.max(0.35, 1 - 0.55 * Math.max(0, this.healthIndex()) + 0.3 * Math.max(0, -this.healthIndex()));
       this.state.population = Math.max(6, this.state.population - loss);
       this.state.happiness = Math.max(0, this.happiness() - 8);
       this.log(`☠️ Un'epidemia: ${Math.round(loss)} abitanti morti e popolo scosso. Una popolazione contenta regge meglio.`, 'bad');
@@ -1373,6 +1480,8 @@ export class Game {
     );
     const fed = needed > 0 ? 1 - need / needed : 1;
 
+    this.stepCitizens(dt);
+
     // D'inverno la gente brucia legna per scaldarsi: senza, si patisce il freddo
     this.lastCold = false;
     if (si === 3) {
@@ -1398,7 +1507,7 @@ export class Game {
     if (fed < 0.99) {
       s.population -= pop * 0.004 * (1 - fed) * dt;
     } else if (pop < a.housing && hm >= 30) {
-      const growth = (0.006 + pop * 0.00013) * (1 + 0.08 * Math.max(0, variety - 1)) * Math.min(1.5, hm / 55) * (this.fx().growth ?? 1);
+      const growth = (0.006 + pop * 0.00013) * (1 + 0.08 * Math.max(0, variety - 1)) * (1 + 0.12 * Math.max(0, this.healthIndex())) * Math.min(1.5, hm / 55) * (this.fx().growth ?? 1);
       s.population = Math.min(a.housing, pop + growth * dt);
     }
     if (hm < 30) s.population -= pop * 0.0015 * ((30 - hm) / 30) * dt;
@@ -4777,6 +4886,8 @@ export class Game {
     parts.push([`Tasse: ${TAX_LEVELS[this.taxLevel()].name.toLowerCase()}`, TAX_LEVELS[this.taxLevel()].mood]);
     parts.push(this.lastFed < 0.99 ? ['Fame', -30] : ['Cibo a sufficienza', 6]);
     if (this.lastCold) parts.push(['Senza legna da ardere', -14]);
+    for (const p of this.civicMood()) parts.push(p);
+    if (this.crime() > 25) parts.push(['Criminalità', -Math.round(Math.min(16, (this.crime() - 25) * 0.3))]);
     if (this.lastVariety > 1) parts.push(['Dieta varia', Math.min(12, (this.lastVariety - 1) * 3)]);
     const crowd = this.state.population / Math.max(1, a.housing);
     if (crowd > 1) parts.push(['Sovraffollamento', -12]);

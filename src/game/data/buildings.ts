@@ -10,7 +10,8 @@ export type BuildingCategory =
   | 'industry'
   | 'trade'
   | 'military'
-  | 'infrastructure';
+  | 'infrastructure'
+  | 'civic';
 
 export const CATEGORY_NAMES: Record<BuildingCategory, string> = {
   fortification: '🏰 Fortificazioni',
@@ -22,6 +23,7 @@ export const CATEGORY_NAMES: Record<BuildingCategory, string> = {
   trade: '⚖️ Commercio',
   military: '⚔️ Esercito',
   infrastructure: '🛣️ Strade',
+  civic: '🎭 Cittadini',
 };
 
 /** Dove si può costruire un edificio. */
@@ -108,6 +110,8 @@ export interface BuildingDef {
   vision?: number;
   /** Soldati che si possono mettere di guardia. */
   garrison?: number;
+  /** Servizi ai cittadini: quante persone serve ogni edificio, effetto sul contento e sulla criminalità. */
+  civic?: { serves: number; mood?: number; crime?: number; health?: number; fines?: number; drink?: number };
 }
 
 export const BUILDINGS: BuildingDef[] = [
@@ -532,6 +536,120 @@ export const BUILDINGS: BuildingDef[] = [
     workers: 1,
     consumes: { milk: 2 },
     produces: { cheese: 0.5 },
+  },
+
+  // ───── Cittadini ─────
+  {
+    id: 'barber',
+    icon: '💈',
+    name: 'Cerusico',
+    category: 'civic',
+    description: 'Il barbiere-chirurgo cura ferite e febbri e fa salassi: meno morti nelle epidemie, popolo più sano e contento.',
+    size: [1, 1],
+    cost: { wood: 30, coins: 40 },
+    minYear: 1000,
+    placement: 'land',
+    workers: 1,
+    civic: { serves: 45, mood: 5, health: 1 },
+  },
+  {
+    id: 'tavern',
+    icon: '🍺',
+    name: 'Locanda',
+    category: 'civic',
+    description: 'Si beve, si mangia e si chiacchiera. Consuma birra o vino (senza, rende poco). Fa guadagnare tasse in più, ma richiama risse e furti.',
+    size: [2, 2],
+    cost: { wood: 55, stone: 15, coins: 60 },
+    minYear: 950,
+    placement: 'land',
+    workers: 2,
+    taxBonus: 0.12,
+    civic: { serves: 40, mood: 8, crime: 5, drink: 0.25 },
+  },
+  {
+    id: 'square',
+    icon: '⛲',
+    name: 'Piazza',
+    category: 'civic',
+    description: 'Con la fontana e il pozzo: luogo di incontro, notizie e feste. Tiene alto il morale e fa un po\' di tasse con le bancarelle.',
+    size: [3, 3],
+    cost: { stone: 60, wood: 20, coins: 50 },
+    minYear: 1000,
+    placement: 'land',
+    workers: 1,
+    taxBonus: 0.08,
+    civic: { serves: 90, mood: 7, crime: -1 },
+  },
+  {
+    id: 'brothel',
+    icon: '💋',
+    name: 'Casa di piacere',
+    category: 'civic',
+    description: 'Un luogo di svago dove si spende volentieri: molte tasse e molto contento, ma anche rissa, malavita e malattie. Va tenuta a bada.',
+    size: [2, 2],
+    cost: { wood: 60, stone: 20, coins: 90 },
+    minYear: 1050,
+    minLevel: 2,
+    placement: 'land',
+    workers: 2,
+    taxBonus: 0.22,
+    civic: { serves: 55, mood: 9, crime: 12, health: -0.4 },
+  },
+  {
+    id: 'court',
+    icon: '⚖️',
+    name: 'Tribunale',
+    category: 'civic',
+    description: 'Il giudice sentenzia e incassa le multe: abbassa molto la criminalità e porta qualche moneta dalle ammende.',
+    size: [2, 2],
+    cost: { stone: 90, wood: 40, coins: 120 },
+    minYear: 1100,
+    minLevel: 2,
+    placement: 'land',
+    workers: 2,
+    civic: { serves: 110, crime: -22, fines: 0.025 },
+  },
+  {
+    id: 'prison',
+    icon: '⛓️',
+    name: 'Prigione',
+    category: 'civic',
+    description: 'Celle e ceppi per i malfattori: toglie i criminali dalla strada e scoraggia i furti.',
+    size: [2, 2],
+    cost: { stone: 100, wood: 30, coins: 100 },
+    minYear: 1050,
+    minLevel: 2,
+    placement: 'land',
+    workers: 2,
+    civic: { serves: 90, crime: -14 },
+  },
+  {
+    id: 'vineyard',
+    icon: '🍇',
+    name: 'Vigneto',
+    category: 'farming',
+    description: 'Filari di viti: la vendemmia d\'autunno dà vino, pregiato e caro al mercato.',
+    size: [3, 2],
+    cost: { wood: 25, coins: 45 },
+    minYear: 1000,
+    placement: 'land',
+    workers: 3,
+    produces: { wine: 0.9 },
+    seasonal: [0.3, 1, 2.2, 0],
+  },
+  {
+    id: 'brewery',
+    icon: '🍻',
+    name: 'Birrificio',
+    category: 'industry',
+    description: 'Fa fermentare il grano in birra, la bevanda del popolo. Serve alle locande.',
+    size: [2, 2],
+    cost: { wood: 45, stone: 15, coins: 35 },
+    minYear: 950,
+    placement: 'land',
+    workers: 2,
+    consumes: { grain: 0.7 },
+    produces: { beer: 1.0 },
   },
 
   // ───── Raccolta ─────

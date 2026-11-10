@@ -277,6 +277,8 @@ export interface GameState {
   wagons?: number;
   /** Obiettivi di epoca già raggiunti. */
   goalsDone?: string[];
+  /** Criminalità, 0-100: cresce con vizi e malcontento, si contrasta con tribunale, prigioni e guardie. */
+  crime?: number;
   /** Pressione dei prezzi al mercato per risorsa (si assesta col tempo). */
   market?: Partial<Record<ResourceId, number>>;
   /** Eventi stagionali in corso (carestie, epidemie, raccolti…). */

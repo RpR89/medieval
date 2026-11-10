@@ -33,12 +33,14 @@ export const GOALS: Goal[] = [
   { id: 'e1_pop', era: 1, icon: '👪', text: 'Raggiungi 45 abitanti', need: 45, have: (g) => Math.floor(g.state.population), reward: { coins: 150 } },
   { id: 'e1_iron', era: 1, icon: '⛓️', text: 'Produci 40 di ferro', need: 40, have: (g) => Math.floor(g.state.resources.iron), reward: { coins: 150, charcoal: 20 } },
   { id: 'e1_ring', era: 1, icon: '🧱', text: 'Chiudi la cinta muraria attorno al mastio', need: 1, have: (g) => (g.defenseBreakdown().closed ? 1 : 0), reward: { coins: 250, stone: 100 } },
+  { id: 'e1_inn', era: 1, icon: '🍺', text: 'Apri una locanda e un birrificio', need: 2, have: (g) => Math.min(1, g.count('tavern')) + Math.min(1, g.count('brewery')), reward: { coins: 120, wood: 60 } },
   // ── 1150: le cinte
   { id: 'e2_level', era: 2, icon: '🏛️', text: 'Costruisci il palazzo del signore (livello 4)', need: 4, have: (g) => g.castleLevel(), reward: { coins: 300, stone: 100 } },
   { id: 'e2_towers', era: 2, icon: '🗼', text: 'Erigi 6 torri o porte fortificate', need: 6, have: towers, reward: { coins: 250, stone: 120 } },
   { id: 'e2_cloth', era: 2, icon: '🧵', text: 'Produci 30 di stoffa', need: 30, have: (g) => Math.floor(g.state.resources.cloth), reward: { coins: 200 } },
   { id: 'e2_stone', era: 2, icon: '🧱', text: '30 tratti di mura in pietra', need: 30, have: (g) => walls(g, 'wall_stone', 'wall_curtain', 'wall_bastion'), reward: { coins: 300, lime: 60 } },
   { id: 'e2_pop', era: 2, icon: '👪', text: 'Raggiungi 70 abitanti', need: 70, have: (g) => Math.floor(g.state.population), reward: { coins: 250 } },
+  { id: 'e2_order', era: 2, icon: '⚖️', text: 'Mantieni l\'ordine: tribunale e prigione', need: 2, have: (g) => Math.min(1, g.count('court')) + Math.min(1, g.count('prison')), reward: { coins: 250, stone: 80 } },
   // ── 1250: il castello concentrico
   { id: 'e3_level', era: 3, icon: '👑', text: 'Porta il castello al livello 5', need: 5, have: (g) => g.castleLevel(), reward: { coins: 500, gold: 10 } },
   { id: 'e3_round', era: 3, icon: '🗼', text: 'Erigi 4 torri circolari', need: 4, have: (g) => g.count('tower_round'), reward: { coins: 350, stone: 150 } },

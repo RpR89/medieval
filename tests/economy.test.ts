@@ -69,3 +69,73 @@ describe('obiettivi ed eventi', () => {
     expect(seen).toBeGreaterThan(0);
   });
 });
+
+describe('cittadini', () => {
+  function town(pop = 60) {
+    const st = createInitialState(1);
+    st.day = (1120 - 900) * 360 + 95;
+    st.population = pop;
+    st.nextRaidDay = 1e9;
+    const g = new Game(st, () => 0.5);
+    g.instantBuild = true;
+    g.levelOverride = 3;
+    g.terrain.tiles.fill(Tile.Grass);
+    g.storageCap = () => 1e9;
+    Object.assign(g.state.resources, { wood: 1e4, stone: 1e4, coins: 1e4, grain: 1e4, beer: 500, wine: 100 });
+    return g;
+  }
+  const mood = (g: Game, re: RegExp) => g.moodTarget().parts.find(([n]) => re.test(n))?.[1] ?? 0;
+
+  it('locanda, piazza e cerusico alzano il contento; la locanda consuma birra e senza rende meno', () => {
+    const g = town();
+    const base = g.moodTarget().total;
+    g.place('tavern', 10, 10);
+    g.place('square', 16, 10);
+    g.place('barber', 22, 10);
+    g.advance(2);
+    expect(g.moodTarget().total).toBeGreaterThan(base + 8);
+    const beer = g.state.resources.beer;
+    g.advance(10);
+    expect(g.state.resources.beer).toBeLessThan(beer);
+    const withDrink = mood(g, /Locanda/);
+    g.state.resources.beer = 0;
+    g.state.resources.wine = 0;
+    g.advance(3);
+    expect(mood(g, /Locanda/)).toBeLessThan(withDrink);
+  });
+
+  it('vizi e locali fanno salire la criminalità; tribunale e prigione la abbassano; il furto costa monete', () => {
+    const g = town();
+    g.place('tavern', 10, 10);
+    g.place('brothel', 14, 10);
+    g.place('tavern', 18, 10);
+    g.place('brothel', 22, 10);
+    g.advance(60);
+    const high = g.crime();
+    expect(high).toBeGreaterThan(30);
+    expect(g.crimeTarget().parts.some(([n]) => /Casa di piacere/.test(n))).toBe(true);
+    g.place('court', 10, 16);
+    g.place('prison', 14, 16);
+    g.advance(80);
+    expect(g.crime()).toBeLessThan(high - 10);
+    // Le tasse in più dei locali compensano: servono comunque le monete
+    expect(g.taxPerDay()).toBeGreaterThan(60 * 0.06);
+  });
+
+  it('il cerusico attutisce le epidemie e la filiera di vino e birra funziona', () => {
+    const g = town();
+    expect(g.healthIndex()).toBe(0);
+    g.place('barber', 10, 10);
+    g.place('barber', 14, 10);
+    expect(g.healthIndex()).toBeGreaterThan(0.9);
+    g.state.resources.grain = 1000;
+    g.state.resources.beer = 0;
+    g.state.resources.wine = 0;
+    g.place('brewery', 20, 10);
+    g.place('vineyard', 26, 10);
+    g.state.day += 130; // autunno: vendemmia
+    g.advance(40);
+    expect(g.state.resources.beer).toBeGreaterThan(0);
+    expect(g.state.resources.wine).toBeGreaterThan(0);
+  });
+});

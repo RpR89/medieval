@@ -419,6 +419,166 @@ function limeKiln(g: G) {
 }
 
 
+/** Cerusico: bottega con il palo a strisce e il catino sull'insegna. */
+function barber(g: G) {
+  const k = mats();
+  g.add(box(0.8, 0.5, 0.7, k.plaster, 0, 0, 0));
+  g.add(gableRoof(0.86, 0.76, 0.34, k.roofTile, k.plaster, 0, 0.5, 0, 0.08));
+  door(g, -0.15, 0.355, 0, 0.16, 0.3);
+  windowShutters(g, 0.22, 0.2, 0.36, 0, 0.14, 0.16);
+  // Palo a strisce rosse e bianche
+  g.add(cyl(0.025, 0.025, 0.55, k.plaster, 0.42, 0, 0.42, 6));
+  for (let i = 0; i < 4; i++) g.add(cyl(0.028, 0.028, 0.07, k.cloth[0], 0.42, 0.06 + i * 0.13, 0.42, 6));
+  g.add(cyl(0.07, 0.04, 0.04, k.gold, 0.42, 0.55, 0.42, 8));
+  chimney(g, -0.3, 0.7, -0.15, 0.3);
+}
+
+/** Locanda: casa a due piani con insegna, botti e panche. */
+function tavern(g: G) {
+  const k = mats();
+  g.add(box(1.5, 0.45, 0.85, k.stone, -0.1, 0, -0.2));
+  timberFrame(g, 1.55, 0.42, 0.9, -0.1, 0.45, -0.2);
+  g.add(gableRoof(1.6, 0.95, 0.5, k.roofTile, k.plaster, -0.1, 0.87, -0.2, 0.1));
+  door(g, -0.4, 0.26, 0, 0.2, 0.34);
+  for (const x of [0.05, 0.4, 0.75]) windowShutters(g, x, 0.2, 0.26, 0, 0.13, 0.14);
+  for (const x of [-0.5, -0.1, 0.3]) windowShutters(g, x, 0.62, 0.27, 0, 0.12, 0.13);
+  // Insegna a bandiera con la coppa
+  g.add(box(0.03, 0.03, 0.3, k.beam, 0.72, 0.8, 0.4));
+  g.add(box(0.2, 0.2, 0.025, k.gold, 0.72, 0.58, 0.5));
+  chimney(g, 0.45, 1.1, -0.35, 0.4);
+  g.add(smoke(0.45, 1.5, -0.35, 4, 0.8));
+  // Botti, tavolo e panche all'aperto
+  barrel(g, 0.95, 0.3, 1.1);
+  barrel(g, 1.0, 0.1, 1);
+  g.add(box(0.5, 0.04, 0.22, k.planks, 0.15, 0.17, 0.78));
+  for (const x of [-0.05, 0.35]) g.add(box(0.04, 0.17, 0.2, k.planks, x, 0, 0.78));
+  g.add(box(0.5, 0.03, 0.08, k.planks, 0.15, 0.1, 0.95));
+}
+
+/** Piazza: lastricato con pozzo-fontana, bancarelle e panchine. */
+function square(g: G) {
+  const k = mats();
+  const base = box(2.85, 0.04, 2.85, k.stoneLight, 0, 0, 0);
+  base.castShadow = false;
+  g.add(base);
+  const inner = box(1.9, 0.045, 1.9, k.stone, 0, 0, 0);
+  inner.castShadow = false;
+  g.add(inner);
+  // Fontana centrale
+  g.add(cyl(0.45, 0.5, 0.22, k.stone, 0, 0.04, 0, 14));
+  g.add(cyl(0.38, 0.38, 0.03, k.water, 0, 0.24, 0, 14));
+  g.add(cyl(0.07, 0.09, 0.5, k.stoneLight, 0, 0.26, 0, 8));
+  g.add(cyl(0.18, 0.1, 0.06, k.stone, 0, 0.74, 0, 10));
+  g.add(cyl(0.14, 0.14, 0.03, k.water, 0, 0.8, 0, 10));
+  // Bancarelle con telo a righe
+  for (const [x, z, r] of [[-1.0, -1.05, 0], [1.0, -1.05, 0], [-1.05, 1.0, PI]] as const) {
+    const st = new THREE.Group();
+    st.add(box(0.5, 0.18, 0.28, k.planks, 0, 0, 0));
+    for (const sx of [-0.23, 0.23]) st.add(box(0.03, 0.42, 0.03, k.beam, sx, 0, -0.1));
+    st.add(box(0.56, 0.02, 0.34, k.cloth[(x > 0 ? 2 : 1) % k.cloth.length], 0, 0.42, 0));
+    st.add(box(0.1, 0.07, 0.08, k.straw, -0.1, 0.18, 0));
+    st.position.set(x, 0.04, z);
+    st.rotation.y = r;
+    g.add(st);
+  }
+  for (const [x, z] of [[1.15, 0.6], [1.15, -0.1], [-1.2, -0.1]]) g.add(box(0.1, 0.09, 0.5, k.planks, x, 0.04, z));
+}
+
+/** Casa di piacere: casa in graticcio con lanterne rosse e balconi drappeggiati. */
+function brothel(g: G) {
+  const k = mats();
+  g.add(box(1.4, 0.4, 0.9, k.stone, 0, 0, -0.1));
+  timberFrame(g, 1.45, 0.42, 0.94, 0, 0.4, -0.1);
+  g.add(gableRoof(1.5, 1.0, 0.45, k.roofTile, k.plaster, 0, 0.82, -0.1, 0.1));
+  door(g, 0, 0.37, 0, 0.2, 0.32);
+  for (const x of [-0.5, 0.5]) windowShutters(g, x, 0.18, 0.37, 0, 0.13, 0.14);
+  // Balcone con drappi rossi
+  g.add(box(1.0, 0.04, 0.2, k.planks, 0, 0.42, 0.45));
+  g.add(box(1.0, 0.1, 0.02, k.cloth[0], 0, 0.46, 0.55));
+  for (const x of [-0.5, -0.17, 0.17, 0.5]) g.add(box(0.02, 0.12, 0.02, k.beam, x, 0.46, 0.55));
+  for (const x of [-0.5, 0, 0.5]) windowShutters(g, x, 0.58, 0.37, 0, 0.12, 0.13);
+  // Lanterne rosse accese
+  for (const x of [-0.62, 0.62]) {
+    g.add(box(0.015, 0.1, 0.015, k.beam, x, 0.3, 0.5));
+    g.add(box(0.07, 0.09, 0.07, k.fire, x, 0.2, 0.5));
+  }
+  chimney(g, 0.5, 1.0, -0.3, 0.35);
+}
+
+/** Tribunale: edificio in pietra con portico a colonne e frontone. */
+function court(g: G) {
+  const k = mats();
+  g.add(box(1.7, 0.08, 1.2, k.stoneLight, 0, 0, 0));
+  g.add(box(1.5, 0.7, 0.8, k.stone, 0, 0.08, -0.15));
+  g.add(gableRoof(1.6, 0.9, 0.36, k.slate, k.stoneLight, 0, 0.78, -0.12, 0.08));
+  // Portico con quattro colonne
+  for (const x of [-0.55, -0.18, 0.18, 0.55]) g.add(cyl(0.06, 0.06, 0.6, k.stoneLight, x, 0.08, 0.38, 8));
+  g.add(box(1.4, 0.07, 0.3, k.stoneLight, 0, 0.68, 0.38));
+  g.add(gableRoof(1.5, 0.4, 0.2, k.slate, k.stoneLight, 0, 0.75, 0.38, 0.05));
+  g.add(box(0.2, 0.4, 0.04, k.darkPlanks, 0, 0.08, 0.26));
+  for (const x of [-0.55, 0.55]) g.add(archWindow(x, 0.3, 0.26, 0.14, 0.34));
+  // Bilancia sul frontone
+  g.add(box(0.2, 0.02, 0.02, k.gold, 0, 0.98, 0.4));
+  g.add(box(0.02, 0.1, 0.02, k.gold, 0, 0.9, 0.4));
+}
+
+/** Prigione: blocco di pietra con finestre sbarrate, torretta e cancello ferrato. */
+function prison(g: G) {
+  const k = mats();
+  g.add(box(1.5, 0.85, 1.1, k.stoneDark, 0, 0, 0));
+  g.add(box(1.56, 0.06, 1.16, k.stone, 0, 0.85, 0));
+  for (let i = 0; i < 7; i++) g.add(box(0.14, 0.1, 0.14, k.stone, -0.66 + i * 0.22, 0.91, 0.5));
+  g.add(box(0.46, 1.15, 0.46, k.stone, 0.62, 0, -0.5));
+  g.add(cone(0.36, 0.3, k.slate, 0.62, 1.15, -0.5, 4));
+  // Cancello e finestre sbarrate
+  g.add(box(0.3, 0.45, 0.04, k.dark, -0.2, 0, 0.56));
+  for (let i = 0; i < 5; i++) g.add(box(0.015, 0.45, 0.02, k.iron, -0.32 + i * 0.06, 0, 0.59));
+  for (const x of [0.15, 0.45]) {
+    g.add(box(0.14, 0.18, 0.03, k.glow, x, 0.45, 0.56));
+    for (let i = 0; i < 3; i++) g.add(box(0.012, 0.18, 0.02, k.iron, x - 0.04 + i * 0.04, 0.45, 0.58));
+  }
+  g.add(box(0.1, 0.2, 0.03, k.dark, 0.62, 0.7, -0.26));
+}
+
+/** Vigneto: filari di viti legate a pali, con grappoli. */
+function vineyard(g: G, def: BuildingDef, seed: number) {
+  const k = mats();
+  const [w, d] = def.size;
+  const rand = mulberry32(seed + 5);
+  const base = box(w - 0.08, 0.04, d - 0.08, k.soil, 0, 0, 0);
+  base.castShadow = false;
+  g.add(base);
+  const rows = Math.round(w * 2.2);
+  for (let r = 0; r < rows; r++) {
+    const x = -w / 2 + 0.2 + (r * (w - 0.4)) / Math.max(1, rows - 1);
+    g.add(box(0.012, 0.012, d - 0.3, k.rope, x, 0.3, 0));
+    g.add(box(0.012, 0.012, d - 0.3, k.rope, x, 0.18, 0));
+    for (let z = -d / 2 + 0.2; z < d / 2 - 0.1; z += 0.2) {
+      g.add(box(0.025, 0.34, 0.025, k.beam, x, 0.04, z));
+      g.add(box(0.1, 0.16, 0.08, k.leafGreen, x, 0.14 + rand() * 0.1, z + 0.05));
+      if (rand() < 0.5) g.add(box(0.03, 0.05, 0.03, k.cloth[4], x + 0.04, 0.12, z + 0.02));
+    }
+  }
+}
+
+/** Birrificio: capannone con tini di rame, botti e comignolo fumante. */
+function brewery(g: G) {
+  const k = mats();
+  g.add(box(1.2, 0.5, 0.8, k.stone, -0.25, 0, -0.1));
+  g.add(gableRoof(1.28, 0.88, 0.4, k.shingle, k.stone, -0.25, 0.5, -0.1, 0.08));
+  door(g, -0.3, 0.31, 0, 0.2, 0.32);
+  chimney(g, 0.2, 0.7, -0.3, 0.45);
+  g.add(smoke(0.2, 1.2, -0.3, 4, 0.9));
+  // Tini di rame con coperchio e botti
+  for (const [x, z] of [[0.6, 0.35], [0.6, -0.2]]) {
+    g.add(cyl(0.22, 0.24, 0.45, k.gold, x, 0, z, 12));
+    g.add(cone(0.22, 0.12, k.stoneDark, x, 0.45, z, 12));
+  }
+  for (const [x, z] of [[-0.9, 0.5], [-0.65, 0.58], [-0.78, 0.35]]) barrel(g, x, z, 1.15);
+  sack(g, -0.1, 0.55);
+  sack(g, 0.05, 0.6);
+}
+
 /** Mulino ad acqua: edificio in pietra con la ruota a pale e le macine. */
 function mill(g: G) {
   const k = mats();
@@ -798,6 +958,14 @@ export function buildModel(def: BuildingDef, ctx: ModelCtx = {}): THREE.Group {
     case 'gate_strong': gateStrong(g, ctx); break;
     case 'tower_bastion': towerBastion(g, ctx); break;
     case 'lime_kiln': limeKiln(g); break;
+    case 'barber': barber(g); break;
+    case 'tavern': tavern(g); break;
+    case 'square': square(g); break;
+    case 'brothel': brothel(g); break;
+    case 'court': court(g); break;
+    case 'prison': prison(g); break;
+    case 'vineyard': vineyard(g, def, seed); break;
+    case 'brewery': brewery(g); break;
     case 'mill': mill(g); break;
     case 'bakery': bakery(g); break;
     case 'weaver': weaver(g); break;
