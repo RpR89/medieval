@@ -527,16 +527,16 @@ export class TerrainView {
 
     // Geometrie prototipo
     const conGeo = mergeGeometries([
-      new THREE.ConeGeometry(0.42, 0.7, 7).translate(0, 0.65, 0),
-      new THREE.ConeGeometry(0.34, 0.6, 7).translate(0, 1.0, 0),
-      new THREE.ConeGeometry(0.24, 0.5, 7).translate(0, 1.32, 0),
+      new THREE.ConeGeometry(0.42, 0.7, 7, 1, true).translate(0, 0.65, 0),
+      new THREE.ConeGeometry(0.34, 0.6, 7, 1, true).translate(0, 1.0, 0),
+      new THREE.ConeGeometry(0.24, 0.5, 7, 1, true).translate(0, 1.32, 0),
     ].map(ni))!;
-    const trunkGeo = new THREE.CylinderGeometry(0.05, 0.08, 0.6, 6).translate(0, 0.3, 0);
+    const trunkGeo = new THREE.CylinderGeometry(0.05, 0.08, 0.6, 6, 1, true).translate(0, 0.3, 0);
     const branchGeo = mergeGeometries([
-      new THREE.CylinderGeometry(0.05, 0.08, 0.75, 6).translate(0, 0.37, 0).toNonIndexed(),
-      new THREE.CylinderGeometry(0.02, 0.035, 0.45, 5).rotateZ(0.7).translate(-0.14, 0.82, 0).toNonIndexed(),
-      new THREE.CylinderGeometry(0.02, 0.035, 0.4, 5).rotateZ(-0.6).translate(0.12, 0.85, 0.03).toNonIndexed(),
-      new THREE.CylinderGeometry(0.02, 0.03, 0.35, 5).rotateX(0.6).translate(0, 0.9, 0.1).toNonIndexed(),
+      new THREE.CylinderGeometry(0.05, 0.08, 0.75, 6, 1, true).translate(0, 0.37, 0).toNonIndexed(),
+      new THREE.CylinderGeometry(0.02, 0.035, 0.45, 5, 1, true).rotateZ(0.7).translate(-0.14, 0.82, 0).toNonIndexed(),
+      new THREE.CylinderGeometry(0.02, 0.035, 0.4, 5, 1, true).rotateZ(-0.6).translate(0.12, 0.85, 0.03).toNonIndexed(),
+      new THREE.CylinderGeometry(0.02, 0.03, 0.35, 5, 1, true).rotateX(0.6).translate(0, 0.9, 0.1).toNonIndexed(),
     ])!;
     // Chioma a "nuvole" di icosaedri semplici: tante forme, pochi triangoli
     const leafGeo = mergeGeometries([
@@ -558,13 +558,13 @@ export class TerrainView {
         new THREE.PlaneGeometry(0.035, 0.16).translate(0, 0.08, 0).rotateZ((i - 1.5) * 0.25).rotateY(i * 0.8).toNonIndexed(),
       ),
     )!;
-    const flowerGeo = new THREE.IcosahedronGeometry(0.025, 0).translate(0, 0.1, 0);
+    const flowerGeo = new THREE.OctahedronGeometry(0.03, 0).translate(0, 0.1, 0);
     // Varianti: abete alto e stretto, betulla slanciata, canne palustri, felci del sottobosco
     const con2Geo = mergeGeometries([
-      new THREE.ConeGeometry(0.3, 0.6, 7).translate(0, 0.6, 0),
-      new THREE.ConeGeometry(0.26, 0.55, 7).translate(0, 0.95, 0),
-      new THREE.ConeGeometry(0.2, 0.5, 7).translate(0, 1.28, 0),
-      new THREE.ConeGeometry(0.13, 0.42, 7).translate(0, 1.6, 0),
+      new THREE.ConeGeometry(0.3, 0.6, 7, 1, true).translate(0, 0.6, 0),
+      new THREE.ConeGeometry(0.26, 0.55, 7, 1, true).translate(0, 0.95, 0),
+      new THREE.ConeGeometry(0.2, 0.5, 7, 1, true).translate(0, 1.28, 0),
+      new THREE.ConeGeometry(0.13, 0.42, 7, 1, true).translate(0, 1.6, 0),
     ].map(ni))!;
     const birchGeo = mergeGeometries([
       new THREE.IcosahedronGeometry(0.22, 0).scale(1, 1.5, 1).translate(0, 1.2, 0),
@@ -572,7 +572,7 @@ export class TerrainView {
       new THREE.IcosahedronGeometry(0.16, 0).scale(1, 1.4, 1).translate(-0.1, 1.0, -0.06),
       new THREE.IcosahedronGeometry(0.13, 0).translate(0.02, 1.52, 0),
     ].map(ni))!;
-    const birchTrunk = new THREE.CylinderGeometry(0.03, 0.05, 1.2, 6).translate(0, 0.6, 0);
+    const birchTrunk = new THREE.CylinderGeometry(0.03, 0.05, 1.2, 6, 1, true).translate(0, 0.6, 0);
     const reedGeo = mergeGeometries(
       [0, 1, 2, 3, 4, 5].map((i) =>
         new THREE.PlaneGeometry(0.02, 0.32 + (i % 3) * 0.06).translate(0, 0.16 + (i % 3) * 0.03, 0).rotateZ((i - 2.5) * 0.12).rotateY(i * 1.1).translate((i % 2) * 0.04, 0, (i % 3) * 0.03).toNonIndexed(),

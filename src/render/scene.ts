@@ -452,7 +452,8 @@ export class WorldRenderer {
   private syncBuildings() {
     const alive = new Set<number>();
     let changed = false;
-    for (const b of this.allBuildings()) {
+    const all = this.allBuildings();
+    for (const b of all) {
       alive.add(b.uid);
       const ctx = this.ctxFor(b);
       const key = JSON.stringify(ctx);
@@ -485,13 +486,13 @@ export class WorldRenderer {
     }
     this.batches.flush();
     this.animated = [];
-    for (const b of this.allBuildings()) {
+    for (const b of all) {
       const obj = this.buildingObjs.get(b.uid);
       const herd = !!getBuilding(b.defId).herd;
       if (obj && (obj.children.length || herd)) this.animated.push({ b, obj, herd });
     }
     const fps: Footprint[] = [];
-    for (const b of this.allBuildings()) {
+    for (const b of all) {
       if (b.defId === 'bridge') continue;
       const [w, d] = getBuilding(b.defId).size;
       fps.push({
