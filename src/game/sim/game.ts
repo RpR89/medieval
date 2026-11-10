@@ -4225,6 +4225,14 @@ export class Game {
       ['stable', lv >= 3 && pop >= 70 ? 1 : 0, true],
       ['field_grain', pop >= 30 ? Math.floor(pop / 5) : 0, false],
       ['hut', Math.floor(pop / 2.2), true],
+      // Servizi ai cittadini, man mano che il borgo cresce
+      ['tavern', pop >= 45 ? 1 + Math.floor(pop / 120) : 0, true],
+      ['barber', pop >= 55 ? 1 + Math.floor(pop / 150) : 0, true],
+      ['square', pop >= 70 ? 1 : 0, true],
+      ['vineyard', pop >= 60 && lv >= 2 ? 1 : 0, false],
+      ['prison', pop >= 80 ? 1 : 0, true],
+      ['court', pop >= 100 ? 1 : 0, true],
+      ['brothel', pop >= 90 && l.personality !== 'peaceful' ? 1 : 0, true],
     ];
     if (wealthy) {
       for (const [id, target, inside] of growth) {
