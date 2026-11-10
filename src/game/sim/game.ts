@@ -569,7 +569,15 @@ export class Game {
       const b = this.buildingAt(x, z);
       if (!b) return null;
       const def = getBuilding(b.defId);
-      return def.road || def.fort === 'gate' ? def : null;
+      if (def.road || def.fort === 'gate') return def;
+      // Il fossato davanti a una porta col ponte levatoio vale come strada: il ponte lo attraversa
+      if (def.fort === 'moat') {
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const g = this.buildingAt(x + dx, z + dz);
+          if (g && getBuilding(g.defId).fort === 'gate' && g.upgrades?.includes('drawbridge')) return def;
+        }
+      }
+      return null;
     };
     const reached = new Map<number, number>(); // casella → bonus (1.15 sterrata, 1.25 lastricata)
     const rq: number[] = [];

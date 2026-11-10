@@ -267,3 +267,25 @@ describe('livelli del castello', () => {
     expect(g.analysis().taxMul).toBeGreaterThan(1.35);
   });
 });
+
+describe('ponte levatoio e strade', () => {
+  it('il fossato davanti alla porta col ponte levatoio collega la strada al castello', () => {
+    const st = createInitialState(1);
+    st.day = 300 * 360 + 100;
+    const g = new Game(st, () => 0.5);
+    g.instantBuild = true;
+    g.terrain.tiles.fill(Tile.Grass);
+    g.levelOverride = 5;
+    Object.assign(g.state.resources, { wood: 1e4, stone: 1e4, lime: 1e4, coins: 1e4 });
+    g.place('keep_stone', 20, 20);
+    g.place('gate_stone', 23, 21);
+    g.place('moat', 24, 21);
+    for (let x = 25; x < 29; x++) g.place('road', x, 21);
+    const field = g.place('field_grain', 29, 20)!;
+    expect(g.roadBonus(field)).toBe(1);
+    const gate = g.buildingAt(23, 21)!;
+    gate.upgrades = [...(gate.upgrades ?? []), 'drawbridge'];
+    (g as unknown as { changed(): void }).changed();
+    expect(g.roadBonus(field)).toBeGreaterThan(1);
+  });
+});
