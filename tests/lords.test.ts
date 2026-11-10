@@ -177,3 +177,17 @@ describe('signori rivali', () => {
     expect(l.status).toBe('neutral');
   });
 });
+
+describe('sviluppo dei signori', () => {
+  it('nel tempo ampliano il feudo con botteghe, allevamento e caserme e arrivano al castello di pietra', () => {
+    const st = createInitialState(7, 'Rocca', { preset: 'pianura', lords: 2 });
+    const g = new Game(st, mulberry32(3));
+    g.storageCap = () => 1e9;
+    for (let d = 0; d < 360 * 170; d++) g.advance(1);
+    for (const l of g.lords()) {
+      const ids = new Set(l.buildings.map((b) => b.defId));
+      for (const id of ['market', 'barracks', 'smithy', 'pasture_cattle']) expect(ids.has(id), `${l.name}: ${id}`).toBe(true);
+      expect(l.level, l.name).toBeGreaterThanOrEqual(3);
+    }
+  }, 60000);
+});

@@ -3796,6 +3796,8 @@ export class Game {
       for (const [id, v] of Object.entries(def.consumes ?? {})) add(use, id, (v ?? 0) * k);
       if (def.herd) prod.food += 0.8;
     }
+    // Senza una cava (niente roccia nei dintorni) la pietra si compra dai mercanti: un rivolo costante
+    if (!l.buildings.some((b) => b.defId === 'quarry')) prod.stone += 0.3;
     use.food += l.pop! * FOOD_PER_PERSON + soldiers * SOLDIER_FOOD + builders * BUILDER_FOOD;
     return { housing, storage, builders, lodges, prod, use, soldiers };
   }
@@ -3868,14 +3870,16 @@ export class Game {
     const r = l.res!;
     let coins = cost.coins ?? 0;
     const take: Partial<Record<'wood' | 'stone' | 'lime', number>> = {};
+    // Chi ha le casse piene compra i materiali che gli mancano a prezzo meno caro
+    const prem = l.wealth > 2500 ? 1.6 : 2.5;
     for (const [id, n] of Object.entries(cost)) {
       const need = n ?? 0;
       if (id === 'coins') continue;
       if (id === 'wood' || id === 'stone' || id === 'lime') {
         const have = Math.min(r[id], need);
         take[id] = have;
-        coins += (need - have) * RESOURCES[id].basePrice * 2.5;
-      } else coins += need * RESOURCES[id as ResourceId].basePrice * 2.5;
+        coins += (need - have) * RESOURCES[id].basePrice * prem;
+      } else coins += need * RESOURCES[id as ResourceId].basePrice * prem;
     }
     // Tiene sempre una piccola riserva di monete
     if (coins > 0 && l.wealth - coins < reserve) return false;
@@ -4009,6 +4013,33 @@ export class Game {
     if (this.lordCount(l, 'granary') < Math.floor(lv / 2)) {
       const a = build('granary', this.lordSpot(l, 'granary', true) ?? this.lordSpot(l, 'granary', false));
       if (a) return a;
+    }
+    // 10b. Sviluppo: botteghe, allevamento, mercato, caserme e avvistamento man mano che il feudo cresce
+    const wealthy = l.wealth > 150;
+    const growth: Array<[string, number, boolean]> = [
+      ['woodcutter', 1 + Math.floor(pop / 25), false],
+      ['quarry', year >= 950 ? 1 + Math.floor(pop / 40) : 0, false],
+      ['pasture_cattle', pop >= 20 ? 1 + Math.floor(lv / 2) : 0, false],
+      ['hay_meadow', pop >= 24 ? 1 + Math.floor(lv / 2) : 0, false],
+      ['hunter', pop >= 24 ? 1 : 0, false],
+      ['dairy', this.lordCount(l, 'pasture_cattle') ? 1 : 0, true],
+      ['smithy', lv >= 2 && pop >= 35 ? 1 : 0, true],
+      ['market', lv >= 2 && pop >= 40 ? 1 : 0, true],
+      ['barracks', lv >= 2 && pop >= 35 ? 1 + Math.floor(lv / 3) : 0, true],
+      ['watchtower', lv >= 2 ? 1 + Math.floor(lv / 2) : 0, false],
+      ['pasture_pigs', lv >= 2 && pop >= 45 ? 1 : 0, false],
+      ['weaver', year >= 1000 && lv >= 2 && pop >= 50 ? 1 : 0, true],
+      ['archery', lv >= 2 && pop >= 50 ? 1 : 0, true],
+      ['stable', lv >= 3 && pop >= 70 ? 1 : 0, true],
+      ['field_grain', pop >= 30 ? Math.floor(pop / 5) : 0, false],
+      ['hut', Math.floor(pop / 2.2), true],
+    ];
+    if (wealthy) {
+      for (const [id, target, inside] of growth) {
+        if (!this.lordDefOk(l, getBuilding(id), year) || this.lordCount(l, id) >= target) continue;
+        const a = build(id, inside ? this.lordSpot(l, id, true) ?? this.lordSpot(l, id, false) : this.lordSpot(l, id, false));
+        if (a) return a;
+      }
     }
     // 11. Migliora gli edifici civili, prima i più indietro (campi e case per primi)
     const cap = maxLevelFor(year);
