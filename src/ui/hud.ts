@@ -1221,7 +1221,9 @@ export class Hud {
       const msg = g.answerProposal(Number(t.dataset.prop), t.dataset.yes === '1');
       if (msg) this.toast(msg, t.dataset.yes === '1' ? 'good' : 'info');
     };
+    const house = el('div', { class: 'dynasty' });
     this.panelBody.append(
+      house,
       props,
       el('p', { class: 'small muted', text: 'Manda un diplomatico ai castelli dei signori vicini: viaggia sulla mappa e porta la tua proposta. Un dono rende tutto più facile.' }),
       list,
@@ -1270,6 +1272,13 @@ export class Hud {
     }
     let lastTravel = '';
     this.refreshTab = () => {
+      const dy = g.dynasty();
+      const sp = dy.spouse !== undefined ? g.lord(dy.spouse) : undefined;
+      setHtml(
+        house,
+        `<h4>👑 La casata</h4><p class="small">Signore <strong>${escapeHtml(dy.ruler.name)}</strong>, ${g.ageOf(dy.ruler.born)} anni${sp ? ` · 💍 sposo/a della casa di ${escapeHtml(sp.castle)}` : ''}<br>${dy.heir ? `Erede: <strong>${escapeHtml(dy.heir.name)}</strong>, ${g.ageOf(dy.heir.born)} anni` : '<span class="bad">Nessun erede: se il signore morisse sarebbe crisi di successione.</span>'}${(dy.regencyUntil ?? 0) > g.state.day ? ' · <span class="bad">reggenza in corso</span>' : ''}</p>
+        <p class="small muted">Accettare un matrimonio dinastico lega le casate e rende più probabili gli eredi.</p>`,
+      );
       // Proposte dei signori in attesa di risposta
       const pend = g.pendingProposals();
       const icons = { help: '⚔️', alliance: '🤝', marriage: '💍', trade: '⚖️', tribute: '💰', spy: '🕵️' };
@@ -1300,6 +1309,10 @@ export class Hud {
           <div class="small">${l.faction ? `${emblemHtml(l.faction, 14)} ${escapeHtml(FACTIONS[l.faction].name)} · ` : ''}${escapeHtml(l.castle)} · ${l.level ? `${'★'.repeat(l.level)}${'☆'.repeat(5 - l.level)}` : 'accampamento'} · ${PERSONALITIES[l.personality].name}</div>
           <div class="small ${l.status === 'war' ? 'bad' : l.status === 'alliance' || l.status === 'vassal' ? 'good' : ''}">${escapeHtml(g.lordStatusName(l))} · rapporto ${Math.round(l.relation)} · circa ${Math.round(soldiers / 5) * 5} soldati${l.companies.length ? ' · <span class="bad">esercito in marcia</span>' : ''}</div>
           ${ties ? `<div class="small">${ties}</div>` : ''}
+          ${(() => {
+            const mem = g.memoriesOf(l).slice(0, 3);
+            return mem.length ? `<div class="small muted">🧠 ${mem.map((m) => `<span class="${m.w >= 0 ? 'good' : 'bad'}">${escapeHtml(m.text)}${m.years ? ` (${m.years}a fa)` : ''}</span>`).join(' · ')}</div>` : '';
+          })()}
           <div class="small muted">👪 ${Math.round(l.pop ?? 0)} abitanti${(() => {
             const act = g.lordActivity(l);
             if (!act.length) return '';

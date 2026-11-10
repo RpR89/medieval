@@ -77,3 +77,36 @@ describe('proposte al giocatore', () => {
     expect(l.relation).toBeLessThan(rel);
   });
 });
+
+describe('memoria e casata', () => {
+  it('i signori ricordano rifiuti e aiuti, e il ricordo sbiadisce', () => {
+    const st = createInitialState(5, 'Rocca', { preset: 'pianura', lords: 2 });
+    const g = new Game(st, () => 0.5);
+    const l = g.lords()[0];
+    (g as unknown as { remember(l: unknown, t: string, w: number): void }).remember(l, 'Ha rifiutato il tributo', -14);
+    expect(g.memoryBias(l)).toBeLessThan(-10);
+    expect(g.memoriesOf(l)).toHaveLength(1);
+    g.state.day += 360 * 12;
+    expect(g.memoriesOf(l)).toHaveLength(0);
+  });
+
+  it('senza erede la morte del signore è una crisi; con un erede adulto no', () => {
+    const st = createInitialState(5, 'Rocca', { preset: 'pianura', lords: 2 });
+    st.day = 360 * 100;
+    const g = new Game(st, () => 0.01);
+    const d = g.dynasty();
+    d.ruler.born = st.day - 40 * 360;
+    const h0 = g.happiness();
+    (g as unknown as { stepDynasty(): void }).stepDynasty();
+    expect(d.heir).toBeDefined();
+    delete d.heir;
+    d.ruler.born = st.day - 70 * 360;
+    (g as unknown as { stepDynasty(): void }).stepDynasty();
+    expect(g.happiness()).toBeLessThan(h0);
+    expect(g.happiness()).toBeLessThanOrEqual(h0);
+    d.heir = { name: 'Ugo', born: st.day - 20 * 360 };
+    d.ruler.born = st.day - 70 * 360;
+    (g as unknown as { stepDynasty(): void }).stepDynasty();
+    expect(d.ruler.name).toBe('Ugo');
+  });
+});

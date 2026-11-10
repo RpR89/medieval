@@ -43,6 +43,8 @@ export interface Lord {
   nextProposal?: number;
   /** Inizio delle guerre in corso con altri signori (id → giorno). */
   warSince?: Record<number, number>;
+  /** Cosa ricorda di noi: aiuti, rifiuti, tradimenti. Sbiadisce in qualche anno. */
+  memory?: Array<{ day: number; text: string; w: number }>;
 }
 
 export interface LordResources {

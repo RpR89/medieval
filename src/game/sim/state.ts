@@ -241,6 +241,16 @@ export interface ActiveEvent {
   text: string;
 }
 
+/** La casata del giocatore: signore, erede e matrimonio. */
+export interface Dynasty {
+  ruler: { name: string; born: number };
+  heir?: { name: string; born: number };
+  /** Signore della casata della sposa (alleato naturale). */
+  spouse?: number;
+  /** Fino a questo giorno governa un reggente: il popolo è inquieto. */
+  regencyUntil?: number;
+}
+
 export interface GameState {
   version: 1;
   seed: number;
@@ -269,6 +279,7 @@ export interface GameState {
   goalsDone?: string[];
   /** Eventi stagionali in corso (carestie, epidemie, raccolti…). */
   events?: ActiveEvent[];
+  dynasty?: Dynasty;
   /** Comandanti esperti in attesa di un nuovo reparto. */
   veterans?: Commander[];
   /** Piani di evoluzione automatica delle mura. */

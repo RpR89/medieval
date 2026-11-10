@@ -6,7 +6,7 @@ import {
   type BuildingDef,
   type UnitType,
 } from '../data/buildings';
-import { dateFromDays, DAYS_PER_SEASON, formatDuration, SEASON_NAMES, TIME_SCALE, weatherOf, type GameDate } from '../data/calendar';
+import { dateFromDays, DAYS_PER_SEASON, DAYS_PER_YEAR, formatDuration, SEASON_NAMES, TIME_SCALE, weatherOf, type GameDate } from '../data/calendar';
 import { eraForYear, ERAS } from '../data/eras';
 import {
   canAfford,
@@ -56,6 +56,7 @@ import {
   type PlacedBuilding,
   type ActiveEvent,
   type Commander,
+  type Dynasty,
   type WallPlan,
   type SeasonEventId,
 } from './state';
@@ -1091,6 +1092,65 @@ export class Game {
 
   private lastGoalDay = -1;
 
+  // ───────────── Dinastia ─────────────
+
+  dynasty(): Dynasty {
+    return (this.state.dynasty ??= { ruler: { name: COMMANDER_NAMES[this.state.seed % COMMANDER_NAMES.length], born: this.state.day - 27 * DAYS_PER_YEAR } });
+  }
+
+  ageOf(born: number): number {
+    return Math.floor((this.state.day - born) / DAYS_PER_YEAR);
+  }
+
+  /** Le nozze con la casata di un signore: un alleato naturale, e più probabilità di avere eredi. */
+  private marryInto(l: Lord) {
+    this.dynasty().spouse = l.id;
+    l.relation = Math.max(l.relation, 55);
+    this.log(`💍 Il signore ${this.dynasty().ruler.name} sposa una dama di ${l.castle}: casate legate.`, 'good');
+  }
+
+  /** Eventi di casata, una volta l'anno: nascite, morte del signore e successione. */
+  private stepDynasty() {
+    const d = this.dynasty();
+    const s = this.state;
+    if (this.state.match) return;
+    const age = this.ageOf(d.ruler.born);
+    if (!d.heir && age >= 20 && age <= 50 && this.random() < (d.spouse !== undefined ? 0.5 : 0.25)) {
+      d.heir = { name: COMMANDER_NAMES[Math.floor(this.random() * COMMANDER_NAMES.length)], born: s.day };
+      this.log(`👶 Nasce ${d.heir.name}, erede del signore ${d.ruler.name}${d.spouse !== undefined ? ` e nipote del signore di ${this.lord(d.spouse)?.castle ?? 'un castello alleato'}` : ''}.`, 'good');
+    }
+    if (age < 52 || this.random() >= (age - 50) * 0.05) return;
+    // Il signore muore
+    const old = d.ruler.name;
+    if (d.heir && this.ageOf(d.heir.born) >= 16) {
+      d.ruler = d.heir;
+      delete d.heir;
+      this.log(`👑 Muore il signore ${old}. Sale al trono ${d.ruler.name}: la successione è serena.`, 'info');
+    } else if (d.heir) {
+      d.regencyUntil = s.day + (16 - this.ageOf(d.heir.born)) * DAYS_PER_YEAR;
+      this.log(`👑 Muore il signore ${old}: l'erede ${d.heir.name} è ancora un bambino e governa un reggente. Il popolo è inquieto.`, 'bad');
+      d.ruler = { name: d.heir.name, born: d.heir.born };
+      delete d.heir;
+    } else {
+      s.happiness = Math.max(0, this.happiness() - 18);
+      d.ruler = { name: COMMANDER_NAMES[Math.floor(this.random() * COMMANDER_NAMES.length)], born: s.day - 30 * DAYS_PER_YEAR };
+      const ally = d.spouse !== undefined ? this.lord(d.spouse) : undefined;
+      if (ally && ally.status !== 'war') {
+        ally.relation = Math.min(100, ally.relation + 10);
+        this.track('Dote e aiuti', () => (s.resources.coins += 150), 'event');
+        this.log(`👑 Muore il signore ${old} senza figli. I parenti di ${ally.castle} sostengono la successione di ${d.ruler.name} (+150 monete).`, 'bad');
+      } else {
+        const rival = this.lords().find((l) => l.status !== 'vassal' && l.relation < 25);
+        this.log(`👑 Muore il signore ${old} senza figli: crisi di successione, il popolo è scosso.${rival ? ` ${rival.name} avanza pretese sul castello!` : ''}`, 'bad');
+        if (rival) {
+          rival.relation -= 30;
+          this.remember(rival, 'Pretendeva il nostro castello', -8);
+          if (rival.personality === 'aggressive') this.declareWar(rival, 'Rivendica la successione');
+        }
+      }
+    }
+  }
+
   /** Eventi stagionali in corso. */
   activeEvents(): ActiveEvent[] {
     return (this.state.events ?? []).filter((e) => e.until > this.state.day);
@@ -1101,8 +1161,15 @@ export class Game {
   }
 
   /** Moltiplicatore della resa di campi e pascoli dovuto agli eventi. */
+  private evDay = -1;
+  private evFactor = 1;
   private farmEventFactor(): number {
-    return (this.hasEvent('poor_harvest') ? 0.55 : 1) * (this.hasEvent('bumper') ? 1.4 : 1) * (this.hasEvent('flood') ? 0.7 : 1);
+    const d = Math.floor(this.state.day);
+    if (d !== this.evDay) {
+      this.evDay = d;
+      this.evFactor = (this.hasEvent('poor_harvest') ? 0.55 : 1) * (this.hasEvent('bumper') ? 1.4 : 1) * (this.hasEvent('flood') ? 0.7 : 1);
+    }
+    return this.evFactor;
   }
 
   /** Ogni tanto una stagione porta un fatto fuori dall'ordinario: la prudenza (scorte, varietà) lo attutisce. */
@@ -1185,10 +1252,13 @@ export class Game {
     const date = dateFromDays(s.day);
     const si = seasonIndex(date.season);
 
-    if (date.year !== this.lastYear) this.onNewYear(date.year);
+    if (date.year !== this.lastYear) {
+      this.onNewYear(date.year);
+      if (!this.locked) this.stepDynasty();
+    }
     if (Math.floor(s.day) !== this.lastGoalDay) {
       this.lastGoalDay = Math.floor(s.day);
-      this.checkGoals(eraIndexOf(date.year));
+      if (this.lastGoalDay % 4 === 0) this.checkGoals(eraIndexOf(date.year));
       this.stepEvents(si);
       if (Math.floor(s.day) % 3 === 0 && !this.locked) this.stepPlans();
     }
@@ -2195,10 +2265,12 @@ export class Game {
         if (accept && target) {
           this.track('Diplomazia', () => (r.coins += p.coins ?? 0), 'event');
           l.relation += 20;
+          this.remember(l, 'Siamo scesi in guerra al suo fianco', 14);
           this.declareWar(target, `Ci siamo uniti a ${l.name}`);
           msg = `Siamo in guerra con ${target.name} al fianco di ${l.name} (+${p.coins} monete).`;
         } else {
           l.relation -= 8;
+          this.remember(l, 'Ha rifiutato di aiutarlo in guerra', -9);
           msg = `Rifiutiamo di entrare in guerra: ${l.name} è deluso.`;
         }
         break;
@@ -2208,10 +2280,13 @@ export class Game {
         if (accept) {
           l.status = 'alliance';
           l.relation += 15;
+          this.remember(l, p.kind === 'marriage' ? 'Nozze tra le nostre case' : 'Ha accettato l\'alleanza', p.kind === 'marriage' ? 18 : 10);
+          if (p.kind === 'marriage') this.marryInto(l);
           if (p.kind === 'marriage') this.track('Diplomazia', () => (r.coins += p.coins ?? 0), 'event');
           msg = p.kind === 'marriage' ? `Nozze celebrate: ${l.name} è nostro alleato (dote ${p.coins} monete).` : `Alleanza con ${l.name}!`;
         } else {
           l.relation -= p.kind === 'marriage' ? 12 : 5;
+          this.remember(l, 'Ha rifiutato la sua proposta', -6);
           msg = `Proposta di ${l.name} rifiutata.`;
         }
         break;
@@ -2222,6 +2297,7 @@ export class Game {
           msg = `Pagato il tributo a ${l.name}.`;
         } else {
           l.relation -= 20;
+          this.remember(l, 'Ha rifiutato il tributo', -14);
           msg = `Rifiutiamo il tributo: ${l.name} è furioso.`;
           if (l.relation < -45 || l.personality === 'aggressive') this.declareWar(l, 'Abbiamo rifiutato il tributo');
         }
@@ -2233,6 +2309,7 @@ export class Game {
             for (const [gid, gn] of Object.entries(p.goods ?? {})) r[gid as ResourceId] += gn ?? 0;
           }, 'event');
           l.relation += 4;
+          this.remember(l, 'Un buon affare', 3);
           l.wealth -= p.coins ?? 0;
           msg = `Affare concluso con ${l.name}.`;
         } else msg = `Nessun accordo con ${l.name}.`;
@@ -2240,6 +2317,7 @@ export class Game {
       case 'spy':
         if (accept) {
           l.relation -= 10;
+          this.remember(l, 'Ha catturato la sua spia', -6);
           // La spia, interrogata, rivela il castello del suo signore
           this.revealAround(...this.lordKeep(l), 11);
           msg = `La spia di ${l.name} è in catene: ora conosciamo il suo castello.`;
@@ -2251,6 +2329,29 @@ export class Game {
     }
     if (msg) this.log(`📜 ${msg}`, accept ? 'good' : 'info');
     return msg;
+  }
+
+  // ───────────── Memoria dei signori ─────────────
+
+  /** Il signore ricorda un fatto: pesa sul suo atteggiamento per qualche anno. */
+  private remember(l: Lord, text: string, w: number) {
+    const m = (l.memory ??= []);
+    m.unshift({ day: this.state.day, text, w });
+    m.length = Math.min(m.length, 8);
+  }
+
+  /** Quanto i ricordi spingono il rapporto (da -30 a +30): dimezzano ogni tre anni. */
+  memoryBias(l: Lord): number {
+    let b = 0;
+    for (const m of l.memory ?? []) b += m.w * Math.pow(0.5, (this.state.day - m.day) / 1080);
+    return Math.max(-30, Math.min(30, b));
+  }
+
+  /** Ricordi ancora vivi, per l'interfaccia. */
+  memoriesOf(l: Lord): Array<{ text: string; w: number; years: number }> {
+    return (l.memory ?? [])
+      .filter((m) => Math.abs(m.w) * Math.pow(0.5, (this.state.day - m.day) / 1080) >= 1)
+      .map((m) => ({ text: m.text, w: m.w, years: Math.floor((this.state.day - m.day) / 360) }));
   }
 
   /** Le proposte scadute valgono come rifiuto (i tributi ignorati irritano). */
@@ -4011,6 +4112,7 @@ export class Game {
     l.status = 'war';
     l.relation = Math.min(l.relation, -60);
     this.log(`⚔️ Guerra con ${l.name} di ${l.castle}! ${why}.`, 'bad');
+    this.remember(l, wasAlly ? 'Ha tradito un patto con lui' : `Guerra: ${why.toLowerCase()}`, wasAlly ? -25 : -10);
     // Tradire un patto rovina la reputazione presso gli altri signori
     if (wasAlly) for (const o of this.lords()) if (o !== l) o.relation -= 15;
   }
@@ -4059,7 +4161,7 @@ export class Game {
       const eco = this.lordEconomy(l, year, si);
       if (!this.locked && this.lordWorks(l, year, si, eco.fed, eco.builders)) dirty = true;
       // Il rapporto torna lentamente verso il carattere del signore
-      const base = l.status === 'alliance' ? Math.max(p.base, 40) : l.status === 'war' ? Math.min(p.base, -40) : p.base;
+      const base = (l.status === 'alliance' ? Math.max(p.base, 40) : l.status === 'war' ? Math.min(p.base, -40) : p.base) + this.memoryBias(l);
       l.relation += Math.sign(base - l.relation) * Math.min(Math.abs(base - l.relation), 0.08);
       l.relation = Math.max(-100, Math.min(100, l.relation));
       // Cambi di stato
@@ -4557,6 +4659,7 @@ export class Game {
     else if (crowd < 0.85) parts.push(['Case spaziose', 4]);
     if (this.has((d) => !!d.market)) parts.push(['Mercato', 5]);
     if (this.fx().mood) parts.push([`${this.faction()!.name}`, this.fx().mood!]);
+    if ((this.state.dynasty?.regencyUntil ?? 0) > this.state.day) parts.push(['Reggenza (erede bambino)', -8]);
     const ag = this.state.agitation;
     if (ag && this.state.day < ag.until) parts.push([`Agitatori di ${this.lord(ag.lord)?.name ?? 'un signore'}`, -10]);
     if (this.state.lastSiege && this.state.day - this.state.lastSiege.day < 120 && this.state.lastSiege.outcome !== 'repelled') {
