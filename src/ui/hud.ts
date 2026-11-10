@@ -60,7 +60,8 @@ export interface HudCallbacks {
 }
 
 type Tab = 'build' | 'castle' | 'works' | 'army' | 'market' | 'realm' | 'diplomacy';
-const SPEEDS = [0, 1, 2, 4, 8, 16];
+const SPEEDS = [0, 1, 3, 8];
+const SPEED_ICONS: Record<number, string> = { 0: '⏸', 1: '▶', 3: '⏩', 8: '⏭' };
 
 export class Hud {
   private top: HTMLElement;
@@ -107,7 +108,7 @@ export class Hud {
     this.saveEl = el('span', { class: 'muted small' });
     const speeds = el('div', { class: 'speeds' });
     SPEEDS.forEach((s) => {
-      const b = el('button', { text: s === 0 ? '⏸' : `${s}×`, title: s === 0 ? 'Pausa (spazio)' : `Velocità ${s}×` });
+      const b = el('button', { text: SPEED_ICONS[s], title: s === 0 ? 'Pausa (spazio)' : `Velocità ${s}× (rallenta da sola se c'è un pericolo)` });
       b.onclick = () => cb.onSpeed(s);
       this.speedBtns.push(b);
       speeds.append(b);
@@ -885,6 +886,18 @@ export class Hud {
       if (!t) return;
       const ids = (t.dataset.ids ?? '').split(',').map(Number);
       if (t.dataset.act === 'prio') g.prioritizeSimilar(ids[0]);
+      else if (t.dataset.act === 'pause') {
+        const on = t.dataset.on === '1';
+        for (const id of ids) g.setJobPaused(id, on);
+      } else if (t.dataset.act === 'crew') {
+        const dlt = Number(t.dataset.d);
+        for (const id of ids) {
+          const j = g.jobs().find((x) => x.id === id);
+          if (!j) continue;
+          const cur = j.crew ?? g.crewCap(g.jobDef(j) ?? '');
+          g.setJobCrew(id, Math.max(1, cur + dlt));
+        }
+      } else if (t.dataset.act === 'plan') g.togglePlan(t.dataset.def ?? '');
       else if (t.dataset.act === 'cancel') {
         let n = 0;
         for (const id of ids) if (g.cancelJob(id)) n++;
@@ -912,11 +925,12 @@ export class Hud {
         <p class="small">Rendimento lavori in pietra: ${rate(true)}<br>Rendimento lavori in legno: ${rate(false)}</p>`,
       );
       // Lavori raggruppati per tipo (un tratto di mura è un gruppo solo)
-      const groups = new Map<string, { name: string; ids: number[]; work: number; done: number; crew: number; eta: number | null }>();
+      const groups = new Map<string, { name: string; ids: number[]; work: number; done: number; crew: number; eta: number | null; paused: boolean }>();
       for (const j of g.jobs()) {
         const name = g.jobName(j);
         const k = `${j.kind}|${name}`;
-        const e = groups.get(k) ?? { name, ids: [], work: 0, done: 0, crew: 0, eta: 0 };
+        const e = groups.get(k) ?? { name, ids: [], work: 0, done: 0, crew: 0, eta: 0, paused: true };
+        e.paused = e.paused && !!j.paused;
         e.ids.push(j.id);
         e.work += j.work;
         e.done += j.done;
@@ -929,16 +943,28 @@ export class Hud {
         const pct = Math.round((e.done / e.work) * 100);
         return `<div class="work">
           <div class="row"><strong>${escapeHtml(e.name)}${e.ids.length > 1 ? ` ×${e.ids.length}` : ''}</strong><span class="spacer"></span>
+            <button data-act="crew" data-d="-1" data-ids="${e.ids.join(',')}" title="Squadra più piccola: i costruttori vanno ad altri lavori">👷−</button>
+            <button data-act="crew" data-d="1" data-ids="${e.ids.join(',')}" title="Squadra più grande">👷+</button>
+            <button data-act="pause" data-on="${e.paused ? 0 : 1}" data-ids="${e.ids.join(',')}" title="${e.paused ? 'Riprendi' : 'Sospendi: libera i costruttori'}">${e.paused ? '▶' : '⏸'}</button>
             <button data-act="prio" data-ids="${e.ids.join(',')}" title="Porta in cima alla coda">⏫</button>
             <button data-act="cancel" data-ids="${e.ids.join(',')}" title="Annulla (rimborso dei materiali non ancora usati)">✕</button></div>
           <div class="hp"><div class="hp-bar build" style="width:${pct}%"></div></div>
-          <p class="small muted">${pct}% · ${e.crew ? `👷 ${e.crew}` : '⏳ in coda'}${e.eta !== null ? ` · fine tra circa ${formatDuration(e.eta)}` : ' · fermo'}</p>
+          <p class="small muted">${pct}% · ${e.paused ? '⏸ sospeso' : e.crew ? `👷 ${e.crew}` : '⏳ in coda'}${e.eta !== null ? ` · fine tra circa ${formatDuration(e.eta)}` : ' · fermo'}</p>
         </div>`;
       });
       setHtml(
         list,
         `<h4>🏗️ Lavori in corso (${g.jobs().length})</h4>${rows.length ? rows.join('') : '<p class="small muted">Nessun lavoro. Scegli un edificio dal menu Costruisci, oppure seleziona una fortificazione per trasformarla o migliorarla.</p>'}
-        <p class="small muted">I lavori procedono nell'ordine della coda. D'inverno la malta gela: le opere in pietra quasi si fermano.</p>`,
+        <p class="small muted">I lavori procedono nell'ordine della coda. D'inverno la malta gela: le opere in pietra quasi si fermano. Entro 14 caselle da una loggia dei muratori si lavora il 15% più in fretta. Con 👷 scegli quanti costruttori assegnare a ogni lavoro.</p>
+        <h4>📋 Piani di cantiere</h4>
+        <p class="small muted">Un piano trasforma da solo le mura appena ci sono epoca, livello e materiali.</p>
+        ${['palisade', 'palisade_double', 'wall_rubble', 'wall_stone', 'wall_curtain']
+          .map((id) => {
+            const on = g.plans().some((p) => p.defId === id);
+            const to = getBuilding(getBuilding(id).evolvesTo ?? id).name;
+            return `<div class="row"><span>${getBuilding(id).icon} ${escapeHtml(getBuilding(id).name)} → ${escapeHtml(to)}</span><span class="spacer"></span><button data-act="plan" data-def="${id}" class="${on ? 'active' : ''}">${on ? 'Attivo' : 'Attiva'}</button></div>`;
+          })
+          .join('')}`,
       );
     };
   }

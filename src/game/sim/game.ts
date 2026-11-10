@@ -55,6 +55,7 @@ import {
   type OffensiveSiege,
   type PlacedBuilding,
   type ActiveEvent,
+  type WallPlan,
   type SeasonEventId,
 } from './state';
 
@@ -789,7 +790,8 @@ export class Game {
     if (missing <= 0) return {};
     const cost: Cost = {};
     for (const [id, n] of Object.entries(getBuilding(b.defId).cost)) {
-      cost[id as ResourceId] = Math.ceil((n ?? 0) * 0.6 * missing);
+      // Di una rovina restano le pietre: si ricostruisce con meno materiali
+      cost[id as ResourceId] = Math.ceil((n ?? 0) * (this.hpState(b) === 'ruin' ? 0.4 : 0.6) * missing);
     }
     return cost;
   }
@@ -1187,6 +1189,7 @@ export class Game {
       this.lastGoalDay = Math.floor(s.day);
       this.checkGoals(eraIndexOf(date.year));
       this.stepEvents(si);
+      if (Math.floor(s.day) % 3 === 0 && !this.locked) this.stepPlans();
     }
     if (si !== this.lastSeasonIndex) this.track('Macellazione d\'inverno', () => this.onNewSeason(si), 'event');
 
@@ -4984,7 +4987,7 @@ export class Game {
     return { rate: parts.reduce((r, [, v]) => r * v, 1), parts };
   }
 
-  private jobDef(j: BuildJob): string | undefined {
+  jobDef(j: BuildJob): string | undefined {
     if (j.kind === 'build') return this.siteByUid(j.uid)?.defId;
     return this.byUid(j.uid)?.defId;
   }
@@ -5006,6 +5009,7 @@ export class Game {
     const rateWood = this.builderRate(false).rate;
     let used = 0;
     const finished: BuildJob[] = [];
+    const lodges = this.state.buildings.filter((b) => b.defId === 'mason_lodge');
     for (const j of jobs) {
       if (free <= 0) break;
       const defId = this.jobDef(j);
@@ -5013,11 +5017,15 @@ export class Game {
         finished.push(j);
         continue;
       }
-      const crew = Math.min(free, this.crewCap(defId));
+      if (j.paused) continue;
+      const crew = Math.min(free, this.crewCap(defId), j.crew ?? Infinity);
       free -= crew;
       used += crew;
       this.lastCrew.set(j.id, crew);
-      j.done += crew * (this.isStoneJob(j) ? rateStone : rateWood) * dt;
+      // Vicino a una loggia dei muratori si lavora più in fretta (attrezzi e argani a portata di mano)
+      const at = lodges.length ? this.byUid(j.uid) ?? this.siteByUid(j.uid) : undefined;
+      const near = at && lodges.some((l) => Math.abs(l.x - at.x) + Math.abs(l.z - at.z) <= 14) ? 1.15 : 1;
+      j.done += crew * (this.isStoneJob(j) ? rateStone : rateWood) * near * dt;
       if (j.done >= j.work) finished.push(j);
       else {
         const stage = Math.min(3, Math.floor((j.done / j.work) * 4));
@@ -5135,6 +5143,44 @@ export class Game {
     }
     this.changed();
     return true;
+  }
+
+  /** Squadra di un lavoro: limita i costruttori che ci lavorano (undefined = quanti ne servono). */
+  setJobCrew(id: number, crew: number | undefined) {
+    const j = this.jobs().find((x) => x.id === id);
+    if (!j) return;
+    const cap = this.crewCap(this.jobDef(j) ?? '');
+    if (crew === undefined || crew >= cap) delete j.crew;
+    else j.crew = Math.max(1, Math.floor(crew));
+  }
+
+  setJobPaused(id: number, paused: boolean) {
+    const j = this.jobs().find((x) => x.id === id);
+    if (!j) return;
+    if (paused) j.paused = true;
+    else delete j.paused;
+  }
+
+  // ───────────── Piani di evoluzione delle mura ─────────────
+
+  plans(): WallPlan[] {
+    return this.state.plans ?? [];
+  }
+
+  /** Attiva o spegne il piano "evolvi da solo questo tipo di mura quando ci sono i materiali". */
+  togglePlan(defId: string): boolean {
+    const plans = (this.state.plans ??= []);
+    const i = plans.findIndex((p) => p.defId === defId);
+    if (i >= 0) plans.splice(i, 1);
+    else plans.push({ defId });
+    return i < 0;
+  }
+
+  private stepPlans() {
+    for (const p of this.plans()) {
+      const n = this.evolveAll(p.defId);
+      if (n > 0) this.log(`📋 Piano di cantiere: avviata la trasformazione di ${n} ${getBuilding(p.defId).name.toLowerCase()} (${getBuilding(getBuilding(p.defId).evolvesTo ?? p.defId).name.toLowerCase()}).`, 'info');
+    }
   }
 
   /** Porta un lavoro in cima alla coda. */

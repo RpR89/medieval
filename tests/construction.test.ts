@@ -148,3 +148,37 @@ describe('evoluzione delle mura', () => {
     expect(g.canUpgrade(w, 'hoarding_wall').ok).toBe(true);
   });
 });
+
+describe('squadre, sospensioni e piani', () => {
+  it('una squadra limitata e un lavoro sospeso liberano costruttori per gli altri', () => {
+    const g = site();
+    g.setBuilders(6);
+    const t1 = g.place('tower_wood', 10, 10)!;
+    const t2 = g.place('tower_wood', 14, 10)!;
+    g.setJobCrew(g.jobFor(t1.uid)!.id, 2);
+    g.advance(1);
+    expect(g.lastCrew.get(g.jobFor(t1.uid)!.id)).toBe(2);
+    expect(g.lastCrew.get(g.jobFor(t2.uid)!.id)).toBe(2);
+    g.setJobPaused(g.jobFor(t1.uid)!.id, true);
+    const done = g.jobFor(t1.uid)!.done;
+    g.advance(2);
+    expect(g.jobFor(t1.uid)!.done).toBe(done);
+    expect(g.lastCrew.get(g.jobFor(t2.uid)!.id)).toBe(4);
+  });
+
+  it('un piano evolve da solo le mura quando ci sono i materiali', () => {
+    const g = site(1200);
+    g.levelOverride = 3;
+    g.instantBuild = true;
+    for (let x = 10; x < 14; x++) g.place('wall_rubble', x, 10);
+    g.instantBuild = false;
+    g.state.resources.lime = 0;
+    expect(g.togglePlan('wall_rubble')).toBe(true);
+    g.advance(7);
+    expect(g.jobs()).toHaveLength(0);
+    g.state.resources.lime = 1e4;
+    g.advance(7);
+    expect(g.jobs().length).toBeGreaterThan(0);
+    expect(g.togglePlan('wall_rubble')).toBe(false);
+  });
+});

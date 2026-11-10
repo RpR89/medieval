@@ -44,6 +44,15 @@ export interface BuildJob {
   done: number;
   /** Materiali già pagati (rimborsati se si annulla). */
   cost: Cost;
+  /** Squadra: al massimo quanti costruttori ci lavorano (se assente, quanti ne servono). */
+  crew?: number;
+  /** Sospeso: non avanza e libera i costruttori per altri lavori. */
+  paused?: boolean;
+}
+
+/** Piano permanente: evolve da solo le mura di un tipo appena ci sono i materiali. */
+export interface WallPlan {
+  defId: string;
 }
 
 /** Rapporto dell'ultimo assedio, per l'interfaccia. */
@@ -250,6 +259,8 @@ export interface GameState {
   goalsDone?: string[];
   /** Eventi stagionali in corso (carestie, epidemie, raccolti…). */
   events?: ActiveEvent[];
+  /** Piani di evoluzione automatica delle mura. */
+  plans?: WallPlan[];
   nextEventDay?: number;
   /** Nostro assedio in corso a un signore. */
   offense?: OffensiveSiege;

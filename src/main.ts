@@ -385,7 +385,9 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
     const dt = Math.min(0.25, (now - last) / 1000);
     last = now;
     // In giocatore singolo, durante un assedio il tempo scorre più lento per seguirlo e decidere
-    const eff = ms ? ms.speed(speed) : speed * (game.siegeActive() ? SIEGE_TIME : 1);
+    // e prima di un pericolo vicino (predoni, nemici nel territorio) non va oltre la velocità normale
+    const danger = !ms && (game.enemiesInTerritory() > 0 || (game.state.incoming ?? []).some((a) => !a.resolved && a.arriveDay - game.state.day < 4) || game.daysToRaid() < 4);
+    const eff = ms ? ms.speed(speed) : Math.min(speed, danger ? 1 : speed) * (game.siegeActive() ? SIEGE_TIME : 1);
     if (eff > 0) game.advance((dt * eff) / SECONDS_PER_DAY);
     ms?.tick(now);
     if (now - lastHud > 200) {
