@@ -186,7 +186,7 @@ describe('sviluppo dei signori', () => {
     for (let d = 0; d < 360 * 170; d++) g.advance(1);
     for (const l of g.lords()) {
       const ids = new Set(l.buildings.map((b) => b.defId));
-      for (const id of ['market', 'barracks', 'smithy', 'pasture_cattle', 'tavern', 'barber']) expect(ids.has(id), `${l.name}: ${id}`).toBe(true);
+      for (const id of ['market', 'barracks', 'smithy', 'pasture_cattle', 'tavern', 'barber', 'square']) expect(ids.has(id), `${l.name}: ${id}`).toBe(true);
       expect(l.level, l.name).toBeGreaterThanOrEqual(3);
     }
   }, 60000);

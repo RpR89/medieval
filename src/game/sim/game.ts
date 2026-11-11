@@ -68,6 +68,30 @@ const EATING_ORDER: ResourceId[] = [...FOOD_IDS].sort(
 );
 
 const MAX_LOG = 60;
+
+type Flow = { food: number; wood: number; stone: number; lime: number; coins: number };
+interface LordAgg {
+  housing: number;
+  storage: number;
+  jobs: number;
+  foodJobs: number;
+  lodges: number;
+  herds: number;
+  quarry: boolean;
+  /** Produzione e consumo a pieno organico, separati tra campi (f) e botteghe (o), per stagione (4 = media). */
+  pf: Flow[];
+  po: Flow[];
+  uf: Flow[];
+  uo: Flow[];
+}
+/** Livello del castello (0-5) dal mastio e dai suoi ampliamenti. */
+function keepLevel(k: PlacedBuilding | undefined): number {
+  if (!k) return 0;
+  const u = k.upgrades ?? [];
+  if (k.defId === 'keep_wood') return u.includes('bailey') ? 2 : 1;
+  return u.includes('palace') ? 5 : u.includes('great_hall') ? 4 : 3;
+}
+
 /** Edifici di servizio ai cittadini. */
 const CIVIC_DEFS = BUILDINGS.filter((d) => d.civic);
 
@@ -1620,29 +1644,42 @@ export class Game {
   private tracking = false;
 
   /** Esegue fn e attribuisce alla voce (o alle voci, in proporzione) le variazioni delle risorse. */
+  /** Scorte prima di una voce del registro (le voci non si annidano: basta un solo buffer). */
+  private trackBuf = new Float64Array(RESOURCE_IDS.length);
+  /** Chiavi "risorsa|voce" già composte, per non creare stringhe a ogni passo. */
+  private flowKeys = new Map<string, string[]>();
+
   private track<T>(label: string | Array<[string, number]>, fn: () => T, kind: 'rate' | 'event' = 'rate'): T {
     if (this.tracking) return fn();
     const r = this.state.resources;
-    const before = RESOURCE_IDS.map((id) => r[id]);
+    const before = this.trackBuf;
+    for (let i = 0; i < RESOURCE_IDS.length; i++) before[i] = r[RESOURCE_IDS[i]];
     this.tracking = true;
     try {
       return fn();
     } finally {
       this.tracking = false;
-      const parts: Array<[string, number]> = typeof label === 'string' ? [[label, 1]] : label;
-      const tot = parts.reduce((s, [, w]) => s + w, 0) || 1;
-      RESOURCE_IDS.forEach((id, i) => {
+      let parts: Array<[string, number]> | null = null;
+      let tot = 1;
+      for (let i = 0; i < RESOURCE_IDS.length; i++) {
+        const id = RESOURCE_IDS[i];
         const d = r[id] - before[i];
-        if (Math.abs(d) < 1e-9) return;
+        if (Math.abs(d) < 1e-9) continue;
+        if (!parts) {
+          parts = typeof label === 'string' ? [[label, 1]] : label;
+          tot = parts.reduce((s, [, w]) => s + w, 0) || 1;
+        }
         for (const [l, w] of parts) {
           if (!w) continue;
           const amt = (d * w) / tot;
           if (kind === 'rate') {
-            const key = `${id}|${l}`;
+            let keys = this.flowKeys.get(l);
+            if (!keys) this.flowKeys.set(l, (keys = RESOURCE_IDS.map((x) => `${x}|${l}`)));
+            const key = keys[i];
             this.stepFlows.set(key, (this.stepFlows.get(key) ?? 0) + amt);
           } else this.flowEvents.push({ day: this.state.day, res: id, amount: amt, label: l });
         }
-      });
+      }
     }
   }
 
@@ -2869,6 +2906,11 @@ export class Game {
   }
 
   /** C'è un assedio in corso (subito o nostro)? */
+  /** Nemici nel territorio o in arrivo entro `days` giorni (predoni, eserciti, attacchi di altri giocatori). */
+  threatWithin(days: number): boolean {
+    return this.enemiesInTerritory() > 0 || (this.state.incoming ?? []).some((a) => !a.resolved && a.arriveDay - this.state.day < days) || this.daysToRaid() < days;
+  }
+
   siegeActive(): boolean {
     return !!this.state.siege || !!this.state.offense;
   }
@@ -3808,6 +3850,7 @@ export class Game {
     for (const l of this.lords()) {
       const lv = lordLevel(year, l.personality);
       l.buildings = lordCastle(this.terrain, this.terrain.sites[l.id], lv, this.state.seed + l.id * 101);
+      this.touchLord(l);
       l.nextUid = Math.max(l.nextUid, ...l.buildings.map((b) => b.uid + 1));
       l.pop = Math.max(l.pop ?? 0, 30 + lv * 20);
       l.jobs = [];
@@ -3823,11 +3866,7 @@ export class Game {
 
   /** Livello del castello di un signore, dal suo mastio. */
   private lordLevelOf(l: Lord): number {
-    const k = l.buildings.find((b) => getBuilding(b.defId).fort === 'keep');
-    if (!k) return 0;
-    const u = k.upgrades ?? [];
-    if (k.defId === 'keep_wood') return u.includes('bailey') ? 2 : 1;
-    return u.includes('palace') ? 5 : u.includes('great_hall') ? 4 : 3;
+    return keepLevel(l.buildings.find((b) => getBuilding(b.defId).fort === 'keep'));
   }
 
   private lordInit(l: Lord) {
@@ -3855,13 +3894,19 @@ export class Game {
     return this.terrainCheck(def, x, z).ok;
   }
 
+  private lordSpotHit = new Map<string, [number, number]>();
+
   /** Cerca un posto per un edificio: dentro la cinta (case) o fuori, a spirale. */
   private lordSpot(l: Lord, defId: string, inside: boolean): [number, number] | null {
     // Un posto cercato invano non si ricerca per un po' (la ricerca a spirale costa)
     const key = `${l.id}|${defId}|${inside}`;
     if ((this.lordNoSpot.get(key) ?? -1) > this.state.day) return null;
+    // Un posto trovato resta buono finché nessuno ci costruisce sopra
+    const hit = this.lordSpotHit.get(key);
+    if (hit && this.lordCanPlace(l, getBuilding(defId), hit[0], hit[1])) return hit;
     const found = this.lordSpotSearch(l, defId, inside);
     if (!found) this.lordNoSpot.set(key, this.state.day + 90);
+    else this.lordSpotHit.set(key, found);
     return found;
   }
 
@@ -3957,41 +4002,87 @@ export class Game {
   }
 
   /** Quanto produce e consuma il feudo di un signore (al giorno). */
-  private lordStats(l: Lord, si: number, avg = false) {
-    let housing = BASE_HOUSING + CASTLE_LEVELS[l.level].housing;
-    let storage = BASE_STORAGE + CASTLE_LEVELS[l.level].storage;
-    let jobs = 0;
-    let lodges = 0;
-    for (const b of l.buildings) {
-      const def = getBuilding(b.defId);
-      const le = levelEffects(b.level ?? 1);
-      housing += (def.housing ?? 0) * le.housing;
-      storage += (def.storage ?? 0) * le.storage;
-      jobs += def.workers * le.workers;
-      if (def.builders) lodges++;
-    }
-    const soldiers = l.army.infantry + l.army.archers + l.army.cavalry;
-    const builders = l.jobs!.length ? Math.max(2, Math.min(Math.floor(l.pop! * 0.3), BASE_BUILDERS + lodges * 6)) : 0;
-    const staffing = jobs ? Math.min(1, Math.max(0, l.pop! - builders) / jobs) : 1;
-    const prod = { food: 0, wood: 0, stone: 0, lime: 0, coins: 0 };
-    const use = { food: 0, wood: 0, stone: 0, lime: 0, coins: 0 };
-    const add = (o: typeof prod, id: string, v: number) => {
+  /** Revisione degli edifici di ogni signore: le statistiche si ricalcolano solo quando cambiano. */
+  private lordRev = new WeakMap<Lord, number>();
+  private lordAggCache = new WeakMap<Lord, { key: string; agg: LordAgg }>();
+
+  private touchLord(l: Lord) {
+    this.lordRev.set(l, (this.lordRev.get(l) ?? 0) + 1);
+  }
+
+  /** Somme sugli edifici del signore (alloggi, posti di lavoro, produzione a pieno organico per stagione). */
+  private lordAgg(l: Lord): LordAgg {
+    const key = `${this.lordRev.get(l) ?? 0}|${l.level}|${l.buildings.length}|${l.faction ?? ''}`;
+    const hit = this.lordAggCache.get(l);
+    if (hit && hit.key === key) return hit.agg;
+    const flows = () => Array.from({ length: 5 }, () => ({ food: 0, wood: 0, stone: 0, lime: 0, coins: 0 }));
+    const agg: LordAgg = {
+      housing: BASE_HOUSING + CASTLE_LEVELS[l.level].housing,
+      storage: BASE_STORAGE + CASTLE_LEVELS[l.level].storage,
+      jobs: 0,
+      foodJobs: 0,
+      lodges: 0,
+      herds: 0,
+      quarry: false,
+      pf: flows(),
+      po: flows(),
+      uf: flows(),
+      uo: flows(),
+    };
+    const lfx = factionEffects(l.faction).produce ?? {};
+    const add = (o: Flow, id: string, v: number) => {
       if (RESOURCES[id as ResourceId]?.food) o.food += v;
       else if (id === 'wood' || id === 'stone' || id === 'lime') o[id] += v;
       else if (id === 'gold') o.coins += v * 40;
     };
     for (const b of l.buildings) {
       const def = getBuilding(b.defId);
-      const k = staffing * (def.seasonal ? (avg ? def.seasonal.reduce((a, b) => a + b, 0) / 4 : def.seasonal[si]) : 1) * levelEffects(b.level ?? 1).production;
-      const lfx = factionEffects(l.faction).produce ?? {};
-      for (const [id, v] of Object.entries(def.produces ?? {})) add(prod, id, (v ?? 0) * k * (lfx[id as ResourceId] ?? 1));
-      for (const [id, v] of Object.entries(def.consumes ?? {})) add(use, id, (v ?? 0) * k);
-      if (def.herd) prod.food += 0.8;
+      const le = levelEffects(b.level ?? 1);
+      agg.housing += (def.housing ?? 0) * le.housing;
+      agg.storage += (def.storage ?? 0) * le.storage;
+      agg.jobs += def.workers * le.workers;
+      const feeds = def.category === 'farming' || def.category === 'animals' || def.id === 'fisher' || def.id === 'hunter';
+      if (feeds) agg.foodJobs += def.workers * le.workers;
+      if (def.builders) agg.lodges++;
+      if (def.herd) agg.herds++;
+      if (def.id === 'quarry') agg.quarry = true;
+      if (!def.produces && !def.consumes) continue;
+      // Stagioni 0-3 e, all'indice 4, la media dell'anno
+      for (let i = 0; i < 5; i++) {
+        const k = (def.seasonal ? (i === 4 ? def.seasonal.reduce((x, y) => x + y, 0) / 4 : def.seasonal[i]) : 1) * le.production;
+        for (const [id, v] of Object.entries(def.produces ?? {})) add((feeds ? agg.pf : agg.po)[i], id, (v ?? 0) * k * (lfx[id as ResourceId] ?? 1));
+        for (const [id, v] of Object.entries(def.consumes ?? {})) add((feeds ? agg.uf : agg.uo)[i], id, (v ?? 0) * k);
+      }
     }
+    this.lordAggCache.set(l, { key, agg });
+    return agg;
+  }
+
+  /** Quanto produce e consuma il feudo di un signore (al giorno). */
+  private lordStats(l: Lord, si: number, avg = false) {
+    const a = this.lordAgg(l);
+    const soldiers = l.army.infantry + l.army.archers + l.army.cavalry;
+    const builders = l.jobs!.length ? Math.max(2, Math.min(Math.floor(l.pop! * 0.3), BASE_BUILDERS + a.lodges * 6)) : 0;
+    // Prima si mandano le braccia nei campi e nei pascoli, poi nelle botteghe
+    const hands = Math.max(0, l.pop! - builders);
+    const fs = a.foodJobs ? Math.min(1, hands / a.foodJobs) : 1;
+    const otherJobs = a.jobs - a.foodJobs;
+    const os = otherJobs > 0 ? Math.min(1, Math.max(0, hands - a.foodJobs) / otherJobs) : 1;
+    const i = avg ? 4 : si;
+    const mix = (f: Flow, o: Flow) => ({
+      food: f.food * fs + o.food * os,
+      wood: f.wood * fs + o.wood * os,
+      stone: f.stone * fs + o.stone * os,
+      lime: f.lime * fs + o.lime * os,
+      coins: f.coins * fs + o.coins * os,
+    });
+    const prod = mix(a.pf[i], a.po[i]);
+    const use = mix(a.uf[i], a.uo[i]);
+    prod.food += a.herds * 0.8;
     // Senza una cava (niente roccia nei dintorni) la pietra si compra dai mercanti: un rivolo costante
-    if (!l.buildings.some((b) => b.defId === 'quarry')) prod.stone += 0.3;
+    if (!a.quarry) prod.stone += 0.3;
     use.food += l.pop! * FOOD_PER_PERSON + soldiers * SOLDIER_FOOD + builders * BUILDER_FOOD;
-    return { housing, storage, builders, lodges, prod, use, soldiers };
+    return { housing: a.housing, storage: a.storage, builders, lodges: a.lodges, prod, use, soldiers };
   }
 
   /** Un giorno di economia del signore: produzione, cibo, tasse, popolazione, esercito. */
@@ -4014,7 +4105,8 @@ export class Game {
     r.food += st.prod.food * (blockaded ? 0.15 : 1);
     const fed = st.use.food > 0 ? Math.min(1, r.food / st.use.food) : 1;
     r.food = Math.max(0, r.food - st.use.food);
-    if (fed > 0.95 && l.pop! < st.housing) l.pop! += 0.006 + l.pop! * 0.00013; // come la nostra gente
+    // Come la nostra gente con una dieta varia e un popolo contento (i signori non gestiscono questi dettagli)
+    if (fed > 0.95 && l.pop! < st.housing) l.pop! += (0.006 + l.pop! * 0.00013) * 1.6;
     else if (fed < 0.8) l.pop! = Math.max(5, l.pop! - l.pop! * 0.012 * (1 - fed));
     l.pop! = Math.min(l.pop!, st.housing + 2);
     for (const k of ['food', 'wood', 'stone', 'lime'] as const) r[k] = Math.max(0, Math.min(st.storage, r[k]));
@@ -4024,7 +4116,8 @@ export class Game {
     const taxes = l.pop! * TAX_PER_PERSON * 1.1;
     const target = Math.min((3 + l.level * 8 + l.pop! * 0.12 + (year - 900) / 15) * p.army, (taxes * 0.45 * p.army) / 0.12 + 3);
     const total = st.soldiers;
-    if (total < target && l.wealth > 80 + this.lordSaving(l) && l.pop! > 15 && fed > 0.8) {
+    // Non si svuotano i campi per arruolare: servono almeno 25 abitanti e i soldati restano sotto un terzo di loro
+    if (total < target && total < l.pop! * 0.35 && l.wealth > 80 + this.lordSaving(l) && l.pop! > 25 && fed > 0.8) {
       const add = Math.min(Math.max(0.05, (target - total) * 0.02), l.wealth / 12);
       l.army.infantry += add * 0.6;
       l.army.archers += add * 0.28;
@@ -4111,7 +4204,7 @@ export class Game {
     }
     // 2. Cibo
     // Cibo: produzione media dell'anno con margine per l'inverno (e scorte basse = urgenza)
-    if ((st.prod.food < st.use.food * 1.5 || l.res!.food < st.use.food * 60) && this.lordCount(l, 'field_grain', 'field_vegetables', 'fisher') < 12 + lv * 5) {
+    if ((st.prod.food < st.use.food * 1.3 || (l.res!.food < st.use.food * 30 && st.prod.food < st.use.food * 1.6)) && this.lordCount(l, 'field_grain', 'field_vegetables', 'fisher') < 18 + lv * 10) {
       const fields = this.lordCount(l, 'field_grain', 'field_vegetables');
       if (fields >= 3 && this.lordCount(l, 'fisher') < 1) {
         const a = build('fisher', this.lordSpot(l, 'fisher', false));
@@ -4296,6 +4389,7 @@ export class Game {
       if (j.done >= j.work) finished.push(j);
       else if (j.kind === 'build' && Math.floor((j.done / j.work) * 4) !== before) dirty = true;
     }
+    if (finished.length) this.touchLord(l);
     for (const j of finished) {
       l.jobs = l.jobs!.filter((x) => x !== j);
       dirty = true;
@@ -4924,12 +5018,7 @@ export class Game {
   }
 
   castleLevel(): number {
-    if (this.levelOverride !== undefined) return this.levelOverride;
-    const k = this.ownKeep();
-    if (!k) return 0;
-    const u = k.upgrades ?? [];
-    if (k.defId === 'keep_wood') return u.includes('bailey') ? 2 : 1;
-    return u.includes('palace') ? 5 : u.includes('great_hall') ? 4 : 3;
+    return this.levelOverride ?? keepLevel(this.ownKeep());
   }
 
   /** Si può trasformare la motta in mastio di pietra (dal livello 2 al 3)? */

@@ -285,7 +285,7 @@ describe('ponte levatoio e strade', () => {
     expect(g.roadBonus(field)).toBe(1);
     const gate = g.buildingAt(23, 21)!;
     gate.upgrades = [...(gate.upgrades ?? []), 'drawbridge'];
-    (g as unknown as { changed(): void }).changed();
+    g.invalidate();
     expect(g.roadBonus(field)).toBeGreaterThan(1);
   });
 });

@@ -389,17 +389,13 @@ async function startGame(app: HTMLElement, session: Session, state: GameState, m
     last = now;
     // In giocatore singolo, durante un assedio il tempo scorre più lento per seguirlo e decidere
     // e prima di un pericolo vicino (predoni, nemici nel territorio) non va oltre la velocità normale
-    const danger = !ms && (game.enemiesInTerritory() > 0 || (game.state.incoming ?? []).some((a) => !a.resolved && a.arriveDay - game.state.day < 4) || game.daysToRaid() < 4);
-    const eff = ms ? ms.speed(speed) : Math.min(speed, danger ? 1 : speed) * (game.siegeActive() ? SIEGE_TIME : 1);
+    const eff = ms ? ms.speed(speed) : (game.threatWithin(4) ? Math.min(speed, 1) : speed) * (game.siegeActive() ? SIEGE_TIME : 1);
     if (eff > 0) game.advance((dt * eff) / SECONDS_PER_DAY);
     ms?.tick(now);
     if (now - lastHud > 200) {
       lastHud = now;
       // Atmosfera musicale: stagione, oppure pericolo se ci sono nemici vicini
-      const danger =
-        game.enemiesInTerritory() > 0 ||
-        (game.state.incoming ?? []).some((a) => !a.resolved && a.arriveDay - game.state.day < 6) ||
-        game.daysToRaid() < 8;
+      const danger = game.threatWithin(8);
       // In battaglia: assedio in corso, nemici nel territorio o reparti impegnati
       const battle = game.siegeActive() || game.enemiesInTerritory() > 0 || (game.state.companies ?? []).some((c) => c.engaged);
       music.setMood(moodFor(game.date.season, danger, { battle, night: view.night() }));

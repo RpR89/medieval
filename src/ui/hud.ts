@@ -674,12 +674,13 @@ export class Hud {
         return b;
       }),
     );
+    const wagons = comps.reduce((a, c) => a + (c.wagons ?? 0), 0);
     this.compPanel.replaceChildren(
       el('div', { class: 'row' }, el('strong', { text: comps.length === 1 ? '🚩 Reparto' : `🚩 ${comps.length} reparti` }), el('span', { class: 'spacer' })),
       ...comps.filter((c) => c.cmd).map((c) => el('p', { class: 'small', text: `🎖️ ${c.cmd!.name} · +${Math.round(c.cmd!.skill * 100)}% · ${c.cmd!.wins} vittorie` })),
       el('p', {
         class: 'small',
-        text: `${t.infantry} 🛡️ fanti · ${t.archers} 🏹 arcieri · ${t.cavalry} 🐎 cavalieri${t.rams ? ` · ${t.rams} 🪵 arieti` : ''}${t.trebuchets ? ` · ${t.trebuchets} 🎯 trabucchi` : ''}${comps.reduce((a, c) => a + (c.wagons ?? 0), 0) ? ` · ${comps.reduce((a, c) => a + (c.wagons ?? 0), 0)} 🛒 carri` : ''}${cargo ? ` · 💰 bottino ${Math.round(cargo)}` : ''}`,
+        text: `${t.infantry} 🛡️ fanti · ${t.archers} 🏹 arcieri · ${t.cavalry} 🐎 cavalieri${t.rams ? ` · ${t.rams} 🪵 arieti` : ''}${t.trebuchets ? ` · ${t.trebuchets} 🎯 trabucchi` : ''}${wagons ? ` · ${wagons} 🛒 carri` : ''}${cargo ? ` · 💰 bottino ${Math.round(cargo)}` : ''}`,
       }),
       el('p', { class: 'small muted', text: comps.some((c) => c.engaged) ? 'In battaglia…' : `${FORMATIONS[curF].description}` }),
       el('p', {
