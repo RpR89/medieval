@@ -37,6 +37,8 @@ export interface Lord {
   friends?: number[];
   /** Signore di cui è diventato vassallo. */
   liege?: number;
+  /** Prossima spedizione possibile contro un altro signore. */
+  nextRaid?: number;
   /** Prossima mossa di intrighi e diplomazia. */
   nextIntrigue?: number;
   /** Prossima proposta possibile al giocatore. */

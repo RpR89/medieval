@@ -54,7 +54,7 @@ export const WAGON = {
   icon: '🛒',
   cost: { wood: 40, coins: 25 },
   /** Unità di cibo trasportate. */
-  capacity: 500,
+  capacity: 250,
   /** Caselle al giorno (prima della scala del tempo): poco più lento dei fanti. */
   speed: 1.0,
 };

@@ -1,13 +1,13 @@
 /** Calendario di gioco: a velocità 1× un giorno dura SECONDS_PER_DAY secondi reali. */
-/** Una stagione (90 giorni) dura 2,5 minuti a velocità 1×. */
 /**
- * Il tempo scorre 5 volte più veloce di prima: una stagione dura 30 secondi, un anno 2 minuti.
- * Movimenti degli eserciti e lavori dei costruttori sono riscalati con TIME_SCALE.
+ * A velocità 1× una stagione dura un minuto, un anno quattro. Il calendario non è realistico (come i giorni):
+ * l'economia è bilanciata per stagione, mentre la marcia degli eserciti è riscalata con TIME_SCALE
+ * per avere la stessa velocità in tempo reale.
  */
-export const TIME_SCALE = 5;
+export const TIME_SCALE = 2.5;
 export const SECONDS_PER_DAY = 150 / 90 / TIME_SCALE;
 /** Durante un assedio (giocatore singolo) il tempo scorre a questa frazione della velocità scelta. */
-export const SIEGE_TIME = 0.3;
+export const SIEGE_TIME = 0.5;
 export const DAYS_PER_SEASON = 90;
 export const DAYS_PER_YEAR = DAYS_PER_SEASON * 4;
 export const START_YEAR = 900;
@@ -103,9 +103,9 @@ export const WEATHER: Record<WeatherId, { name: string; icon: string }> = {
   snow: { name: 'Neve', icon: '🌨️' },
 };
 
-/** Tempo di un giorno: deterministico (uguale per tutti i giocatori), cambia ogni due giorni. */
+/** Tempo di un giorno: deterministico (uguale per tutti i giocatori), cambia ogni sei giorni. */
 export function weatherOf(totalDays: number): WeatherId {
-  const n = Math.floor(totalDays / 2);
+  const n = Math.floor(totalDays / 6);
   const h = Math.sin(n * 12.9898 + 4.1) * 43758.5453;
   const r = h - Math.floor(h);
   const season = SEASONS[Math.floor((totalDays % DAYS_PER_YEAR) / DAYS_PER_SEASON)];

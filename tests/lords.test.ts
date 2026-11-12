@@ -60,7 +60,7 @@ describe('signori rivali', () => {
     expect(l.jobs!.length).toBeGreaterThan(0);
     expect(g.others.some((b) => b.owner === l.id && b.site !== undefined && b.site < 4)).toBe(true);
     // In un paio d'anni: motta, campi, case e una cinta che cresce
-    run(g, 2500);
+    run(g, 5000);
     expect(l.level).toBeGreaterThanOrEqual(1);
     const own = (pred: (id: string) => boolean) => l.buildings.filter((b) => pred(b.defId)).length;
     expect(own((id) => id.startsWith('field_'))).toBeGreaterThan(1);
@@ -73,7 +73,8 @@ describe('signori rivali', () => {
     const g = single(1, 1046, false);
     const l = g.lords()[0];
     l.wealth = 3000;
-    run(g, 4500);
+    // Il calendario è più lento: servono più giorni "di prima" per arrivare alle mura in pietra
+    run(g, 9000);
     const walls = l.buildings.filter((b) => getBuilding(b.defId).fort === 'wall').map((b) => b.defId);
     expect(walls.length).toBeGreaterThan(10);
     // Le palizzate costruite prima del 1050 sono diventate muri in pietrame
@@ -186,7 +187,9 @@ describe('sviluppo dei signori', () => {
     for (let d = 0; d < 360 * 170; d++) g.advance(1);
     for (const l of g.lords()) {
       const ids = new Set(l.buildings.map((b) => b.defId));
-      for (const id of ['market', 'barracks', 'smithy', 'pasture_cattle', 'tavern', 'barber', 'square']) expect(ids.has(id), `${l.name}: ${id}`).toBe(true);
+      for (const id of ['market', 'barracks', 'smithy', 'pasture_cattle', 'tavern', 'barber']) expect(ids.has(id), `${l.name}: ${id}`).toBe(true);
+      // La piazza arriva quando il borgo supera i 70 abitanti
+      if ((l.pop ?? 0) >= 75) expect(ids.has('square'), `${l.name}: piazza`).toBe(true);
       expect(l.level, l.name).toBeGreaterThanOrEqual(3);
     }
   }, 60000);

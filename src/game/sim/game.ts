@@ -2195,7 +2195,7 @@ export class Game {
   // ───────────── Rifornimenti dei reparti ─────────────
 
   /** Giorni di viveri che i soldati portano nello zaino (i carri ne aggiungono molti di più). */
-  static readonly SUPPLY_DAYS = 40;
+  static readonly SUPPLY_DAYS = 20;
   /** In marcia si raziona e si foraggia: un quarto del consumo normale. */
   static readonly FIELD_RATION = 0.25;
 
@@ -2259,7 +2259,7 @@ export class Game {
       if (this.ownsTile(Math.floor(c.x), Math.floor(c.z))) {
         // Nel proprio territorio i carri tornano a riempirsi dai granai
         // Si riempie in fretta: i carri caricano dai granai
-        const want = Math.min(full - (c.food ?? 0), Math.max(ration * 8, (c.wagons ?? 0) * 40) * dt);
+        const want = Math.min(full - (c.food ?? 0), Math.max(ration * 8, (c.wagons ?? 0) * 20) * dt);
         if (want > 0) c.food = (c.food ?? 0) + this.track('Viveri dei reparti', () => this.takeFood(want));
         continue;
       }
@@ -2396,7 +2396,11 @@ export class Game {
     }
     // In guerra con un altro signore: spedizione contro di lui
     const foes = (l.foes ?? []).map((id) => this.lord(id)).filter((x): x is Lord => !!x);
-    if (foes.length && !l.companies.length && this.random() < 0.6) this.launchLordRaid(l, foes[Math.floor(this.random() * foes.length)].id);
+    // ...ma non a ogni intrigo: tra una spedizione e l'altra passa qualche stagione
+    if (foes.length && !l.companies.length && this.state.day >= (l.nextRaid ?? 0) && this.random() < 0.6) {
+      l.nextRaid = this.state.day + 240 + this.random() * 240;
+      this.launchLordRaid(l, foes[Math.floor(this.random() * foes.length)].id);
+    }
     // Gli alleati entrano nelle nostre guerre
     if (l.status === 'alliance') {
       for (const w of this.lords()) {
@@ -4106,7 +4110,8 @@ export class Game {
     const fed = st.use.food > 0 ? Math.min(1, r.food / st.use.food) : 1;
     r.food = Math.max(0, r.food - st.use.food);
     // Come la nostra gente con una dieta varia e un popolo contento (i signori non gestiscono questi dettagli)
-    if (fed > 0.95 && l.pop! < st.housing) l.pop! += (0.006 + l.pop! * 0.00013) * 1.6;
+    // Un borgo piccolo attira contadini dai dintorni: cresce più in fretta all'inizio
+    if (fed > 0.95 && l.pop! < st.housing) l.pop! += (0.012 + l.pop! * 0.00013) * 1.6;
     else if (fed < 0.8) l.pop! = Math.max(5, l.pop! - l.pop! * 0.012 * (1 - fed));
     l.pop! = Math.min(l.pop!, st.housing + 2);
     for (const k of ['food', 'wood', 'stone', 'lime'] as const) r[k] = Math.max(0, Math.min(st.storage, r[k]));
@@ -4123,7 +4128,8 @@ export class Game {
       l.army.archers += add * 0.28;
       l.army.cavalry += add * 0.12;
       l.wealth -= add * 12;
-      l.pop! -= add;
+      // Metà sono mercenari forestieri: non tutti i soldati vengono dai campi
+      l.pop! -= add * 0.5;
     }
     // Riparazioni dopo gli assedi
     for (const b of l.buildings) {
