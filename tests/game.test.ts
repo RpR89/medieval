@@ -241,24 +241,26 @@ describe('tempo, epoche e bilancio', () => {
     expect(g.castleLevel()).toBe(3);
   });
 
-  it('la data mostra il mese e le durate si leggono in settimane e mesi', () => {
-    expect(formatDate(dateFromDays(0))).toMatch(/Marzo 900/);
-    expect(formatDate(dateFromDays(100))).toMatch(/Giugno 900/);
-    expect(formatDate(dateFromDays(300))).toMatch(/Gennaio 900/);
-    expect(formatDuration(3)).toBe('3 giorni');
-    expect(formatDuration(21)).toBe('3 settimane');
-    expect(formatDuration(180)).toBe('6 mesi');
+  it('la data mostra la stagione e le durate si leggono in stagioni', () => {
+    expect(formatDate(dateFromDays(0))).toMatch(/Primavera 900/);
+    expect(formatDate(dateFromDays(100))).toMatch(/Estate 900/);
+    expect(formatDate(dateFromDays(300))).toMatch(/Inverno 900/);
+    expect(formatDuration(3)).toBe('pochi giorni');
+    expect(formatDuration(45)).toBe('mezza stagione');
+    expect(formatDuration(90)).toBe('1 stagione');
+    expect(formatDuration(225)).toBe('2 stagioni e mezza');
+    expect(formatDuration(360 * 5)).toBe('5 anni');
   });
 
-  it('il bilancio mensile mette a confronto tasse e paga dei soldati', () => {
+  it('il bilancio a stagione mette a confronto tasse e paga dei soldati', () => {
     const g = new Game(createInitialState(1));
     g.state.population = 40;
     const b0 = g.budget();
-    expect(b0.taxes).toBeCloseTo(40 * 0.06 * 30);
-    expect(b0.perPerson).toBeCloseTo(1.8);
+    expect(b0.taxes).toBeCloseTo(40 * 0.06 * 90);
+    expect(b0.perPerson).toBeCloseTo(5.4);
     g.state.army.infantry = 20;
     const b1 = g.budget();
-    expect(b1.army).toBeCloseTo(20 * 0.15 * 30);
+    expect(b1.army).toBeCloseTo(20 * 0.15 * 90);
     expect(b1.net).toBeLessThan(0);
   });
 });
@@ -274,7 +276,7 @@ describe('registro delle risorse', () => {
     game.state.resources.meat = 0;
     game.advance(20);
     const grain = game.resourceFlows('grain');
-    expect(grain.income.find((r) => r.label === getBuilding('field_grain').name)?.perMonth).toBeGreaterThan(0);
+    expect(grain.income.find((r) => r.label === getBuilding('field_grain').name)?.perSeason).toBeGreaterThan(0);
     expect(grain.expense.some((r) => r.label === 'Abitanti (cibo)')).toBe(true);
     expect(grain.expense.some((r) => r.label === 'Soldati (cibo)')).toBe(true);
     const coins = game.resourceFlows('coins');
@@ -282,7 +284,7 @@ describe('registro delle risorse', () => {
     expect(coins.expense.some((r) => r.label.startsWith('Paga:'))).toBe(true);
     const wood = game.resourceFlows('wood');
     expect(wood.oneOff.find((r) => r.label === 'Costruzioni')?.amount).toBeLessThan(0);
-    const net = coins.income.reduce((a, r) => a + r.perMonth, 0) + coins.expense.reduce((a, r) => a + r.perMonth, 0);
-    expect(coins.netPerMonth).toBeCloseTo(net);
+    const net = coins.income.reduce((a, r) => a + r.perSeason, 0) + coins.expense.reduce((a, r) => a + r.perSeason, 0);
+    expect(coins.netPerSeason).toBeCloseTo(net);
   });
 });

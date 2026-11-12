@@ -44,31 +44,37 @@ export function dateFromDays(totalDays: number): GameDate {
   return { year, season, dayOfSeason: dayOfYear % DAYS_PER_SEASON, dayOfYear };
 }
 
-/** L'anno di gioco comincia in primavera: marzo è il primo mese. */
-export const MONTHS = ['Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre', 'Gennaio', 'Febbraio'];
-
-export function monthName(date: GameDate): string {
-  return MONTHS[Math.min(11, Math.floor(date.dayOfYear / 30))];
+/** Parte della stagione in corso: inizio, piena, fine. */
+export function seasonPhase(date: GameDate): string {
+  return date.dayOfSeason < 30 ? 'inizio' : date.dayOfSeason < 60 ? 'piena' : 'fine';
 }
 
 export function formatDate(date: GameDate): string {
-  return `${SEASON_ICONS[date.season]} ${SEASON_NAMES[date.season]} · ${monthName(date)} ${date.year}`;
+  return `${SEASON_ICONS[date.season]} ${SEASON_NAMES[date.season]} ${date.year}`;
 }
 
-/** Durata leggibile: giorni se brevissima, poi settimane, poi mesi. */
+/**
+ * Durata leggibile in stagioni (il gioco ragiona per stagioni, i giorni restano solo nel motore):
+ * "pochi giorni", "mezza stagione", "1 stagione", "2 stagioni e mezza", "3 anni".
+ */
 export function formatDuration(days: number): string {
   const d = Math.max(0, days);
-  if (d < 10) {
-    const n = Math.max(1, Math.round(d));
-    return `${n} ${n === 1 ? 'giorno' : 'giorni'}`;
-  }
-  if (d < 45) return `${Math.round(d / 7)} settimane`;
-  if (d >= 720) {
-    const y = Math.round(d / 360);
+  if (d < 25) return 'pochi giorni';
+  if (d < 65) return 'mezza stagione';
+  const halves = Math.round(d / (DAYS_PER_SEASON / 2));
+  const n = Math.floor(halves / 2);
+  if (n >= 8) {
+    const y = Math.round(d / DAYS_PER_YEAR);
     return `${y} anni`;
   }
-  const m = Math.round(d / 30);
-  return `${m} ${m === 1 ? 'mese' : 'mesi'}`;
+  const half = halves % 2 === 1;
+  return `${n} ${n === 1 ? 'stagione' : 'stagioni'}${half ? ' e mezza' : ''}`;
+}
+
+/** Quantità al giorno espressa a stagione, arrotondata per leggerla bene. */
+export function perSeason(perDay: number): number {
+  const v = perDay * DAYS_PER_SEASON;
+  return Math.abs(v) >= 10 ? Math.round(v) : Math.round(v * 10) / 10;
 }
 
 /** Giorni finali di ogni stagione in cui si sfuma nella successiva. */

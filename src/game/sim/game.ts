@@ -1390,17 +1390,17 @@ export class Game {
     const push = (text: string, days: number) => (s.events ??= []).push({ id, until: s.day + days, text });
     if (id === 'poor_harvest') {
       push('Raccolto scarso', 120);
-      this.log('🥀 Un raccolto scarso: campi e pascoli rendono molto meno per qualche mese. Le scorte nei granai ti salvano.', 'bad');
+      this.log('🥀 Un raccolto scarso: campi e pascoli rendono molto meno per un\'intera stagione. Le scorte nei granai ti salvano.', 'bad');
     } else if (id === 'bumper') {
       push('Raccolto eccezionale', 100);
-      this.log('🌾 Un raccolto eccezionale: i campi rendono di più per qualche mese. Riempi i granai!', 'good');
+      this.log('🌾 Un raccolto eccezionale: i campi rendono di più per una stagione. Riempi i granai!', 'good');
     } else if (id === 'flood') {
       push('Alluvione', 40);
       this.track('Alluvione', () => {
         r.hay *= 0.75;
         r.vegetables *= 0.8;
       }, 'event');
-      this.log('🌊 Una piena ha allagato i campi: scorte di fieno e ortaggi perse e raccolti ridotti per un mese.', 'bad');
+      this.log('🌊 Una piena ha allagato i campi: scorte di fieno e ortaggi perse e raccolti ridotti per mezza stagione.', 'bad');
     } else if (id === 'plague') {
       push('Epidemia', 60);
       const loss = this.state.population * (this.happiness() > 60 ? 0.04 : 0.09) * Math.max(0.35, 1 - 0.55 * Math.max(0, this.healthIndex()) + 0.3 * Math.max(0, -this.healthIndex()));
@@ -1639,7 +1639,7 @@ export class Game {
   /** Flussi continui: media mobile (al giorno) per "risorsa|voce". */
   private flowRates = new Map<string, number>();
   private stepFlows = new Map<string, number>();
-  /** Spese e incassi una tantum degli ultimi 30 giorni. */
+  /** Spese e incassi una tantum dell'ultima stagione. */
   private flowEvents: Array<{ day: number; res: ResourceId; amount: number; label: string }> = [];
   private tracking = false;
 
@@ -1694,34 +1694,34 @@ export class Game {
       else this.flowRates.set(key, v);
     }
     this.stepFlows.clear();
-    const cut = this.state.day - 30;
+    const cut = this.state.day - DAYS_PER_SEASON;
     if (this.flowEvents.length && this.flowEvents[0].day < cut) this.flowEvents = this.flowEvents.filter((e) => e.day >= cut);
   }
 
   /** Entrate e uscite di una risorsa: flussi al mese e movimenti una tantum degli ultimi 30 giorni. */
   resourceFlows(id: ResourceId): {
-    income: Array<{ label: string; perMonth: number }>;
-    expense: Array<{ label: string; perMonth: number }>;
-    netPerMonth: number;
+    income: Array<{ label: string; perSeason: number }>;
+    expense: Array<{ label: string; perSeason: number }>;
+    netPerSeason: number;
     oneOff: Array<{ label: string; amount: number }>;
   } {
-    const income: Array<{ label: string; perMonth: number }> = [];
-    const expense: Array<{ label: string; perMonth: number }> = [];
+    const income: Array<{ label: string; perSeason: number }> = [];
+    const expense: Array<{ label: string; perSeason: number }> = [];
     let net = 0;
     for (const [key, v] of this.flowRates) {
       const [res, label] = key.split('|');
       if (res !== id) continue;
-      const perMonth = v * 30;
-      if (Math.abs(perMonth) < 0.05) continue;
-      net += perMonth;
-      (perMonth > 0 ? income : expense).push({ label, perMonth });
+      const perSeason = v * DAYS_PER_SEASON;
+      if (Math.abs(perSeason) < 0.1) continue;
+      net += perSeason;
+      (perSeason > 0 ? income : expense).push({ label, perSeason });
     }
-    income.sort((a, b) => b.perMonth - a.perMonth);
-    expense.sort((a, b) => a.perMonth - b.perMonth);
+    income.sort((a, b) => b.perSeason - a.perSeason);
+    expense.sort((a, b) => a.perSeason - b.perSeason);
     const byLabel = new Map<string, number>();
     for (const e of this.flowEvents) if (e.res === id) byLabel.set(e.label, (byLabel.get(e.label) ?? 0) + e.amount);
     const oneOff = [...byLabel].filter(([, v]) => Math.abs(v) >= 0.5).map(([label, amount]) => ({ label, amount })).sort((a, b) => a.amount - b.amount);
-    return { income, expense, netPerMonth: net, oneOff };
+    return { income, expense, netPerSeason: net, oneOff };
   }
 
   private stepHerd(b: PlacedBuilding, def: BuildingDef, si: number, staffing: number, dt: number) {
@@ -2443,7 +2443,7 @@ export class Game {
         this.propose({ lord: l.id, kind: 'spy', text: `Le guardie hanno catturato una spia di ${l.name}. Imprigionarla (scopri il suo castello, rapporti peggiori) o rimandarla indietro?` });
       } else {
         this.state.agitation = { lord: l.id, until: this.state.day + 120 };
-        this.log(`🕯️ Agitatori al soldo di ${l.name} sobillano i contadini: il contento cala per qualche mese.`, 'bad');
+        this.log(`🕯️ Agitatori al soldo di ${l.name} sobillano i contadini: il contento cala per qualche stagione.`, 'bad');
       }
     } else if (r < 0.55) {
       // Commercio: il signore vende ciò che ha in abbondanza, o compra grano se gli manca
@@ -3006,7 +3006,7 @@ export class Game {
     if (this.hpState(target) !== before) {
       this.changed();
       if (this.hpState(target) === 'ruin' && sg.nextDay > this.state.day + 2) {
-        this.siegeLog(`Breccia! ${getBuilding(target.defId).name} crolla sotto i colpi: assalto tra un paio di giorni (riparala, se puoi).`);
+        this.siegeLog(`Breccia! ${getBuilding(target.defId).name} crolla sotto i colpi: assalto imminente (riparala, se puoi).`);
         this.log(`🧱 Breccia nelle mura: ripara ${getBuilding(target.defId).name.toLowerCase()} prima dell'assalto!`, 'bad');
         sg.nextDay = Math.min(sg.nextDay, this.state.day + 2);
       }
@@ -4968,18 +4968,18 @@ export class Game {
     return this.state.population * TAX_PER_PERSON * this.analysis().taxMul * TAX_LEVELS[this.taxLevel()].mul * (this.fx().taxes ?? 1);
   }
 
-  /** Bilancio mensile delle monete: entrate, uscite, saldo e resa per abitante. */
+  /** Bilancio a stagione delle monete: entrate, uscite, saldo e resa per abitante. */
   budget(): { taxes: number; tribute: number; army: number; engines: number; builders: number; net: number; perPerson: number } {
-    const month = 30;
-    const taxes = this.taxPerDay() * month;
-    const tribute = this.lords().filter((l) => l.status === 'vassal').reduce((s, l) => s + (1 + l.level), 0) * month;
+    const season = DAYS_PER_SEASON; // il bilancio si legge a stagione
+    const taxes = this.taxPerDay() * season;
+    const tribute = this.lords().filter((l) => l.status === 'vassal').reduce((s, l) => s + (1 + l.level), 0) * season;
     const away = this.troopsAway();
     let army = 0;
-    for (const id of Object.keys(UNITS) as UnitType[]) army += (UNITS[id].upkeep.coins ?? 0) * (this.state.army[id] + away[id]) * month;
+    for (const id of Object.keys(UNITS) as UnitType[]) army += (UNITS[id].upkeep.coins ?? 0) * (this.state.army[id] + away[id]) * season;
     let engines = 0;
-    for (const id of Object.keys(ENGINES) as EngineType[]) engines += (ENGINES[id].upkeep.coins ?? 0) * ((this.state.engines?.[id] ?? 0) + away[id]) * month;
-    const perPerson = this.state.population > 0 ? taxes / this.state.population : TAX_PER_PERSON * TAX_LEVELS[this.taxLevel()].mul * month;
-    const builders = this.lastBuilders * BUILDER_WAGE * month;
+    for (const id of Object.keys(ENGINES) as EngineType[]) engines += (ENGINES[id].upkeep.coins ?? 0) * ((this.state.engines?.[id] ?? 0) + away[id]) * season;
+    const perPerson = this.state.population > 0 ? taxes / this.state.population : TAX_PER_PERSON * TAX_LEVELS[this.taxLevel()].mul * season;
+    const builders = this.lastBuilders * BUILDER_WAGE * season;
     return { taxes, tribute, army, engines, builders, net: taxes + tribute - army - engines - builders, perPerson };
   }
 

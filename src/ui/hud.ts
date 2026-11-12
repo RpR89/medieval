@@ -7,7 +7,7 @@ import {
   type BuildingCategory,
   type UnitType,
 } from '../game/data/buildings';
-import { formatDate, formatDuration, WEATHER, weatherOf } from '../game/data/calendar';
+import { formatDate, formatDuration, perSeason, seasonPhase, WEATHER, weatherOf } from '../game/data/calendar';
 import { eraForYear } from '../game/data/eras';
 import { canAfford, CHAIN_IDS, formatCost, RESOURCE_IDS, RESOURCES, TAX_LEVELS, type ResourceId } from '../game/data/resources';
 import { BEHAVIORS, ENGINES, FORMATIONS, SOLDIER_FOOD, UNITS, WAGON, type Behavior, type EngineType, type Formation, type Stance } from '../game/data/units';
@@ -353,10 +353,13 @@ export class Hud {
     const close = el('button', { class: 'link', text: '✕' });
     close.onclick = () => this.cb.onDeselect();
     const lines: string[] = [def.description];
+    // Quantità a stagione (a pieno organico); con i raccolti stagionali si mostra la media dell'anno
+    const avg = def.seasonal ? def.seasonal.reduce((a, v) => a + v, 0) / 4 : 1;
     const list = (o: Partial<Record<string, number>>) =>
-      Object.entries(o).map(([r, n]) => `${RESOURCES[r as ResourceId].icon} ${n}`).join(', ');
-    if (def.produces) lines.push('Produce al giorno: ' + list(def.produces));
-    if (def.consumes) lines.push('Consuma al giorno: ' + list(def.consumes));
+      Object.entries(o).map(([r, n]) => `${RESOURCES[r as ResourceId].icon} ${perSeason((n ?? 0) * avg)}`).join(', ');
+    const per = def.seasonal ? 'a stagione, in media' : 'a stagione';
+    if (def.produces) lines.push(`Produce ${per}: ` + list(def.produces));
+    if (def.consumes) lines.push(`Consuma ${per}: ` + list(def.consumes));
     if (def.seasonal) {
       const s = def.seasonal.map((v) => `${Math.round(v * 100)}%`);
       lines.push(`Resa stagionale: 🌸${s[0]} ☀️${s[1]} 🍂${s[2]} ❄️${s[3]}`);
@@ -825,19 +828,19 @@ export class Hud {
         moodText,
         `Contento <strong>${Math.round(h)}</strong>/100 ${trend} ${Math.round(mood.total)} · produzione ×${g.productivity().toFixed(2)}${h < 30 ? ' · <span class="bad">la gente se ne va!</span>' : ''}${h < 20 ? ' <span class="bad">Rischio di tumulti!</span>' : ''}
         <table class="budget">
-          <tr><td>🪙 Tasse (${Math.floor(g.state.population)} abitanti × ${bud.perPerson.toFixed(1)})</td><td>+${fmt(bud.taxes)}/mese</td></tr>
-          ${bud.tribute ? `<tr><td>👑 Tributi dei vassalli</td><td>+${fmt(bud.tribute)}/mese</td></tr>` : ''}
-          <tr><td>⚔️ Paga dei soldati</td><td>−${fmt(bud.army)}/mese</td></tr>
-          ${bud.engines ? `<tr><td>🪵 Macchine d'assedio</td><td>−${fmt(bud.engines)}/mese</td></tr>` : ''}
-          ${bud.builders ? `<tr><td>🏗️ Paga dei costruttori</td><td>−${fmt(bud.builders)}/mese</td></tr>` : ''}
-          <tr class="${bud.net < 0 ? 'bad' : 'good'}"><td><strong>Saldo</strong></td><td><strong>${money(bud.net)}/mese</strong></td></tr>
+          <tr><td>🪙 Tasse (${Math.floor(g.state.population)} abitanti × ${bud.perPerson.toFixed(1)})</td><td>+${fmt(bud.taxes)}/stagione</td></tr>
+          ${bud.tribute ? `<tr><td>👑 Tributi dei vassalli</td><td>+${fmt(bud.tribute)}/stagione</td></tr>` : ''}
+          <tr><td>⚔️ Paga dei soldati</td><td>−${fmt(bud.army)}/stagione</td></tr>
+          ${bud.engines ? `<tr><td>🪵 Macchine d'assedio</td><td>−${fmt(bud.engines)}/stagione</td></tr>` : ''}
+          ${bud.builders ? `<tr><td>🏗️ Paga dei costruttori</td><td>−${fmt(bud.builders)}/stagione</td></tr>` : ''}
+          <tr class="${bud.net < 0 ? 'bad' : 'good'}"><td><strong>Saldo</strong></td><td><strong>${money(bud.net)}/stagione</strong></td></tr>
         </table>
         ${(() => {
           const cr = g.crimeTarget();
           const c = g.crime();
           return `<p class="small ${c > 50 ? 'bad' : ''}">🗡️ Criminalità <strong>${Math.round(c)}</strong>/100${c > 35 ? ' · furti in corso' : ''}${c > 80 ? ' · <span class="bad">rischio di tumulti!</span>' : ''}<br><span class="muted">${cr.parts.filter(([, v]) => Math.abs(v) >= 0.5).map(([n, v]) => `${escapeHtml(n)} ${v >= 0 ? '+' : ''}${Math.round(v)}`).join(' · ')}</span></p>`;
         })()}
-        ${bud.net < 0 ? `<p class="small bad">Le spese superano le entrate: con ${fmt(g.state.resources.coins)} monete resisti circa ${Math.max(0, Math.floor(g.state.resources.coins / -bud.net))} mesi, poi i soldati diserteranno.</p>` : ''}`,
+        ${bud.net < 0 ? `<p class="small bad">Le spese superano le entrate: con ${fmt(g.state.resources.coins)} monete resisti circa ${formatDuration((g.state.resources.coins / -bud.net) * 90)}, poi i soldati diserteranno.</p>` : ''}`,
       );
       moodParts.textContent = mood.parts.map(([n, v]) => `${n} ${v >= 0 ? '+' : ''}${v}`).join(' · ');
       const era = eraForYear(s.date.year);
@@ -870,7 +873,7 @@ export class Hud {
         <table>
           <tr><td>👪 Abitanti</td><td>${Math.floor(s.population)} / ${s.housing}</td></tr>
           <tr><td>👷 Posti di lavoro</td><td>${s.jobs} (copertura ${Math.round(s.staffing * 100)}%)</td></tr>
-          <tr><td>🍞 Cibo al giorno</td><td>${fmt(s.foodPerDay)}</td></tr>
+          <tr><td>🍞 Cibo a stagione</td><td>${fmt(perSeason(s.foodPerDay))}</td></tr>
           <tr><td>📦 Magazzini</td><td>${s.storage} per risorsa</td></tr>
         </table>
         <p class="small muted">Il cibo si consuma partendo da quello più deperibile. Una dieta varia fa crescere la popolazione più in fretta.</p>`);
@@ -928,7 +931,7 @@ export class Hud {
       setHtml(
         crew,
         `<p class="small">Al lavoro: <strong>${g.lastBuilders}</strong> · posti ${cap} (${4} di base + 6 per ogni loggia dei muratori) · al massimo metà degli abitanti.</p>
-        <p class="small muted">Ogni costruttore lascia i campi e le botteghe, prende ${fmt(BUILDER_WAGE * 30)} monete e mangia ${fmt(BUILDER_FOOD * 30)} di cibo in più al mese.</p>
+        <p class="small muted">Ogni costruttore lascia i campi e le botteghe, prende ${fmt(perSeason(BUILDER_WAGE))} monete e mangia ${fmt(perSeason(BUILDER_FOOD))} di cibo in più a stagione.</p>
         <p class="small">Rendimento lavori in pietra: ${rate(true)}<br>Rendimento lavori in legno: ${rate(false)}</p>`,
       );
       // Lavori raggruppati per tipo (un tratto di mura è un gruppo solo)
@@ -1010,7 +1013,7 @@ export class Hud {
           'div',
           { class: 'unit' },
           el('div', { class: 'row' }, el('span', { text: `${def.icon} ${def.name}` }), el('span', { class: 'spacer' }), count),
-          el('div', { class: 'small muted', text: `Costo ${formatCost(this.game.unitCost(u))} · Paga ${formatCost(def.upkeep)}/giorno · Att ${def.attack} Dif ${def.defense}` }),
+          el('div', { class: 'small muted', text: `Costo ${formatCost(this.game.unitCost(u))} · Paga ${formatCost(Object.fromEntries(Object.entries(def.upkeep).map(([k, v]) => [k, perSeason(v ?? 0)])))}/stagione · Att ${def.attack} Dif ${def.defense}` }),
           el(
             'div',
             { class: 'row' },
@@ -1102,7 +1105,7 @@ export class Hud {
     wagonsIn.oninput = () => refreshWar();
     grid.append(el('span', { text: `${WAGON.icon} Carri salmerie` }), wagonsIn, wagonsAll);
     const wagonInfo = el('span', { class: 'small' });
-    const buildWagon = el('button', { text: `🔨 Costruisci un carro (${formatCost(WAGON.cost)})`, title: `Porta ${WAGON.capacity} di cibo dietro all'esercito: senza carri i soldati hanno viveri solo per 40 giorni` });
+    const buildWagon = el('button', { text: `🔨 Costruisci un carro (${formatCost(WAGON.cost)})`, title: `Porta ${WAGON.capacity} di cibo dietro all'esercito: senza carri i soldati hanno viveri solo per ${formatDuration(Game.SUPPLY_DAYS)}` });
     buildWagon.onclick = () => {
       if (!this.game.buildWagon()) this.toast(this.game.canBuildWagon().reason ?? 'Impossibile', 'bad');
       refreshWar();
@@ -1147,7 +1150,7 @@ export class Hud {
       const w = Math.min(g.state.wagons ?? 0, Math.max(0, Math.floor(Number(wagonsIn.value) || 0)));
       wagonInfo.textContent = `Al castello: ${g.state.wagons ?? 0} carri`;
       buildWagon.disabled = !g.canBuildWagon().ok;
-      // Viveri: zaini (40 giorni) più i carri, in razioni da marcia
+      // Viveri: zaini più i carri, in razioni da marcia
       const ration = n * SOLDIER_FOOD * Game.FIELD_RATION;
       const days = ration > 0 ? (ration * Game.SUPPLY_DAYS + w * WAGON.capacity) / ration : 0;
       estimate.textContent = n
@@ -1207,7 +1210,7 @@ export class Hud {
     }
     this.refreshTab = () => {
       warn.textContent = this.game.summary().hasMarket
-        ? 'Prezzo d\'acquisto e di vendita per unità. Ogni unità scambiata sposta il prezzo (▲ sale, ▼ scende), poi il mercato si riassesta in qualche mese. Il cibo costa di più in inverno.'
+        ? 'Prezzo d\'acquisto e di vendita per unità. Ogni unità scambiata sposta il prezzo (▲ sale, ▼ scende), poi il mercato si riassesta in un paio di stagioni. Il cibo costa di più in inverno.'
         : 'Costruisci un mercato per commerciare.';
       for (const [id, c] of cells) {
         const pr = this.game.marketPressure(id);
@@ -1475,19 +1478,19 @@ export class Hud {
     const v = g.state.resources[id];
     const cap = g.storageCap();
     const num = (n: number, sign = true) => `${sign && n > 0 ? '+' : ''}${n < 0 ? '−' : ''}${fmt(Math.abs(n))}`;
-    const rows = (list: Array<{ label: string; perMonth: number }>, cls: string) =>
+    const rows = (list: Array<{ label: string; perSeason: number }>, cls: string) =>
       list.length
-        ? `<table>${list.map((r) => `<tr><td>${escapeHtml(r.label)}</td><td class="${cls}">${num(r.perMonth)}</td></tr>`).join('')}</table>`
+        ? `<table>${list.map((r) => `<tr><td>${escapeHtml(r.label)}</td><td class="${cls}">${num(r.perSeason)}</td></tr>`).join('')}</table>`
         : '<p class="muted small">Nessuna</p>';
-    const totIn = f.income.reduce((a, r) => a + r.perMonth, 0);
-    const totOut = f.expense.reduce((a, r) => a + r.perMonth, 0);
-    const net = f.netPerMonth;
+    const totIn = f.income.reduce((a, r) => a + r.perSeason, 0);
+    const totOut = f.expense.reduce((a, r) => a + r.perSeason, 0);
+    const net = f.netPerSeason;
     let forecast = '';
-    if (net < -0.05 && v > 0) forecast = `<p class="small bad">⏳ Al ritmo attuale finisce tra ${formatDuration((v / -net) * 30)}</p>`;
-    else if (net > 0.05 && id !== 'coins' && v < cap) forecast = `<p class="small muted">Magazzini pieni tra ${formatDuration(((cap - v) / net) * 30)}</p>`;
+    if (net < -0.05 && v > 0) forecast = `<p class="small bad">⏳ Al ritmo attuale finisce tra ${formatDuration((v / -net) * 90)}</p>`;
+    else if (net > 0.05 && id !== 'coins' && v < cap) forecast = `<p class="small muted">Magazzini pieni tra ${formatDuration(((cap - v) / net) * 90)}</p>`;
     else if (id !== 'coins' && v >= cap - 0.5 && net > 0) forecast = '<p class="small bad">Magazzini pieni: la produzione in più va persa</p>';
     const oneOff = f.oneOff.length
-      ? `<h4>Ultimi 30 giorni (una tantum)</h4><table>${f.oneOff
+      ? `<h4>Nell'ultima stagione (una tantum)</h4><table>${f.oneOff
           .map((r) => `<tr><td>${escapeHtml(r.label)}</td><td class="${r.amount >= 0 ? 'good' : 'bad'}">${num(r.amount)}</td></tr>`)
           .join('')}</table>`
       : '';
@@ -1495,9 +1498,9 @@ export class Hud {
       this.resTip,
       `<h3>${RESOURCES[id].icon} ${RESOURCES[id].name}</h3>
       <p>In magazzino: <b>${fmt(v)}</b>${id !== 'coins' ? ` <span class="muted">/ ${fmt(cap)}</span>` : ''}</p>
-      <h4>Entrate al mese <span class="good">${num(totIn)}</span></h4>${rows(f.income, 'good')}
-      <h4>Uscite al mese <span class="bad">${num(totOut)}</span></h4>${rows(f.expense, 'bad')}
-      <p class="net">Saldo mensile: <b class="${net >= 0 ? 'good' : 'bad'}">${num(net)}</b></p>
+      <h4>Entrate a stagione <span class="good">${num(totIn)}</span></h4>${rows(f.income, 'good')}
+      <h4>Uscite a stagione <span class="bad">${num(totOut)}</span></h4>${rows(f.expense, 'bad')}
+      <p class="net">Saldo a stagione: <b class="${net >= 0 ? 'good' : 'bad'}">${num(net)}</b></p>
       ${forecast}${oneOff}`,
     );
     this.resTip.classList.remove('hidden');
@@ -1524,7 +1527,7 @@ export class Hud {
     const ransom = g.ransomCost();
     const engines = Math.floor(sg.mangonels) + t.trebuchets;
     return (
-      `<div class="row"><strong class="bad">⚔️ Assedio — ${escapeHtml(sg.attacker)}</strong><span class="spacer"></span><span class="small muted">giorno ${Math.floor(g.state.day - sg.startDay) + 1}</span></div>
+      `<div class="row"><strong class="bad">⚔️ Assedio — ${escapeHtml(sg.attacker)}</strong><span class="spacer"></span><span class="small muted">da ${formatDuration(g.state.day - sg.startDay)}</span></div>
       <p class="small"><strong>${escapeHtml(ph.name)}</strong>${sg.phase !== 'assault' ? ` · assalto tra circa ${formatDuration(ph.days)}` : ''}</p>
       <p class="small">Assedianti: ${size} (🛡️${Math.round(t.infantry)} 🏹${Math.round(t.archers)} 🐎${Math.round(t.cavalry)}) · 🪜 ${Math.floor(sg.ladders)} scale · ${engines ? `🎯 ${engines} macchine` : 'nessuna macchina'}</p>
       <div class="row small"><span>Morale nemico</span><div class="hp grow"><div class="hp-bar ${sg.morale < 0.35 ? 'ruin' : sg.morale < 0.6 ? 'damaged' : ''}" style="width:${Math.round(sg.morale * 100)}%"></div></div></div>
@@ -1554,10 +1557,10 @@ export class Hud {
     const tmax = tb ? g.maxHp(tb) : 0;
     const enemy = Math.round((l.army.infantry + l.army.archers + l.army.cavalry) / 5) * 5;
     const food = l.res?.food ?? 0;
-    const foodText = food < 1 ? `<span class="good">finito! (${Math.floor(o.starving)} giorni di fame, si arrendono dopo 25)</span>` : food < 200 ? 'scarseggia' : 'ancora abbondante';
+    const foodText = food < 1 ? `<span class="good">finito! Alla fame da ${formatDuration(o.starving)}: si arrendono presto</span>` : food < 200 ? 'scarseggia' : 'ancora abbondante';
     const supply = Math.min(...g.offenseCompanies().map((c) => g.supplyDays(c)));
     const aim = (id: string, label: string) => `<button data-act="aim-${id}" class="${o.aim === id ? 'active' : ''}">${label}</button>`;
-    return `<div class="row"><strong class="good">⛺ Assedio a ${escapeHtml(l.castle)}</strong><span class="spacer"></span><span class="small muted">giorno ${Math.floor(g.state.day - o.startDay) + 1}</span></div>
+    return `<div class="row"><strong class="good">⛺ Assedio a ${escapeHtml(l.castle)}</strong><span class="spacer"></span><span class="small muted">da ${formatDuration(g.state.day - o.startDay)}</span></div>
       <p class="small">Nostri: ${size} (🛡️${t.infantry} 🏹${t.archers} 🐎${t.cavalry}) · 🪜 ${Math.floor(o.ladders)} scale · ${engines ? `🎯 ${engines} macchine` : 'nessuna macchina (mangani dal 1100, o porta i trabucchi)'}</p>
       <div class="row small"><span>Bersaglio:</span>${aim('weakest', 'Più debole')}${aim('gate', 'Porta')}${aim('tower', 'Torre')}</div>
       ${tb ? `<div class="row small"><span>${escapeHtml(getBuilding(tb.defId).name)}</span><div class="hp grow"><div class="hp-bar ${(tb.hp ?? 0) < tmax * 0.5 ? 'damaged' : ''}" style="width:${Math.round(((tb.hp ?? 0) / Math.max(1, tmax)) * 100)}%"></div></div></div>` : ''}
@@ -1587,7 +1590,7 @@ export class Hud {
       const food = g.siegeFood();
       const short = { prepare: 'preparano', bombard: 'bombardano', assault: 'assalto!' }[sg.phase];
       parts.push(
-        `<span class="bad">⚔️ Assediati</span> · ${short}${sg.phase !== 'assault' ? ` · assalto ~${formatDuration(ph.days)}` : ''} · 🍞 ${isFinite(food.days) ? formatDuration(food.days) : '—'} · morale ${Math.round(sg.morale * 100)}%
+        `<span class="bad">⚔️ Assediati</span> · ${short}${sg.phase !== 'assault' ? ` · assalto tra ${formatDuration(ph.days)}` : ''} · 🍞 ${isFinite(food.days) ? formatDuration(food.days) : '—'} · morale ${Math.round(sg.morale * 100)}%
         <button data-act="sortie" ${g.canSortie().ok ? '' : 'disabled'} title="${escapeHtml(g.canSortie().reason ?? 'Sortita: brucia scale e macchine')}">🔥</button><button data-act="ransom" title="Riscatto: ${g.ransomCost()} monete" ${g.state.resources.coins >= g.ransomCost() ? '' : 'disabled'}>💰</button>`,
       );
     }
@@ -1622,7 +1625,7 @@ export class Hud {
     const d = g.date;
     const wx = weatherOf(g.state.day);
     this.dateEl.textContent = formatDate(d) + (WEATHER[wx].icon ? ` ${WEATHER[wx].icon}` : '');
-    this.dateEl.title = `Tempo: ${WEATHER[wx].name}${wx === 'rain' ? ' (fango: marce più lente, archi e cavalleria penalizzati)' : wx === 'snow' ? ' (marce lente, più viveri consumati fuori casa)' : ''}`;
+    this.dateEl.title = `${seasonPhase(d) === 'piena' ? 'Piena' : seasonPhase(d) === 'inizio' ? 'Inizio di' : 'Fine di'} ${d.season === 'spring' ? 'primavera' : d.season === 'summer' ? 'estate' : d.season === 'autumn' ? 'autunno' : 'inverno'} · Tempo: ${WEATHER[wx].name}${wx === 'rain' ? ' (fango: marce più lente, archi e cavalleria penalizzati)' : wx === 'snow' ? ' (marce lente, più viveri consumati fuori casa)' : ''}`;
     this.eraEl.textContent = eraForYear(d.year).name;
     const days = g.daysToRaid();
     // Avviso: eserciti di altri giocatori in marcia (prima di tutto) o predoni vicini
