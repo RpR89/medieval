@@ -62,10 +62,33 @@ import {
   type SeasonEventId,
 } from './state';
 
-/** Ordine in cui si mangia il cibo: prima quello che deperisce. */
-const EATING_ORDER: ResourceId[] = [...FOOD_IDS].sort(
-  (a, b) => (RESOURCES[b].spoilage ?? 0) - (RESOURCES[a].spoilage ?? 0),
-);
+/**
+ * Preleva `need` unità di cibo dalle scorte mescolando i cibi in proporzione a quanto ce n'è:
+ * la gente mangia un po' di tutto. 'fresh' preferisce ciò che deperisce (latte, pesce, carne),
+ * 'durable' ciò che si conserva (per i carri). Restituisce quanto preso.
+ */
+function eatMix(r: Record<ResourceId, number>, need: number, prefer: 'fresh' | 'durable'): number {
+  let taken = 0;
+  for (let pass = 0; pass < 4 && need - taken > 1e-9; pass++) {
+    let total = 0;
+    const w: number[] = [];
+    for (const id of FOOD_IDS) {
+      const sp = RESOURCES[id].spoilage ?? 0;
+      const k = r[id] > 1e-9 ? r[id] * (prefer === 'fresh' ? 1 + sp * 60 : 1 / (1 + sp * 300)) : 0;
+      w.push(k);
+      total += k;
+    }
+    if (total <= 0) break;
+    const want = need - taken;
+    FOOD_IDS.forEach((id, i) => {
+      if (!w[i]) return;
+      const t = Math.min(r[id], (want * w[i]) / total);
+      r[id] -= t;
+      taken += t;
+    });
+  }
+  return taken;
+}
 
 const MAX_LOG = 60;
 
@@ -1632,12 +1655,8 @@ export class Game {
         ['Costruttori (cibo in più)', builders * BUILDER_FOOD],
       ],
       () => {
-        for (const id of EATING_ORDER) {
-          if (r[id] > 0.5) variety++;
-          const eat = Math.min(r[id], need);
-          r[id] -= eat;
-          need -= eat;
-        }
+        for (const id of FOOD_IDS) if (r[id] > 0.5) variety++;
+        need -= eatMix(r, need, 'fresh');
       },
     );
     const fed = needed > 0 ? 1 - need / needed : 1;
@@ -2351,15 +2370,8 @@ export class Game {
 
   /** Preleva cibo dai magazzini (prima quello che deperisce): restituisce quanto preso. */
   private takeFood(amount: number): number {
-    let left = amount;
-    const r = this.state.resources;
-    for (const id of EATING_ORDER) {
-      const t = Math.min(r[id], left);
-      r[id] -= t;
-      left -= t;
-      if (left <= 0) break;
-    }
-    return amount - left;
+    // Sui carri si caricano i cibi che si conservano (grano, formaggio, pane secco)
+    return eatMix(this.state.resources, amount, 'durable');
   }
 
   private abroadSoldiers(): number {
@@ -4281,12 +4293,21 @@ export class Game {
     // Cibo e popolazione (assediato da noi: i campi fuori dalle mura non rendono)
     const blockaded = this.state.offense?.lord === l.id;
     r.food += st.prod.food * (blockaded ? 0.15 : 1);
+    // Con le scorte agli sgoccioli il signore compra grano dai mercanti (se non è assediato): niente carestie improvvise
+    if (!blockaded && r.food < st.use.food * 20 && l.wealth > 40) {
+      const buy = Math.min(st.use.food * 30 - r.food, (l.wealth - 30) / 3);
+      if (buy > 0) {
+        r.food += buy;
+        l.wealth -= buy * 3;
+      }
+    }
     const fed = st.use.food > 0 ? Math.min(1, r.food / st.use.food) : 1;
     r.food = Math.max(0, r.food - st.use.food);
     // Come la nostra gente con una dieta varia e un popolo contento (i signori non gestiscono questi dettagli)
     // Un borgo piccolo attira contadini dai dintorni: cresce più in fretta all'inizio
     if (fed > 0.95 && l.pop! < st.housing) l.pop! += (0.012 + l.pop! * 0.00013) * 1.6;
-    else if (fed < 0.8) l.pop! = Math.max(5, l.pop! - l.pop! * 0.012 * (1 - fed));
+    // La fame fa partire la gente, ma piano: chi resta stringe la cinghia
+    else if (fed < 0.8) l.pop! = Math.max(5, l.pop! - l.pop! * 0.006 * (1 - fed));
     l.pop! = Math.min(l.pop!, st.housing + 2);
     for (const k of ['food', 'wood', 'stone', 'lime'] as const) r[k] = Math.max(0, Math.min(st.storage, r[k]));
     // Il tetto deve lasciar comprare i materiali del mastio in pietra a chi non ha cave
@@ -4297,7 +4318,7 @@ export class Game {
     const target = Math.min((3 + l.level * 8 + l.pop! * 0.12 + (year - 900) / 15) * p.army, (taxes * 0.45 * p.army) / 0.12 + 3);
     const total = st.soldiers;
     // Non si svuotano i campi per arruolare: servono almeno 25 abitanti e i soldati restano sotto un terzo di loro
-    if (total < target && total < l.pop! * 0.35 && l.wealth > 80 + this.lordSaving(l) && l.pop! > 25 && fed > 0.8) {
+    if (total < target && total < l.pop! * 0.35 && l.wealth > 80 + this.lordSaving(l) && l.pop! > 25 && fed > 0.8 && r.food > st.use.food * 30) {
       const add = Math.min(Math.max(0.05, (target - total) * 0.02), l.wealth / 12);
       l.army.infantry += add * 0.6;
       l.army.archers += add * 0.28;

@@ -206,3 +206,30 @@ describe('boschi', () => {
     expect(g2.forestLevel(g2.terrain.tiles.findIndex((t, k) => t === Tile.Forest && k !== i))).toBe(1);
   });
 });
+
+describe('dieta', () => {
+  it('la gente mangia un po\' di tutto: il pesce non sparisce appena pescato', () => {
+    const st = createInitialState(1);
+    st.day = (1000 - 900) * 360 + 95;
+    st.population = 40;
+    st.nextRaidDay = 1e9;
+    const g = new Game(st, () => 0.5);
+    g.instantBuild = true;
+    g.terrain.tiles.fill(Tile.Grass);
+    g.storageCap = () => 1e9;
+    for (let z = 0; z < g.terrain.size; z++) g.terrain.tiles[z * g.terrain.size + 9] = Tile.River;
+    Object.assign(g.state.resources, { grain: 3000, vegetables: 0, meat: 0, milk: 0, cheese: 0, fish: 0, bread: 0 });
+    g.place('fisher', 10, 10);
+    g.place('fisher', 10, 14);
+    g.advance(60);
+    // Il pesce si accumula: se ne mangia una parte, il resto si conserva (e un po' deperisce)
+    expect(g.state.resources.fish).toBeGreaterThan(20);
+    const f = g.resourceFlows('fish');
+    const income = f.income.reduce((a, r) => a + r.perSeason, 0);
+    const eaten = -(f.expense.find((r) => /Abitanti/.test(r.label))?.perSeason ?? 0);
+    expect(eaten).toBeGreaterThan(0);
+    expect(eaten).toBeLessThan(income * 0.8);
+    // E il grano si consuma di più, perché ce n'è tanto
+    expect(-(g.resourceFlows('grain').expense.find((r) => /Abitanti/.test(r.label))?.perSeason ?? 0)).toBeGreaterThan(eaten);
+  });
+});

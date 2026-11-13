@@ -880,7 +880,7 @@ export class Hud {
           <tr><td>🍞 Cibo a stagione</td><td>${fmt(perSeason(s.foodPerDay))}</td></tr>
           <tr><td>📦 Magazzini</td><td>${s.storage} per risorsa</td></tr>
         </table>
-        <p class="small muted">Il cibo si consuma partendo da quello più deperibile. Una dieta varia fa crescere la popolazione più in fretta.</p>`);
+        <p class="small muted">La gente mangia un po' di tutto, in proporzione alle scorte e preferendo ciò che deperisce. Una dieta varia fa crescere la popolazione più in fretta.</p>`);
     };
   }
 
