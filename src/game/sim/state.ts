@@ -269,6 +269,8 @@ export interface GameState {
   preset?: PresetId;
   /** Schieramento scelto all'inizio. */
   faction?: FactionId;
+  /** Legna rimasta in ogni casella di bosco (un byte per casella di bosco, in base64). */
+  forest?: string;
   /** Caselle già esplorate (bit per casella, in base64). */
   explored?: string;
   /** Assedio in corso. */

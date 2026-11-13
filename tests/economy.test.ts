@@ -139,3 +139,70 @@ describe('cittadini', () => {
     expect(g.state.resources.wine).toBeGreaterThan(0);
   });
 });
+
+describe('boschi', () => {
+  function woods() {
+    const st = createInitialState(1);
+    st.day = (1000 - 900) * 360 + 5; // primavera
+    st.population = 40;
+    st.nextRaidDay = 1e9;
+    const g = new Game(st, () => 0.5);
+    g.instantBuild = true;
+    g.terrain.tiles.fill(Tile.Grass);
+    g.storageCap = () => 1e9;
+    Object.assign(g.state.resources, { wood: 500, coins: 500, grain: 5000 });
+    return g;
+  }
+  const idx = (g: Game, x: number, z: number) => z * g.terrain.size + x;
+
+  it('il taglialegna abbatte davvero il bosco più vicino e rende meno se è lontano', () => {
+    const g = woods();
+    const n = g.terrain.size;
+    // Un bosco di quattro caselle
+    for (const [x, z] of [[20, 20], [21, 20], [20, 21], [21, 21]]) g.terrain.tiles[idx(g, x, z)] = Tile.Forest;
+    (g as unknown as { forestStock: null }).forestStock = null;
+    const near = g.place('woodcutter', 22, 20)!;
+    const far = g.place('woodcutter', 32, 20)!;
+    expect(g.woodReach(near)!.eff).toBe(1);
+    expect(g.woodReach(far)!.eff).toBeLessThan(0.6);
+    expect(g.woodReach(far)!.eff).toBeGreaterThan(0.25);
+    const total = () => [[20, 20], [21, 20], [20, 21], [21, 21]].reduce((s, [x, z]) => s + g.forest()[idx(g, x, z)], 0);
+    const before = total();
+    g.advance(90);
+    expect(total()).toBeLessThan(before - 15);
+    // Nessun bosco raggiungibile: il taglialegna resta fermo
+    const lone = g.place('woodcutter', n - 10, n - 10)!;
+    expect(g.woodReach(lone)).toBeNull();
+  });
+
+  it('il bosco tagliato ricresce in qualche anno e sui ceppi si costruisce recuperando la legna', () => {
+    const g = woods();
+    const i = idx(g, 30, 30);
+    g.terrain.tiles[i] = Tile.Forest;
+    (g as unknown as { forestStock: null }).forestStock = null;
+    expect(g.canPlace('hut', 30, 30).ok).toBe(false);
+    g.forest()[i] = 2;
+    g.advance(360);
+    // Due stagioni di ricrescita all'anno
+    expect(g.forest()[i]).toBeCloseTo(2 + 2 * Game.FOREST_REGROW);
+    expect(g.forestLevel(i)).toBeLessThan(0.5);
+    g.forest()[i] = 8;
+    const wood = g.state.resources.wood;
+    expect(g.canPlace('hut', 30, 30).ok).toBe(true);
+    g.place('hut', 30, 30);
+    expect(g.forest()[i]).toBe(0);
+    expect(g.state.resources.wood).toBeGreaterThan(wood - 15 + 7);
+  });
+
+  it('i boschi tagliati restano tali dopo un salvataggio', () => {
+    const g = new Game(createInitialState(4), () => 0.5);
+    const i = g.terrain.tiles.findIndex((t) => t === Tile.Forest);
+    expect(i).toBeGreaterThan(-1);
+    g.forest()[i] = 5;
+    (g as unknown as { saveForest(): void }).saveForest();
+    const g2 = new Game(JSON.parse(JSON.stringify(g.state)), () => 0.5);
+    expect(g2.forest()[i]).toBe(5);
+    expect(g2.forestDirty.has(i)).toBe(true);
+    expect(g2.forestLevel(g2.terrain.tiles.findIndex((t, k) => t === Tile.Forest && k !== i))).toBe(1);
+  });
+});

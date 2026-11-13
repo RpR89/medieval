@@ -751,6 +751,17 @@ export class WorldRenderer {
     k.fire.emissiveIntensity = 2.5 + n * 2;
   }
 
+  /** Alberi abbattuti e ricresciuti: si aggiornano solo le caselle cambiate. */
+  private syncForest() {
+    const g = this.game;
+    if (!g.forestDirty.size) return;
+    const touched = new Set<THREE.InstancedMesh>();
+    for (const i of g.forestDirty) for (const m of this.terrainView.setForestTile(i, g.forestLevel(i), g.occupancy[i] !== 0)) touched.add(m);
+    g.forestDirty.clear();
+    for (const m of touched) m.instanceMatrix.needsUpdate = true;
+    this.shadowDirty = true;
+  }
+
   private syncTimer = 1;
   private fogTimer = 0;
   private revealVersion = -1;
@@ -819,6 +830,7 @@ export class WorldRenderer {
       this.fogTimer = 0;
       this.updateFog();
     }
+    this.syncForest();
     this.life.update(dt, this.nightKey / 40, this.controls.target.x, this.controls.target.z);
     this.armyView.update(t);
     for (const o of this.armyView.objects()) animate(o, t, dt);

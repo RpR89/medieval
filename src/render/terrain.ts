@@ -77,6 +77,7 @@ interface Decor {
   matrix: THREE.Matrix4;
 }
 
+const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const ni = (g: THREE.BufferGeometry) => (g.index ? g.toNonIndexed() : g);
 
 export class TerrainView {
@@ -95,6 +96,10 @@ export class TerrainView {
   private dryMask: Uint8Array;
   private noise: Float32Array;
   private decorByTile = new Map<number, Decor[]>();
+  /** Alberi dei boschi per casella: si abbattono e ricrescono (chioma e tronco hanno la stessa matrice). */
+  private treeByTile = new Map<number, Array<{ mesh: THREE.InstancedMesh; index: number; matrix: THREE.Matrix4; thr: number }>>();
+  /** Ceppi che restano dove si è tagliato. */
+  private stumpByTile = new Map<number, Array<{ mesh: THREE.InstancedMesh; index: number; matrix: THREE.Matrix4 }>>();
   private hidden = new Set<number>();
   private grass: THREE.Object3D;
   private flowers: THREE.Object3D;
@@ -651,7 +656,7 @@ export class TerrainView {
       color: (i: number, c: THREE.Color) => void,
       fade = true,
       C = TerrainView.CHUNK,
-      register = true,
+      register: boolean | 'tree' | 'stump' = true,
     ): THREE.Group => {
       const group = new THREE.Group();
       const byChunk = new Map<number, Array<[THREE.Matrix4, number]>>();
@@ -671,7 +676,12 @@ export class TerrainView {
           im.setMatrixAt(i, mx);
           color(i, c);
           im.setColorAt(i, c);
-          if (register) this.register(key, im, i, mx);
+          if (register === 'tree') this.registerTree(key, im, i, mx);
+          else if (register === 'stump') {
+            if (!this.stumpByTile.has(key)) this.stumpByTile.set(key, []);
+            this.stumpByTile.get(key)!.push({ mesh: im, index: i, matrix: mx.clone() });
+            im.setMatrixAt(i, ZERO);
+          } else if (register) this.register(key, im, i, mx);
         });
         if (im.instanceColor) im.instanceColor.needsUpdate = true;
         im.castShadow = shadow;
@@ -698,7 +708,11 @@ export class TerrainView {
     const keyed = (list: THREE.Matrix4[]): Array<[THREE.Matrix4, number]> =>
       list.map((m) => [m, Math.floor(m.elements[14]) * t.size + Math.floor(m.elements[12])]);
     const trees = (geo: THREE.BufferGeometry, mat: THREE.Material, list: THREE.Matrix4[], spread: number) =>
-      chunked(geo, mat, keyed(list), true, spread ? tintFn(spread) : (_, c) => c.setRGB(1, 1, 1), false, 32, false);
+      chunked(geo, mat, keyed(list), true, spread ? tintFn(spread) : (_, c) => c.setRGB(1, 1, 1), false, 32, 'tree');
+    // Un ceppo per ogni albero di bosco: compare quando l'albero viene abbattuto
+    const forestTrees = keyed([...conifers, ...decid, ...conifers2, ...birches]).filter(([, k]) => t.tiles[k] === Tile.Forest);
+    const stumpGeo = new THREE.CylinderGeometry(0.08, 0.11, 0.14, 6, 1, true).translate(0, 0.07, 0);
+    chunked(stumpGeo, bark, forestTrees, false, (_, c) => c.setRGB(1, 1, 1), false, 32, 'stump');
     trees(conGeo, this.coniferMat, conifers, 0.04);
     trees(trunkGeo, bark, conifers, 0);
     const leaves = trees(leafGeo, this.leafMat, decid, 0.06);
@@ -711,6 +725,38 @@ export class TerrainView {
     const palette = [0xf4f0e0, 0xf2d040, 0xd84a4a, 0x9a6ad0, 0x6a8ae0].map((h) => new THREE.Color(h));
     const flowerMesh = chunked(flowerGeo, new THREE.MeshStandardMaterial({ roughness: 0.8 }), flowers, false, (_, c) => c.copy(palette[Math.floor(rand() * palette.length)]));
     return { leaves, grass, flowers: flowerMesh };
+  }
+
+  private registerTree(tile: number, mesh: THREE.InstancedMesh, index: number, matrix: THREE.Matrix4) {
+    if (this.terrain.tiles[tile] !== Tile.Forest) return;
+    // Soglia stabile per albero (dalla posizione): col bosco che si dirada cadono uno alla volta
+    const h = Math.sin(matrix.elements[12] * 12.9898 + matrix.elements[14] * 78.233) * 43758.5453;
+    if (!this.treeByTile.has(tile)) this.treeByTile.set(tile, []);
+    this.treeByTile.get(tile)!.push({ mesh, index, matrix: matrix.clone(), thr: h - Math.floor(h) });
+  }
+
+  /**
+   * Aspetto di una casella di bosco: `level` 0-1 (quanto è fitto), `occupied` se ci si è costruito sopra.
+   * Gli alberi cadono uno alla volta e ricrescono piccoli; dove sono stati tagliati restano i ceppi.
+   */
+  setForestTile(tile: number, level: number, occupied: boolean): Set<THREE.InstancedMesh> {
+    const touched = new Set<THREE.InstancedMesh>();
+    const grown = new Map<string, number>();
+    const m = new THREE.Matrix4();
+    const sc = new THREE.Matrix4();
+    for (const tr of this.treeByTile.get(tile) ?? []) {
+      const g = occupied ? 0 : THREE.MathUtils.clamp((level - tr.thr * 0.7) / 0.3, 0, 1);
+      grown.set(`${tr.matrix.elements[12]},${tr.matrix.elements[14]}`, g);
+      if (g < 0.05) tr.mesh.setMatrixAt(tr.index, ZERO);
+      else tr.mesh.setMatrixAt(tr.index, m.copy(tr.matrix).multiply(sc.makeScale(g, g, g)));
+      touched.add(tr.mesh);
+    }
+    for (const st of this.stumpByTile.get(tile) ?? []) {
+      const g = grown.get(`${st.matrix.elements[12]},${st.matrix.elements[14]}`) ?? 1;
+      st.mesh.setMatrixAt(st.index, !occupied && g < 0.5 ? st.matrix : ZERO);
+      touched.add(st.mesh);
+    }
+    return touched;
   }
 
   /** Nasconde erba, cespugli e sassi sotto gli edifici. */

@@ -360,6 +360,10 @@ export class Hud {
     const per = def.seasonal ? 'a stagione, in media' : 'a stagione';
     if (def.produces) lines.push(`Produce ${per}: ` + list(def.produces));
     if (def.consumes) lines.push(`Consuma ${per}: ` + list(def.consumes));
+    if (def.id === 'woodcutter' && !this.game.isForeign(b)) {
+      const r = this.game.woodReach(b);
+      lines.push(r ? `🌲 Bosco a ${Math.round(r.dist)} caselle · resa ${Math.round(r.eff * 100)}%${r.eff < 1 ? ' (più vicino al bosco renderebbe di più)' : ''}` : '🌲 Nessun bosco entro 16 caselle: il taglialegna è fermo');
+    }
     if (def.seasonal) {
       const s = def.seasonal.map((v) => `${Math.round(v * 100)}%`);
       lines.push(`Resa stagionale: 🌸${s[0]} ☀️${s[1]} 🍂${s[2]} ❄️${s[3]}`);

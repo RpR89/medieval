@@ -162,6 +162,40 @@ export function generateTerrain(seed: number, opts: TerrainOptions | number = {}
     }
   }
 
+  // Ogni castello ha almeno una piccola cava nel suo territorio (pietra o ferro, a volte una vena d'oro):
+  // le mappe possono essere più boscose o più rocciose, ma nessuno resta senza
+  const rocky = (x: number, z: number) => {
+    const t = get(x, z);
+    return t === Tile.Rock || t === Tile.Gold;
+  };
+  for (const [sx, sz] of sites) {
+    let ok = false;
+    for (let z = Math.max(0, sz - 20); z < Math.min(size - 1, sz + 20) && !ok; z++) {
+      for (let x = Math.max(0, sx - 20); x < Math.min(size - 1, sx + 20) && !ok; x++) {
+        if (Math.hypot(x - sx, z - sz) < 11 || Math.hypot(x - sx, z - sz) > 20) continue;
+        ok = rocky(x, z) && rocky(x + 1, z) && rocky(x, z + 1) && rocky(x + 1, z + 1);
+      }
+    }
+    if (ok) continue;
+    for (let tries = 0; tries < 40; tries++) {
+      const angle = rand() * Math.PI * 2;
+      const r = 14 + rand() * 4;
+      const bx = Math.round(sx + Math.cos(angle) * r);
+      const bz = Math.round(sz + Math.sin(angle) * r);
+      if (bx < 4 || bz < 4 || bx > size - 5 || bz > size - 5) continue;
+      // Niente acqua né altri siti vicini
+      let wet = false;
+      for (let z = -3; z <= 3 && !wet; z++) for (let x = -3; x <= 3 && !wet; x++) if (isWater(get(bx + x, bz + z))) wet = true;
+      if (wet || sites.some(([ox, oz]) => (ox !== sx || oz !== sz) && Math.hypot(bx - ox, bz - oz) < 14)) continue;
+      for (let z = -2; z <= 2; z++) {
+        for (let x = -2; x <= 2; x++) if (Math.hypot(x, z) <= 2.3 + (n2(bx + x, bz + z) - 0.5)) set(bx + x, bz + z, Tile.Rock);
+      }
+      if (rand() < 0.35) set(bx, bz, Tile.Gold);
+      centers.push([bx, bz]);
+      break;
+    }
+  }
+
   // Garantisce almeno una vena d'oro sulla terraferma
   if (!tiles.includes(Tile.Gold)) {
     for (const [bx, bz] of centers) {

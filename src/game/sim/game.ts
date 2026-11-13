@@ -269,6 +269,8 @@ export class Game {
     // Partite rimaste senza abitanti: torna il seguito del signore
     if (state.population < MIN_POPULATION) state.population = MIN_POPULATION;
     for (const b of state.sites) this.mark(b, b.uid);
+    // I boschi tagliati nelle partite salvate
+    this.forest();
     for (const b of state.buildings) {
       this.mark(b, b.uid);
       const def = getBuilding(b.defId);
@@ -923,7 +925,7 @@ export class Game {
         if (isWater(t)) return { ok: false, reason: 'Non si costruisce sull\'acqua' };
         if (t === Tile.Rock) rock++;
         if (t === Tile.Gold) gold++;
-        if (def.placement !== 'rock' && def.placement !== 'goldVein' && !isBuildableLand(t)) {
+        if (def.placement !== 'rock' && def.placement !== 'goldVein' && !isBuildableLand(t) && !this.cleared(x + dx, z + dz)) {
           return { ok: false, reason: t === Tile.Forest ? 'C\'è il bosco' : 'Terreno roccioso' };
         }
       }
@@ -959,6 +961,7 @@ export class Game {
     const b: PlacedBuilding = { uid: this.state.nextUid++, defId, x, z, upgrades: [] };
     if (def.herd) b.herd = def.herd.start;
     if (def.hp) b.hp = def.hp;
+    this.clearForest(b);
     this.mark(b, b.uid);
     if (this.instantBuild) this.state.buildings.push(b);
     else {
@@ -1033,7 +1036,12 @@ export class Game {
   private mark(b: PlacedBuilding, value: number) {
     const [w, d] = getBuilding(b.defId).size;
     for (let dz = 0; dz < d; dz++) {
-      for (let dx = 0; dx < w; dx++) this.occupancy[(b.z + dz) * this.terrain.size + b.x + dx] = value;
+      for (let dx = 0; dx < w; dx++) {
+        const i = (b.z + dz) * this.terrain.size + b.x + dx;
+        this.occupancy[i] = value;
+        // Su un bosco raso: spariscono i ceppi (e se l'edificio va via ricresce)
+        if (this.terrain.tiles[i] === Tile.Forest) this.forestDirty.add(i);
+      }
     }
   }
 
@@ -1184,6 +1192,124 @@ export class Game {
   }
 
   private lastGoalDay = -1;
+
+  // ───────────── Boschi: alberi abbattuti e ricrescita ─────────────
+
+  /** Legna di una casella di bosco intatta (due-tre alberi grandi). */
+  static readonly FOREST_FULL = 40;
+  /** Legna che ricresce in ogni casella a primavera e d'estate: un bosco raso torna fitto in circa quattro anni. */
+  static readonly FOREST_REGROW = 5;
+  /** Oltre questa distanza i taglialegna non arrivano. */
+  static readonly WOOD_REACH = 16;
+  private forestStock: Float32Array | null = null;
+  /** Bosco più vicino di ogni taglialegna (indice di casella), finché non è raso. */
+  private woodTarget = new Map<number, number>();
+  /** Caselle di bosco il cui aspetto è cambiato (per la grafica). */
+  readonly forestDirty = new Set<number>();
+
+  /** Legna in ogni casella (0 fuori dai boschi). Al primo uso si legge dal salvataggio o si parte da boschi intatti. */
+  forest(): Float32Array {
+    const t = this.terrain;
+    const n = t.size * t.size;
+    if (this.forestStock && this.forestStock.length === n) return this.forestStock;
+    const f = new Float32Array(n);
+    let saved: string | null = null;
+    try {
+      saved = this.state.forest ? atob(this.state.forest) : null;
+    } catch {
+      saved = null;
+    }
+    let j = 0;
+    for (let i = 0; i < n; i++) {
+      if (t.tiles[i] !== Tile.Forest) continue;
+      f[i] = saved && j < saved.length ? saved.charCodeAt(j) : Game.FOREST_FULL;
+      if (f[i] < Game.FOREST_FULL) this.forestDirty.add(i);
+      j++;
+    }
+    this.forestStock = f;
+    return f;
+  }
+
+  /** Quanto è fitto il bosco in una casella (0-1). */
+  forestLevel(i: number): number {
+    return this.forest()[i] / Game.FOREST_FULL;
+  }
+
+  /** Sui ceppi si costruisce: una casella di bosco tagliata per tre quarti si può usare. */
+  private cleared(x: number, z: number): boolean {
+    return tileAt(this.terrain, x, z) === Tile.Forest && this.forest()[z * this.terrain.size + x] <= Game.FOREST_FULL * 0.25;
+  }
+
+  /** Costruendo sui ceppi si sradica quel che resta: la legna va nei magazzini. */
+  private clearForest(b: PlacedBuilding) {
+    const [w, d] = getBuilding(b.defId).size;
+    const f = this.forest();
+    let wood = 0;
+    for (let dz = 0; dz < d; dz++) {
+      for (let dx = 0; dx < w; dx++) {
+        const i = (b.z + dz) * this.terrain.size + b.x + dx;
+        if (this.terrain.tiles[i] !== Tile.Forest || f[i] <= 0) continue;
+        wood += f[i];
+        f[i] = 0;
+        this.forestDirty.add(i);
+      }
+    }
+    if (wood >= 1) this.state.resources.wood += Math.floor(wood);
+  }
+
+  /** Salva i boschi nello stato: un byte per casella di bosco. */
+  private saveForest() {
+    const f = this.forest();
+    const t = this.terrain;
+    let bin = '';
+    for (let i = 0; i < f.length; i++) if (t.tiles[i] === Tile.Forest) bin += String.fromCharCode(Math.round(f[i]));
+    this.state.forest = btoa(bin);
+  }
+
+  /** A primavera e d'estate gli alberi ricrescono (non sotto gli edifici). */
+  private regrowForest() {
+    const f = this.forest();
+    const full = Game.FOREST_FULL;
+    for (let i = 0; i < f.length; i++) {
+      if (f[i] >= full || this.terrain.tiles[i] !== Tile.Forest || this.occupancy[i]) continue;
+      const before = Math.floor((f[i] / full) * 8);
+      f[i] = Math.min(full, f[i] + Game.FOREST_REGROW);
+      if (Math.floor((f[i] / full) * 8) !== before) this.forestDirty.add(i);
+    }
+  }
+
+  /** Il bosco a cui va un taglialegna e quanto rende la distanza (vicino = 100%, lontano fino al 25%). */
+  woodReach(b: PlacedBuilding): { tile: number; dist: number; eff: number } | null {
+    const f = this.forest();
+    const n = this.terrain.size;
+    const [w, d] = getBuilding(b.defId).size;
+    const cx = b.x + w / 2;
+    const cz = b.z + d / 2;
+    let tile = this.woodTarget.get(b.uid) ?? -1;
+    if (tile < 0 || f[tile] < 1 || this.occupancy[tile]) {
+      tile = -1;
+      let best = Infinity;
+      const R = Game.WOOD_REACH;
+      for (let z = Math.max(0, Math.floor(cz - R)); z <= Math.min(n - 1, Math.floor(cz + R)); z++) {
+        for (let x = Math.max(0, Math.floor(cx - R)); x <= Math.min(n - 1, Math.floor(cx + R)); x++) {
+          const i = z * n + x;
+          if (f[i] < 1 || this.occupancy[i]) continue;
+          const dd = (x + 0.5 - cx) ** 2 + (z + 0.5 - cz) ** 2;
+          if (dd < best && dd <= R * R) {
+            best = dd;
+            tile = i;
+          }
+        }
+      }
+      if (tile < 0) {
+        this.woodTarget.delete(b.uid);
+        return null;
+      }
+      this.woodTarget.set(b.uid, tile);
+    }
+    const dist = Math.hypot((tile % n) + 0.5 - cx, Math.floor(tile / n) + 0.5 - cz);
+    return { tile, dist, eff: Math.max(0.25, Math.min(1, 1 - (dist - 3) * 0.07)) };
+  }
 
   // ───────────── Cittadini: servizi, contento e criminalità ─────────────
 
@@ -1628,8 +1754,24 @@ export class Game {
         for (const [id, n] of Object.entries(def.consumes)) r[id as ResourceId] -= (n ?? 0) * factor;
       }
       if (def.category === 'farming' || def.category === 'animals') factor *= this.farmEventFactor();
+      // Il taglialegna abbatte davvero gli alberi: rende in base alla distanza dal bosco e lo consuma
+      let reach: ReturnType<Game['woodReach']> | undefined;
+      if (def.id === 'woodcutter') {
+        reach = this.woodReach(b);
+        factor *= reach?.eff ?? 0;
+      }
       const fp = this.fx().produce ?? {};
-      for (const [id, n] of Object.entries(def.produces)) r[id as ResourceId] += (n ?? 0) * factor * (fp[id as ResourceId] ?? 1);
+      for (const [id, n] of Object.entries(def.produces)) {
+        let amount = (n ?? 0) * factor * (fp[id as ResourceId] ?? 1);
+        if (reach && id === 'wood') {
+          const f = this.forest();
+          const before = Math.floor((f[reach.tile] / Game.FOREST_FULL) * 8);
+          amount = Math.min(amount, f[reach.tile]);
+          f[reach.tile] -= amount;
+          if (Math.floor((f[reach.tile] / Game.FOREST_FULL) * 8) !== before || f[reach.tile] < 1) this.forestDirty.add(reach.tile);
+        }
+        r[id as ResourceId] += amount;
+      }
     }
     if (def.herd && b.herd !== undefined) this.stepHerd(b, def, si, staffing, dt);
   }
@@ -1765,6 +1907,8 @@ export class Game {
 
   private onNewSeason(si: number) {
     this.lastSeasonIndex = si;
+    if (si <= 1) this.regrowForest();
+    this.saveForest();
     const season = (['spring', 'summer', 'autumn', 'winter'] as const)[si];
     if (season === 'winter') {
       let culled = 0;
@@ -4115,7 +4259,8 @@ export class Game {
     else if (fed < 0.8) l.pop! = Math.max(5, l.pop! - l.pop! * 0.012 * (1 - fed));
     l.pop! = Math.min(l.pop!, st.housing + 2);
     for (const k of ['food', 'wood', 'stone', 'lime'] as const) r[k] = Math.max(0, Math.min(st.storage, r[k]));
-    l.wealth = Math.min(l.wealth, 4000 + l.level * 2000);
+    // Il tetto deve lasciar comprare i materiali del mastio in pietra a chi non ha cave
+    l.wealth = Math.min(l.wealth, 8000 + l.level * 3000);
     // Arruolamento: costa monete e uomini
     // ...ma solo quanti ne può pagare con le tasse (più i bellicosi)
     const taxes = l.pop! * TAX_PER_PERSON * 1.1;
@@ -4157,12 +4302,13 @@ export class Game {
   }
 
   /** Paga un costo con le scorte, comprando al mercato (a caro prezzo) quel che manca. */
-  private lordPay(l: Lord, cost: Cost, dry = false, reserve = 20): boolean {
+  private lordPay(l: Lord, cost: Cost, dry = false, reserve = 20, castle = false): boolean {
     const r = l.res!;
     let coins = cost.coins ?? 0;
     const take: Partial<Record<'wood' | 'stone' | 'lime', number>> = {};
     // Chi ha le casse piene compra i materiali che gli mancano a prezzo meno caro
-    const prem = l.wealth > 2500 ? 1.6 : 2.5;
+    // Per il castello si chiamano maestri e cavatori di fuori, con contratti di favore
+    const prem = castle ? 1.2 : l.wealth > 2500 ? 1.6 : 2.5;
     for (const [id, n] of Object.entries(cost)) {
       const need = n ?? 0;
       if (id === 'coins') continue;
@@ -4322,9 +4468,7 @@ export class Game {
       ['weaver', year >= 1000 && lv >= 2 && pop >= 50 ? 1 : 0, true],
       ['archery', lv >= 2 && pop >= 50 ? 1 : 0, true],
       ['stable', lv >= 3 && pop >= 70 ? 1 : 0, true],
-      ['field_grain', pop >= 30 ? Math.floor(pop / 5) : 0, false],
-      ['hut', Math.floor(pop / 2.2), true],
-      // Servizi ai cittadini, man mano che il borgo cresce
+      // Servizi ai cittadini, man mano che il borgo cresce (prima delle case e dei campi in più, che non finiscono mai)
       ['tavern', pop >= 45 ? 1 + Math.floor(pop / 120) : 0, true],
       ['barber', pop >= 55 ? 1 + Math.floor(pop / 150) : 0, true],
       ['square', pop >= 70 ? 1 : 0, true],
@@ -4332,6 +4476,8 @@ export class Game {
       ['prison', pop >= 80 ? 1 : 0, true],
       ['court', pop >= 100 ? 1 : 0, true],
       ['brothel', pop >= 90 && l.personality !== 'peaceful' ? 1 : 0, true],
+      ['field_grain', pop >= 30 ? Math.floor(pop / 5) : 0, false],
+      ['hut', Math.floor(pop / 2.2), true],
     ];
     if (wealthy) {
       for (const [id, target, inside] of growth) {
@@ -4363,7 +4509,7 @@ export class Game {
       const a = this.lordNextAction(l, year, si);
       // I lavori del mastio usano i risparmi, gli altri no
       const castleStep = !!a && a.job.uid === l.buildings.find((b) => getBuilding(b.defId).fort === 'keep')?.uid;
-      if (!a || !this.lordPay(l, a.cost, false, castleStep ? 20 : 20 + this.lordSaving(l))) {
+      if (!a || !this.lordPay(l, a.cost, false, castleStep ? 20 : 20 + this.lordSaving(l), castleStep)) {
         // Niente da fare o mancano i mezzi: riprova fra qualche giorno
         this.lordIdle.set(l.id, this.state.day + (a ? 3 : 10));
         break;
