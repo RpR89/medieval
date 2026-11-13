@@ -194,3 +194,23 @@ describe('sviluppo dei signori', () => {
     }
   }, 60000);
 });
+
+describe('boschi dei signori', () => {
+  it('i taglialegna dei signori abbattono il bosco vicino', () => {
+    const st = createInitialState(7, 'Rocca', { preset: 'pianura', lords: 1 });
+    st.nextRaidDay = 1e9;
+    const g = new Game(st, mulberry32(5));
+    g.storageCap = () => 1e9;
+    const total = () => g.forest().reduce((s, v) => s + v, 0);
+    const before = total();
+    let least = before;
+    for (let d = 0; d < 360 * 10; d++) {
+      g.advance(1);
+      if (d % 30 === 0) least = Math.min(least, total());
+    }
+    expect(g.lords()[0].buildings.some((b) => b.defId === 'woodcutter')).toBe(true);
+    // Il bosco cala dove tagliano (poi in parte ricresce)
+    expect(least).toBeLessThan(before - 80);
+    expect([...g.forest()].some((v, i) => g.terrain.tiles[i] === 1 && v < Game.FOREST_FULL / 2)).toBe(true);
+  }, 60000);
+});

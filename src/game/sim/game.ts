@@ -961,7 +961,7 @@ export class Game {
     const b: PlacedBuilding = { uid: this.state.nextUid++, defId, x, z, upgrades: [] };
     if (def.herd) b.herd = def.herd.start;
     if (def.hp) b.hp = def.hp;
-    this.clearForest(b);
+    this.state.resources.wood += this.clearForest(b);
     this.mark(b, b.uid);
     if (this.instantBuild) this.state.buildings.push(b);
     else {
@@ -1241,7 +1241,7 @@ export class Game {
   }
 
   /** Costruendo sui ceppi si sradica quel che resta: la legna va nei magazzini. */
-  private clearForest(b: PlacedBuilding) {
+  private clearForest(b: PlacedBuilding): number {
     const [w, d] = getBuilding(b.defId).size;
     const f = this.forest();
     let wood = 0;
@@ -1254,7 +1254,7 @@ export class Game {
         this.forestDirty.add(i);
       }
     }
-    if (wood >= 1) this.state.resources.wood += Math.floor(wood);
+    return Math.floor(wood);
   }
 
   /** Salva i boschi nello stato: un byte per casella di bosco. */
@@ -1280,12 +1280,14 @@ export class Game {
 
   /** Il bosco a cui va un taglialegna e quanto rende la distanza (vicino = 100%, lontano fino al 25%). */
   woodReach(b: PlacedBuilding): { tile: number; dist: number; eff: number } | null {
+    const [w, d] = getBuilding(b.defId).size;
+    return this.woodReachAt(b.x + w / 2, b.z + d / 2, b.uid);
+  }
+
+  private woodReachAt(cx: number, cz: number, key: number): { tile: number; dist: number; eff: number } | null {
     const f = this.forest();
     const n = this.terrain.size;
-    const [w, d] = getBuilding(b.defId).size;
-    const cx = b.x + w / 2;
-    const cz = b.z + d / 2;
-    let tile = this.woodTarget.get(b.uid) ?? -1;
+    let tile = this.woodTarget.get(key) ?? -1;
     if (tile < 0 || f[tile] < 1 || this.occupancy[tile]) {
       tile = -1;
       let best = Infinity;
@@ -1302,13 +1304,23 @@ export class Game {
         }
       }
       if (tile < 0) {
-        this.woodTarget.delete(b.uid);
+        this.woodTarget.delete(key);
         return null;
       }
-      this.woodTarget.set(b.uid, tile);
+      this.woodTarget.set(key, tile);
     }
     const dist = Math.hypot((tile % n) + 0.5 - cx, Math.floor(tile / n) + 0.5 - cz);
     return { tile, dist, eff: Math.max(0.25, Math.min(1, 1 - (dist - 3) * 0.07)) };
+  }
+
+  /** Taglia legna da una casella di bosco: restituisce quanta se ne è presa. */
+  private cutWood(tile: number, amount: number): number {
+    const f = this.forest();
+    const before = Math.floor((f[tile] / Game.FOREST_FULL) * 8);
+    const got = Math.min(amount, f[tile]);
+    f[tile] -= got;
+    if (Math.floor((f[tile] / Game.FOREST_FULL) * 8) !== before || f[tile] < 1) this.forestDirty.add(tile);
+    return got;
   }
 
   // ───────────── Cittadini: servizi, contento e criminalità ─────────────
@@ -1763,13 +1775,7 @@ export class Game {
       const fp = this.fx().produce ?? {};
       for (const [id, n] of Object.entries(def.produces)) {
         let amount = (n ?? 0) * factor * (fp[id as ResourceId] ?? 1);
-        if (reach && id === 'wood') {
-          const f = this.forest();
-          const before = Math.floor((f[reach.tile] / Game.FOREST_FULL) * 8);
-          amount = Math.min(amount, f[reach.tile]);
-          f[reach.tile] -= amount;
-          if (Math.floor((f[reach.tile] / Game.FOREST_FULL) * 8) !== before || f[reach.tile] < 1) this.forestDirty.add(reach.tile);
-        }
+        if (reach && id === 'wood') amount = this.cutWood(reach.tile, amount);
         r[id as ResourceId] += amount;
       }
     }
@@ -4081,10 +4087,19 @@ export class Game {
       for (const [x, z] of shuffle(cands)) if (this.lordCanPlace(l, def, x, z)) return [x, z];
       return null;
     }
-    for (let ring = R + 3; ring <= R + 26; ring++) {
-      const cands: Array<[number, number]> = [];
-      for (let i = -ring; i <= ring; i++) cands.push([cx + i, cz - ring], [cx + i, cz + ring], [cx - ring, cz + i], [cx + ring, cz + i]);
-      for (const [x, z] of shuffle(cands)) if (this.lordCanPlace(l, def, x, z)) return [x, z];
+    // I taglialegna si mettono dove c'è ancora bosco fitto a due passi
+    const f = defId === 'woodcutter' ? this.forest() : null;
+    const n = this.terrain.size;
+    const woody = (x: number, z: number) => {
+      for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) if ((f![(z + dz) * n + x + dx] ?? 0) >= Game.FOREST_FULL / 2) return true;
+      return false;
+    };
+    for (const pass of f ? [true, false] : [false]) {
+      for (let ring = R + 3; ring <= R + 26; ring++) {
+        const cands: Array<[number, number]> = [];
+        for (let i = -ring; i <= ring; i++) cands.push([cx + i, cz - ring], [cx + i, cz + ring], [cx - ring, cz + i], [cx + ring, cz + i]);
+        for (const [x, z] of shuffle(cands)) if ((!pass || woody(x, z)) && this.lordCanPlace(l, def, x, z)) return [x, z];
+      }
     }
     return null;
   }
@@ -4210,12 +4225,14 @@ export class Game {
   private lordStats(l: Lord, si: number, avg = false) {
     const a = this.lordAgg(l);
     const soldiers = l.army.infantry + l.army.archers + l.army.cavalry;
-    const builders = l.jobs!.length ? Math.max(2, Math.min(Math.floor(l.pop! * 0.3), BASE_BUILDERS + a.lodges * 6)) : 0;
-    // Prima si mandano le braccia nei campi e nei pascoli, poi nelle botteghe
+    const builders = l.jobs!.length ? Math.max(2, Math.min(Math.floor(l.pop! * 0.2), BASE_BUILDERS + a.lodges * 6)) : 0;
+    // Prima le braccia nei campi e nei pascoli; con i granai pieni un sesto resta a legna, cave e botteghe
     const hands = Math.max(0, l.pop! - builders);
-    const fs = a.foodJobs ? Math.min(1, hands / a.foodJobs) : 1;
+    const stocked = l.res!.food > l.pop! * FOOD_PER_PERSON * 60;
+    const toFood = Math.min(a.foodJobs, stocked ? hands * 0.85 : hands);
+    const fs = a.foodJobs ? toFood / a.foodJobs : 1;
     const otherJobs = a.jobs - a.foodJobs;
-    const os = otherJobs > 0 ? Math.min(1, Math.max(0, hands - a.foodJobs) / otherJobs) : 1;
+    const os = otherJobs > 0 ? Math.min(1, (hands - toFood) / otherJobs) : 1;
     const i = avg ? 4 : si;
     const mix = (f: Flow, o: Flow) => ({
       food: f.food * fs + o.food * os,
@@ -4230,7 +4247,9 @@ export class Game {
     // Senza una cava (niente roccia nei dintorni) la pietra si compra dai mercanti: un rivolo costante
     if (!a.quarry) prod.stone += 0.3;
     use.food += l.pop! * FOOD_PER_PERSON + soldiers * SOLDIER_FOOD + builders * BUILDER_FOOD;
-    return { housing: a.housing, storage: a.storage, builders, lodges: a.lodges, prod, use, soldiers };
+    // Braccia libere per nuovi campi (oltre a quelle che i campi già chiedono)
+    const spareHands = hands * 0.85 - a.foodJobs;
+    return { housing: a.housing, storage: a.storage, builders, lodges: a.lodges, prod, use, soldiers, spareHands };
   }
 
   /** Un giorno di economia del signore: produzione, cibo, tasse, popolazione, esercito. */
@@ -4238,6 +4257,17 @@ export class Game {
     const r = l.res!;
     const p = PERSONALITIES[l.personality];
     const st = this.lordStats(l, si);
+    // I taglialegna dei signori abbattono il bosco come i nostri: la legna dipende da quanto è vicino e se ce n'è ancora
+    const cutters = l.buildings.filter((b) => b.defId === 'woodcutter');
+    if (cutters.length && st.prod.wood > 0 && !this.locked) {
+      const per = st.prod.wood / cutters.length;
+      let got = 0;
+      for (const b of cutters) {
+        const reach = this.woodReachAt(b.x + 0.5, b.z + 0.5, this.lordUid(l, b.uid));
+        if (reach) got += this.cutWood(reach.tile, per * reach.eff);
+      }
+      st.prod.wood = got;
+    }
     // Produzione (le fornaci consumano pietra e legna solo se ci sono)
     const conv = Math.min(1, st.use.stone ? r.stone / st.use.stone : 1, st.use.wood ? (r.wood + st.prod.wood) / st.use.wood : 1);
     r.wood += st.prod.wood - st.use.wood * conv;
@@ -4343,7 +4373,7 @@ export class Game {
     const hungry = l.res!.food < st.use.food * 40;
     const farms = this.lordCount(l, 'field_grain', 'field_vegetables', 'fisher');
     // 0. Con le scorte basse si semina prima di tutto
-    if (hungry && farms < 4) {
+    if (hungry && farms < 4 && (farms < 2 || st.spareHands > 0)) {
       const id = farms % 3 === 2 ? 'field_vegetables' : 'field_grain';
       const a = build(id, this.lordSpot(l, id, false));
       if (a) return a;
@@ -4356,7 +4386,7 @@ export class Game {
     }
     // 2. Cibo
     // Cibo: produzione media dell'anno con margine per l'inverno (e scorte basse = urgenza)
-    if ((st.prod.food < st.use.food * 1.3 || (l.res!.food < st.use.food * 30 && st.prod.food < st.use.food * 1.6)) && this.lordCount(l, 'field_grain', 'field_vegetables', 'fisher') < 18 + lv * 10) {
+    if ((st.prod.food < st.use.food * 1.3 || (l.res!.food < st.use.food * 30 && st.prod.food < st.use.food * 1.6)) && st.spareHands > 0 && this.lordCount(l, 'field_grain', 'field_vegetables', 'fisher') < 18 + lv * 10) {
       const fields = this.lordCount(l, 'field_grain', 'field_vegetables');
       if (fields >= 3 && this.lordCount(l, 'fisher') < 1) {
         const a = build('fisher', this.lordSpot(l, 'fisher', false));
@@ -4476,7 +4506,7 @@ export class Game {
       ['prison', pop >= 80 ? 1 : 0, true],
       ['court', pop >= 100 ? 1 : 0, true],
       ['brothel', pop >= 90 && l.personality !== 'peaceful' ? 1 : 0, true],
-      ['field_grain', pop >= 30 ? Math.floor(pop / 5) : 0, false],
+      ['field_grain', pop >= 30 && st.spareHands > 4 ? Math.floor(pop / 5) : 0, false],
       ['hut', Math.floor(pop / 2.2), true],
     ];
     if (wealthy) {
@@ -4505,7 +4535,9 @@ export class Game {
     // Nuovi lavori finché i costruttori non sono tutti impegnati
     let demand = l.jobs!.reduce((sum, j) => sum + this.crewCap(j.defId), 0);
     const want = Math.max(builders, 3);
-    for (let i = 0; i < 4 && demand < want && (this.lordIdle.get(l.id) ?? -1) <= this.state.day; i++) {
+    // Finché ha pochi campi può seminare anche se i costruttori sono tutti al mastio
+    const fewFields = () => this.lordCount(l, 'field_grain', 'field_vegetables', 'fisher') < 3;
+    for (let i = 0; i < 4 && (demand < want || (i === 0 && fewFields())) && (this.lordIdle.get(l.id) ?? -1) <= this.state.day; i++) {
       const a = this.lordNextAction(l, year, si);
       // I lavori del mastio usano i risparmi, gli altri no
       const castleStep = !!a && a.job.uid === l.buildings.find((b) => getBuilding(b.defId).fort === 'keep')?.uid;
@@ -4519,9 +4551,12 @@ export class Game {
         l.nextUid++;
         // Segna subito il terreno, così il prossimo lavoro non lo sceglie di nuovo
         const fb: PlacedBuilding = { uid: this.lordUid(l, job.uid), defId: job.defId, x: job.x, z: job.z, upgrades: [], owner: l.id, site: 0 };
+        l.res!.wood += this.clearForest(fb);
         this.mark(fb, fb.uid);
       }
-      l.jobs!.push(job);
+      // I campi passano davanti agli altri lavori: senza cibo il feudo muore
+      if (/^field_|^fisher$/.test(job.defId)) l.jobs!.unshift(job);
+      else l.jobs!.push(job);
       demand += this.crewCap(job.defId);
       dirty = true;
     }
