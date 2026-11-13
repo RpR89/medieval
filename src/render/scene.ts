@@ -704,14 +704,15 @@ export class WorldRenderer {
     this.resize();
   }
   // ───────────── Giorno e notte ─────────────
-  // Un ciclo di luce lento e indipendente dal calendario di gioco (un giorno di gioco dura meno di un secondo):
-  // è solo atmosfera. Cambia luci, nebbia e finestre; l'ombra del sole non si sposta, così non costa nulla.
+  // Un giorno e una notte per ogni anno di gioco: il giorno copre primavera ed estate (mezzogiorno a metà estate),
+  // la notte autunno e inverno (mezzanotte a metà inverno). Ogni stagione dura metà del giorno o della notte.
+  // Segue il tempo di gioco: si ferma in pausa e accelera con la velocità. Cambia luci, nebbia e finestre;
+  // l'ombra del sole non si sposta, così non costa nulla.
   private baseSun = 2.4;
   private baseSunColor = new THREE.Color(0xfff0d8);
   private baseFog = new THREE.Color(0x9ab0c8);
   private nightKey = -1;
   private nightOn = true;
-  private static readonly DAY_CYCLE = 420;
   private static readonly MOON = new THREE.Color(0x7d96d8);
   private static readonly NIGHT_FOG = new THREE.Color(0x0c1428);
 
@@ -726,14 +727,17 @@ export class WorldRenderer {
   }
 
   /** 0 = pieno giorno, 1 = notte fonda; alba e tramonto sfumano. */
-  private nightAmount(t: number): number {
+  private nightAmount(): number {
     if (!this.nightOn) return 0;
-    const v = Math.sin((t / WorldRenderer.DAY_CYCLE) * Math.PI * 2 + 1.2);
-    return THREE.MathUtils.smoothstep(-v, -0.15, 0.55);
+    // Altezza del sole: 1 a metà estate (giorno 135 dell'anno), -1 a metà inverno
+    const year = ((this.game.state.day % 360) + 360) % 360;
+    const v = Math.cos(((year - 135) / 360) * Math.PI * 2);
+    // Simmetrico: giorno e notte durano uguale, con alba e tramonto sfumati
+    return THREE.MathUtils.smoothstep(-v, -0.35, 0.35);
   }
 
-  private applyNight(t: number) {
-    const key = Math.round(this.nightAmount(t) * 40);
+  private applyNight() {
+    const key = Math.round(this.nightAmount() * 40);
     if (key === this.nightKey) return;
     this.nightKey = key;
     const n = key / 40;
@@ -830,7 +834,7 @@ export class WorldRenderer {
     tg.z = THREE.MathUtils.clamp(tg.z, 0, lim);
     this.controls.update();
     this.terrainView.updateLod(tg.x, tg.z, this.camera.position.distanceTo(tg));
-    this.applyNight(t);
+    this.applyNight();
     this.updateSunShadow();
     // Mappa delle ombre: solo quando cambia qualcosa (costruzioni, stagione, inquadratura).
     // Ciò che si muove di continuo non proietta ombre: così il ritmo dei fotogrammi resta regolare.

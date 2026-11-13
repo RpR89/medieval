@@ -450,6 +450,7 @@ export class Music {
 export function moodFor(season: 'spring' | 'summer' | 'autumn' | 'winter', danger: boolean, opts: { battle?: boolean; night?: number } = {}): Mood {
   if (opts.battle) return 'battle';
   if (danger) return 'danger';
-  if ((opts.night ?? 0) > 0.6) return 'night';
+  // La notte copre autunno e inverno: d'inverno resta la sua musica, la notte suona in autunno e a cavallo delle stagioni
+  if ((opts.night ?? 0) > 0.6 && season !== 'winter') return 'night';
   return season;
 }

@@ -5,7 +5,7 @@ import type { TerrainView } from './terrain';
 
 /**
  * Vita nel castello: contadini e artigiani che vanno e vengono tra case, campi e botteghe.
- * Due sole mesh istanziate (corpi e teste): costano pochissimo. Di notte vanno a dormire.
+ * Due sole mesh istanziate (corpi e teste): costano pochissimo. Nel cuore della notte (pieno inverno) restano in casa.
  */
 interface Walker {
   x: number;
@@ -87,7 +87,7 @@ export class LifeView {
       this.spotTimer = 4;
       this.refreshSpots();
     }
-    const want = night > 0.7 || !this.spots.length ? 0 : Math.min(MAX, Math.round(this.game.state.population / 2.5));
+    const want = night > 0.9 || !this.spots.length ? 0 : Math.min(MAX, Math.round(this.game.state.population / 2.5));
     while (this.walkers.length < want) {
       const s = this.spots[Math.floor(this.rand() * this.spots.length)];
       this.walkers.push({ x: s[0], z: s[1], tx: s[0], tz: s[1], wait: this.rand() * 4, speed: 0.35 + this.rand() * 0.25, phase: this.rand() * 6 });
