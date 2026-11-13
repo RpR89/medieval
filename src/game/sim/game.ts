@@ -5475,7 +5475,7 @@ export class Game {
   }
 
   /** Giornate di lavoro che un costruttore svolge in un giorno, con le cause. */
-  builderRate(stone: boolean): { rate: number; parts: Array<[string, number]> } {
+  builderRate(stone: boolean, ignoreSeason = false): { rate: number; parts: Array<[string, number]> } {
     const parts: Array<[string, number]> = [];
     const lodge = 1 + 0.1 * Math.min(3, this.lodges());
     if (lodge > 1) parts.push(['Loggia dei muratori', lodge]);
@@ -5486,7 +5486,7 @@ export class Game {
     if (this.state.resources.coins < 1) parts.push(['Senza paga', 0.5]);
     const fb = this.fx().builders;
     if (fb && this.date.year >= fb.from) parts.push([`${this.faction()!.name}`, fb.mul]);
-    if (seasonIndex(this.date.season) === 3) parts.push([stone ? 'Inverno: la malta gela' : 'Inverno', stone ? 0.35 : 0.75]);
+    if (!ignoreSeason && seasonIndex(this.date.season) === 3) parts.push([stone ? 'Inverno: la malta gela' : 'Inverno', stone ? 0.35 : 0.75]);
     return { rate: parts.reduce((r, [, v]) => r * v, 1), parts };
   }
 
@@ -5611,7 +5611,9 @@ export class Game {
   /** Giorni per svolgere un certo lavoro su un edificio, se i costruttori sono liberi. */
   daysFor(work: number, defId: string, stone: boolean): number {
     const crew = Math.max(1, Math.min(this.desiredBuilders(), this.crewCap(defId)));
-    return work / (crew * Math.max(0.05, this.builderRate(stone).rate));
+    // Media dell'anno: d'inverno si lavora meno, ma la stima non deve dipendere dalla stagione in cui la si guarda
+    const winter = stone ? 0.35 : 0.75;
+    return work / (crew * Math.max(0.05, this.builderRate(stone, true).rate * ((3 + winter) / 4)));
   }
 
   /** Nome leggibile del lavoro. */
