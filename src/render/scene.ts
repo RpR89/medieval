@@ -103,6 +103,8 @@ export class WorldRenderer {
     this.controls.maxDistance = 80;
     this.controls.maxPolarAngle = 1.3;
     this.controls.screenSpacePanning = false;
+    // Il tasto destro serve a dare ordini e ad annullare: non muove la telecamera
+    this.controls.mouseButtons.RIGHT = null as unknown as THREE.MOUSE;
 
     // Cielo fisico, usato anche come ambiente per i riflessi
     this.sky = new Sky();
